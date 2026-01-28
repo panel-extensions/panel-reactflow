@@ -1,0 +1,12 @@
+# This file is managed by Copier; DO NOT EDIT OR REMOVE.
+_commit: 3480b7c
+_src_path: https://github.com/panel-extensions/copier-template-panel-extension
+add_autobump_workflow: false
+author_email: philipp@holoviz.org
+author_name: Philipp Rudiger
+docs_url: https://panel-extensions.github.io/panel-reactflow/
+github_url: https://github.com/panel-extensions/panel-reactflow
+github_user: panel-extensions
+minimal_python_version: py310
+project_short_description: A Panel wrapper for the Reactflow JS library.
+project_slug: panel-reactflow
