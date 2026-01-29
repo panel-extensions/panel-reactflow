@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import sys
 import typing as t
-
 from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
@@ -13,12 +12,13 @@ GREEN, RED, RESET = "\033[0;32m", "\033[0;31m", "\033[0m"
 
 
 def compile_bundle():
-    from panel.io.compile import compile_components, find_module_bundles
+    from panel.io.compile import compile_components
+    from panel.io.compile import find_module_bundles
 
     print(f"{GREEN}[PANEL-REACTFLOW]{RESET} Compile panel-reactflow bundle", flush=True)
 
     sys.path.insert(0, str(BASE_DIR / "src"))
-    module_bundles = find_module_bundles('panel_reactflow')
+    module_bundles = find_module_bundles("panel_reactflow")
     errors = 0
     for bundle, components in module_bundles.items():
         ret = compile_components(

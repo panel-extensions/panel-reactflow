@@ -2,14 +2,7 @@
 
 import panel as pn
 
-from panel_reactflow import (
-    EdgeSpec,
-    EdgeTypeSpec,
-    NodeSpec,
-    NodeTypeSpec,
-    PropertySpec,
-    ReactFlow,
-)
+from panel_reactflow import EdgeSpec, EdgeTypeSpec, NodeSpec, NodeTypeSpec, PropertySpec, ReactFlow
 
 
 def test_node_spec_roundtrip() -> None:

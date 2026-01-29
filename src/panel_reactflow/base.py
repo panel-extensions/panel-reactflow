@@ -25,11 +25,11 @@ if TYPE_CHECKING:
 
 IS_RELEASE = __version__ == base_version(__version__)
 BASE_PATH = Path(__file__).parent
-DIST_PATH = BASE_PATH / 'dist'
+DIST_PATH = BASE_PATH / "dist"
 CDN_BASE = f"https://cdn.holoviz.org/panel-reactflow/v{base_version(__version__)}"
 CDN_DIST = f"{CDN_BASE}/panel-reactflow.bundle.js"
 
-extension_dirs['panel-reactflow'] = DIST_PATH
+extension_dirs["panel-reactflow"] = DIST_PATH
 EXTENSION_CDN[DIST_PATH] = CDN_BASE
 
 
@@ -234,20 +234,20 @@ class ReactFlow(ReactComponent):
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
 
     @classmethod
-    def _esm_path(cls, compiled: bool | Literal['compiling'] = True) -> os.PathLike | None:
+    def _esm_path(cls, compiled: bool | Literal["compiling"] = True) -> os.PathLike | None:
         return super()._esm_path(compiled or True)
 
     @classmethod
-    def _render_esm(cls, compiled: bool | Literal['compiling'] = True, server: bool = False):
+    def _render_esm(cls, compiled: bool | Literal["compiling"] = True, server: bool = False):
         esm_path = cls._esm_path(compiled=compiled)
         if compiled != "compiling" and server:
             # Generate relative path to handle apps served on subpaths
-            esm = ('' if state.rel_path else './') + cls._component_resource_path(esm_path, compiled)
+            esm = ("" if state.rel_path else "./") + cls._component_resource_path(esm_path, compiled)
             if config.autoreload:
-                modified = hashlib.sha256(str(esm_path.stat().st_mtime).encode('utf-8')).hexdigest()
-                esm += f'?{modified}'
+                modified = hashlib.sha256(str(esm_path.stat().st_mtime).encode("utf-8")).hexdigest()
+                esm += f"?{modified}"
         else:
-            esm = esm_path.read_text(encoding='utf-8')
+            esm = esm_path.read_text(encoding="utf-8")
         return esm
 
     @classproperty
@@ -384,7 +384,7 @@ class ReactFlow(ReactComponent):
                 "type": "node_deleted",
                 "node_id": node_id,
                 "deleted_edges": [edge.get("id") for edge in removed_edges],
-            }
+            },
         )
 
     def add_edge(self, edge: dict[str, Any] | EdgeSpec) -> None:
