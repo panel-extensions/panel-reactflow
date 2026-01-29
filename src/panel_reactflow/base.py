@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 import param
@@ -18,6 +19,9 @@ from panel.io.state import state
 from panel.util import base_version, classproperty
 
 from .__version import __version__  # noqa
+
+if TYPE_CHECKING:
+    from bokeh.models import UIElement
 
 IS_RELEASE = __version__ == base_version(__version__)
 BASE_PATH = Path(__file__).parent
@@ -225,14 +229,14 @@ class ReactFlow(ReactComponent):
         params["node_types"] = _coerce_spec_map(params.get("node_types"))
         params["edge_types"] = _coerce_spec_map(params.get("edge_types"))
         super().__init__(**params)
-        self._event_handlers: dict[str, list[callable]] = {"*": []}
+        self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
 
     @classmethod
     def _esm_path(cls, compiled: bool | Literal['compiling'] = True) -> os.PathLike | None:
         return super()._esm_path(compiled or True)
-        
+
     @classmethod
     def _render_esm(cls, compiled: bool | Literal['compiling'] = True, server: bool = False):
         esm_path = cls._esm_path(compiled=compiled)
@@ -257,7 +261,6 @@ class ReactFlow(ReactComponent):
             view = node.get("view", None)
             if view is not None:
                 views.append(view)
-        print(views)
         if views:
             views, old_models = self._get_child_model(views, doc, root, parent, comm)
         else:
