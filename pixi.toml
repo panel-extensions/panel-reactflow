@@ -5,22 +5,33 @@ platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [tasks]
 postinstall = "pip install --no-build-isolation --no-deps --disable-pip-version-check -e ."
+compile = { cmd = "panel compile panel_splitjs", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+compile-dev = { cmd = "panel compile panel_splitjs --build-dir build --watch", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run -a"
 
 [dependencies]
 python = ">=3.10"
 
 [host-dependencies]
+python = ">=3.10"
+panel = ">=1.8.5"
+bokeh = ">=3.8.0"
+packaging = "*"
+watchfiles = "*"
 pip = "*"
-hatchling = "*"
-hatch-vcs = "*"
-panel = ">=1.5.0"
 setuptools = ">=61"
 setuptools-scm = "*"
+hatchling = "*"
+hatch-vcs = "*"
+nodejs = ">=18"
+esbuild = "*"
 
 [feature.test.dependencies]
 pytest = ">=6"
 pytest-cov = "*"
 mypy = "*"
+
 [feature.test.tasks]
 test = "pytest"
 test-coverage = "pytest --cov=panel_reactflow --cov-report=xml --cov-report=term-missing"
@@ -29,6 +40,7 @@ test-coverage = "pytest --cov=panel_reactflow --cov-report=xml --cov-report=term
 python-build = "*"
 twine = "*"
 wheel = "*"
+
 [feature.build.tasks]
 build-wheel = "python -m build --no-isolation ."
 check-wheel = "twine check dist/*"
@@ -42,6 +54,7 @@ prettier = "*"
 taplo = "*"
 pre-commit-hooks = "*"
 typos = "*"
+
 [feature.lint.tasks]
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"

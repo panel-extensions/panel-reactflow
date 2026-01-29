@@ -37,9 +37,9 @@ def compile_bundle():
         fcntl.fcntl(sys.stdout, fcntl.F_SETFL, flags & ~os.O_NONBLOCK)
 
     if not errors:
-        print(f"{GREEN}[PANEL-SPLITJS]{RESET} Finished building bundle", flush=True)
+        print(f"{GREEN}[PANEL-REACTFLOW]{RESET} Finished building bundle", flush=True)
     else:
-        print(f"{RED}[PANEL-SPLITJS]{RESET} Failed building bundle", flush=True)
+        print(f"{RED}[PANEL-REACTFLOW]{RESET} Failed building bundle", flush=True)
         sys.exit(1)
 
 
