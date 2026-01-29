@@ -1,12 +1,18 @@
 """Accessible imports for the panel_reactflow package."""
 
-import importlib.metadata
-import warnings
+from .base import EdgeSpec
+from .base import EdgeTypeSpec
+from .base import NodeSpec
+from .base import NodeTypeSpec
+from .base import PropertySpec
+from .base import ReactFlow
+from .__version import __version__  # noqa
 
-try:
-    __version__ = importlib.metadata.version(__name__)
-except importlib.metadata.PackageNotFoundError as e:  # pragma: no cover
-    warnings.warn(f"Could not determine version of {__name__}\n{e!s}", stacklevel=2)
-    __version__ = "unknown"
-
-__all__: list[str] = []  # <- IMPORTANT FOR DOCS: fill with imports
+__all__ = [
+    "EdgeSpec",
+    "EdgeTypeSpec",
+    "NodeSpec",
+    "NodeTypeSpec",
+    "PropertySpec",
+    "ReactFlow",
+]

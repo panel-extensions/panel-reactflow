@@ -6,11 +6,15 @@
 [![python-version](https://img.shields.io/pypi/pyversions/panel-reactflow?logoColor=white&logo=python&style=flat-square)](https://pypi.org/project/panel-reactflow)
 
 
-A Panel wrapper for the Reactflow JS library.
+A Panel wrapper for the React Flow JS library.
 
 ## Features
 
-panel-reactflow
+- Python-first, JSON-serializable graph state
+- Panel viewables inside nodes via node ``view`` entries
+- Interactive editing (drag/select/connect/delete) with sync back to Python
+- Optional schema definitions for node/edge properties
+- Event callbacks via `ReactFlow.on(...)` for app-level handling
 
 ## Pin your version!
 
@@ -27,8 +31,41 @@ pip install panel-reactflow
 ## Usage
 
 ```python
-import panel_reactflow
+import panel as pn
+
+from panel_reactflow import ReactFlow
+
+pn.extension()
+
+nodes = [
+    {
+        "id": "n1",
+        "position": {"x": 0, "y": 0},
+        "type": "panel",
+        "data": {"label": "Start"},
+        "view": pn.pane.Markdown("Node 1 content"),
+    },
+    {
+        "id": "n2",
+        "position": {"x": 260, "y": 60},
+        "type": "panel",
+        "data": {"label": "End"},
+        "view": pn.pane.Markdown("Node 2 content"),
+    },
+]
+edges = [
+    {"id": "e1", "source": "n1", "target": "n2"},
+]
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+)
+
+flow
 ```
+
+For property schemas and richer editors, provide `node_types`/`edge_types` with `PropertySpec` and handle changes via `ReactFlow.on(...)`.
 
 ## Development
 
