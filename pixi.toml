@@ -80,6 +80,7 @@ playwright = { version = "<1.51", channel = "microsoft" }
 pytest-playwright = { version = "*", channel = "microsoft" }
 
 [feature.test-ui.tasks]
+_install = "pip install --no-deps --no-build-isolation --disable-pip-version-check -e ."
 _install-ui = 'playwright install chromium'
 
 [feature.test-ui.tasks.test-ui]
