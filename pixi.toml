@@ -14,10 +14,6 @@ pre-commit-run = "pre-commit run -a"
 python = ">=3.10"
 panel = ">=1.8.5"
 panel-material-ui = ">=0.8.0"
-
-[host-dependencies]
-python = ">=3.10"
-panel = ">=1.8.5"
 bokeh = ">=3.8.0"
 packaging = "*"
 watchfiles = "*"
@@ -95,7 +91,7 @@ mkdocstrings-python = "*"
 mkdocs-gen-files = "*"
 mkdocs-literate-nav = "*"
 
-[feature.doc.tasks]
+[feature.docs.tasks]
 docs-build = { cmd = 'zensical build --clean', depends-on = ['install'] }
 docs-serve = { cmd = 'zensical serve', depends-on = ['install'] }
 docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['install'] }
