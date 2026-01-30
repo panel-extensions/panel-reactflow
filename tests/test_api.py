@@ -2,7 +2,7 @@
 
 import panel as pn
 
-from panel_reactflow import EdgeSpec, EdgeTypeSpec, NodeSpec, NodeTypeSpec, PropertySpec, ReactFlow
+from panel_reactflow import EdgeSpec, NodeSpec, ReactFlow
 
 
 def test_node_spec_roundtrip() -> None:
@@ -25,14 +25,6 @@ def test_edge_spec_roundtrip() -> None:
     assert payload["source"] == "n1"
     assert payload["data"]["weight"] == 0.5
     assert EdgeSpec.from_dict(payload).to_dict() == payload
-
-
-def test_schema_helpers_to_dict() -> None:
-    prop = PropertySpec(name="weight", type="float", default=1.0, visible_in_node=True)
-    node_spec = NodeTypeSpec(type="panel", label="Panel", properties=[prop], inputs=["in"], outputs=["out"])
-    edge_spec = EdgeTypeSpec(type="default", properties=[prop])
-    assert node_spec.to_dict()["properties"][0]["name"] == "weight"
-    assert edge_spec.to_dict()["properties"][0]["type"] == "float"
 
 
 def test_reactflow_add_remove() -> None:
