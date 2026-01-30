@@ -25,23 +25,38 @@ hatch-vcs = "*"
 nodejs = ">=18"
 esbuild = "*"
 
+[feature.py310.dependencies]
+python = "3.10.*"
+[feature.py311.dependencies]
+python = "3.11.*"
+[feature.py312.dependencies]
+python = "3.12.*"
+
+[environments]
+default = ["test"]
+py310 = ["py310", "test"]
+py311 = ["py311", "test"]
+py312 = ["py312", "test"]
+test-ui = ["py312", "test", "test-ui"]
+docs = ["docs"]
+build = ["build"]
+lint = { features = ["lint"], no-default-feature = true }
+
+# =============================================
+# ================== TEST =====================
+# =============================================
+
 [feature.test.dependencies]
 pytest = ">=6"
+pytest-asyncio = "*"
 pytest-cov = "*"
+pytest-rerunfailures = "<16"
+pytest-xdist = "*"
 mypy = "*"
 
 [feature.test.tasks]
 test = "pytest"
 test-coverage = "pytest --cov=panel_reactflow --cov-report=xml --cov-report=term-missing"
-
-[feature.build.dependencies]
-python-build = "*"
-twine = "*"
-wheel = "*"
-
-[feature.build.tasks]
-build-wheel = "python -m build --no-isolation ."
-check-wheel = "twine check dist/*"
 
 [feature.lint.dependencies]
 pre-commit = "*"
@@ -57,32 +72,23 @@ typos = "*"
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"
 
-[feature.py310.dependencies]
-python = "3.10.*"
-[feature.py311.dependencies]
-python = "3.11.*"
-[feature.py312.dependencies]
-python = "3.12.*"
-
 [feature.test-ui]
 channels = ["microsoft"]
 
 [feature.test-ui.dependencies]
-playwright = { version = "*", channel = "microsoft" }
+playwright = { version = "<1.51", channel = "microsoft" }
 pytest-playwright = { version = "*", channel = "microsoft" }
-pytest-asyncio = "*"
-pytest-rerunfailures = "*"
-pytest-xdist = "*"
-jupyter_server = "*"
-esbuild = "*"
-packaging = "*"
 
 [feature.test-ui.tasks]
 _install-ui = 'playwright install chromium'
 
 [feature.test-ui.tasks.test-ui]
-cmd = 'pytest tests/ui --ui --browser chromium -n logical --dist loadgroup --reruns 3 --reruns-delay 10'
-depends-on = ["_install-ui"]
+cmd = 'pytest ./tests/ --ui --browser chromium -n logical --dist loadgroup --reruns 3 --reruns-delay 10'
+depends-on = ["_install", "_install-ui"]
+
+# =============================================
+# =================== DOCS ====================
+# =============================================
 
 [feature.docs.dependencies]
 zensical = "<0.0.17"
@@ -96,12 +102,15 @@ docs-build = { cmd = 'zensical build --clean', depends-on = ['install'] }
 docs-serve = { cmd = 'zensical serve', depends-on = ['install'] }
 docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['install'] }
 
-[environments]
-default = ["test"]
-py310 = ["py310", "test"]
-py311 = ["py311", "test"]
-py312 = ["py312", "test"]
-test-ui = ["py312", "test", "test-ui"]
-docs = ["docs"]
-build = ["build"]
-lint = { features = ["lint"], no-default-feature = true }
+# =============================================
+# ================== BUILD ====================
+# =============================================
+
+[feature.build.dependencies]
+python-build = "*"
+twine = "*"
+wheel = "*"
+
+[feature.build.tasks]
+build-wheel = "python -m build --no-isolation ."
+check-wheel = "twine check dist/*"
