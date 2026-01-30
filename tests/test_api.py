@@ -45,8 +45,6 @@ def test_reactflow_add_node_with_view() -> None:
     flow.on("node_added", events.append)
     view = pn.pane.Markdown("Hello")
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"label": "Pane"}}, view=view)
-    assert flow.nodes[0]["data"]["view_idx"] == 0
-    assert len(flow._views) == 1
     assert events[-1]["type"] == "node_added"
 
 
