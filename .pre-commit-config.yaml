@@ -1,3 +1,4 @@
+default_stages: [pre-commit]
 exclude: ^(\.copier-answers\.yml)|.pixi$
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -59,6 +60,11 @@ repos:
           - '@stylistic/eslint-plugin@1.6.3'
           - '@typescript-eslint/eslint-plugin@7.2.0'
           - '@typescript-eslint/parser@7.2.0'
+  - repo: https://github.com/shssoichiro/oxipng
+    rev: v8.0.0
+    hooks:
+      - id: oxipng
+        stages: [manual]
 ci:
   autofix_prs: false
   autoupdate_schedule: quarterly
