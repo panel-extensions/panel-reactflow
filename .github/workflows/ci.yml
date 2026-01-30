@@ -77,7 +77,6 @@ jobs:
           cache: ${{ github.event.inputs.cache == 'true' || github.event.inputs.cache == '' }}
 
   pre_commit:
-    name: Run pre-commit
     needs: [setup]
     runs-on: "ubuntu-latest"
     steps:
