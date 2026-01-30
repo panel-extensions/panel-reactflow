@@ -5,46 +5,25 @@ platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [tasks]
 postinstall = "pip install --no-build-isolation --no-deps --disable-pip-version-check -e ."
+compile = { cmd = "panel compile panel_splitjs", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+compile-dev = { cmd = "panel compile panel_splitjs --build-dir build --watch", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run -a"
 
 [dependencies]
 python = ">=3.10"
-
-[host-dependencies]
+panel = ">=1.8.5"
+panel-material-ui = ">=0.8.0"
+bokeh = ">=3.8.0"
+packaging = "*"
+watchfiles = "*"
 pip = "*"
-hatchling = "*"
-hatch-vcs = "*"
-panel = ">=1.5.0"
 setuptools = ">=61"
 setuptools-scm = "*"
-
-[feature.test.dependencies]
-pytest = ">=6"
-pytest-cov = "*"
-mypy = "*"
-[feature.test.tasks]
-test = "pytest"
-test-coverage = "pytest --cov=panel_reactflow --cov-report=xml --cov-report=term-missing"
-
-[feature.build.dependencies]
-python-build = "*"
-twine = "*"
-wheel = "*"
-[feature.build.tasks]
-build-wheel = "python -m build --no-isolation ."
-check-wheel = "twine check dist/*"
-
-[feature.lint.dependencies]
-pre-commit = "*"
-insert-license-header = "*"
-docformatter = "*"
-ruff = "*"
-prettier = "*"
-taplo = "*"
-pre-commit-hooks = "*"
-typos = "*"
-[feature.lint.tasks]
-pre-commit-install = "pre-commit install"
-pre-commit-run = "pre-commit run -a"
+hatchling = "*"
+hatch-vcs = "*"
+nodejs = ">=18"
+esbuild = "*"
 
 [feature.py310.dependencies]
 python = "3.10.*"
@@ -52,38 +31,6 @@ python = "3.10.*"
 python = "3.11.*"
 [feature.py312.dependencies]
 python = "3.12.*"
-
-[feature.test-ui]
-channels = ["microsoft"]
-
-[feature.test-ui.dependencies]
-playwright = { version = "*", channel = "microsoft" }
-pytest-playwright = { version = "*", channel = "microsoft" }
-pytest-asyncio = "*"
-pytest-rerunfailures = "*"
-pytest-xdist = "*"
-jupyter_server = "*"
-esbuild = "*"
-packaging = "*"
-
-[feature.test-ui.tasks]
-_install-ui = 'playwright install chromium'
-
-[feature.test-ui.tasks.test-ui]
-cmd = 'pytest tests/ui --ui --browser chromium -n logical --dist loadgroup --reruns 3 --reruns-delay 10'
-depends-on = ["_install-ui"]
-
-[feature.docs.dependencies]
-zensical = "<0.0.17"
-mkdocstrings = "*"
-mkdocstrings-python = "*"
-mkdocs-gen-files = "*"
-mkdocs-literate-nav = "*"
-
-[feature.doc.tasks]
-docs-build = { cmd = 'zensical build --clean', depends-on = ['install'] }
-docs-serve = { cmd = 'zensical serve', depends-on = ['install'] }
-docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['install'] }
 
 [environments]
 default = ["test"]
@@ -94,3 +41,77 @@ test-ui = ["py312", "test", "test-ui"]
 docs = ["docs"]
 build = ["build"]
 lint = { features = ["lint"], no-default-feature = true }
+
+# =============================================
+# ================== TEST =====================
+# =============================================
+
+[feature.test.dependencies]
+pytest = ">=6"
+pytest-asyncio = "*"
+pytest-cov = "*"
+pytest-rerunfailures = "<16"
+pytest-xdist = "*"
+mypy = "*"
+
+[feature.test.tasks]
+test = "pytest"
+test-coverage = "pytest --cov=panel_reactflow --cov-report=xml --cov-report=term-missing"
+
+[feature.lint.dependencies]
+pre-commit = "*"
+insert-license-header = "*"
+docformatter = "*"
+ruff = "*"
+prettier = "*"
+taplo = "*"
+pre-commit-hooks = "*"
+typos = "*"
+
+[feature.lint.tasks]
+pre-commit-install = "pre-commit install"
+pre-commit-run = "pre-commit run -a"
+
+[feature.test-ui]
+channels = ["microsoft"]
+
+[feature.test-ui.dependencies]
+playwright = { version = "<1.51", channel = "microsoft" }
+pytest-playwright = { version = "*", channel = "microsoft" }
+
+[feature.test-ui.tasks]
+_install = "pip install --no-deps --no-build-isolation --disable-pip-version-check -e ."
+_install-ui = 'playwright install chromium'
+
+[feature.test-ui.tasks.test-ui]
+cmd = 'pytest ./tests/ --ui --browser chromium -n logical --dist loadgroup --reruns 3 --reruns-delay 10'
+depends-on = ["_install", "_install-ui"]
+
+# =============================================
+# =================== DOCS ====================
+# =============================================
+
+[feature.docs.dependencies]
+zensical = "<0.0.17"
+mkdocstrings = "*"
+mkdocstrings-python = "*"
+mkdocs-gen-files = "*"
+mkdocs-literate-nav = "*"
+
+[feature.docs.tasks]
+docs-build = { cmd = 'zensical build --clean', depends-on = ['install'] }
+docs-serve = { cmd = 'zensical serve', depends-on = ['install'] }
+docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['install'] }
+
+# =============================================
+# ================== BUILD ====================
+# =============================================
+
+[feature.build.dependencies]
+python-build = "*"
+twine = "*"
+wheel = "*"
+
+[feature.build.tasks]
+build-wheel = "python -m build --no-isolation ."
+check-wheel = "twine check dist/*"

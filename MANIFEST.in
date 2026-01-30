@@ -1,1 +1,2 @@
 recursive-include panel_reactflow models/*.js
+recursive-include panel_reactflow models/*.jsx
