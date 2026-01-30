@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -10,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
+import panel as pn
 import param
 from bokeh.embed.bundle import extension_dirs
 from panel.config import config
@@ -17,6 +19,9 @@ from panel.custom import Children, ReactComponent
 from panel.io.resources import EXTENSION_CDN
 from panel.io.state import state
 from panel.util import base_version, classproperty
+from panel.viewable import Viewer
+from panel.widgets import JSONEditor
+from panel_material_ui import Paper
 
 from .__version import __version__  # noqa
 
@@ -35,7 +40,6 @@ EXTENSION_CDN[DIST_PATH] = CDN_BASE
 
 def _ensure_jsonable(value: Any, path: str) -> None:
     """Ensure value can be JSON-serialized for syncing to the frontend."""
-    import json
 
     try:
         json.dumps(value)
@@ -201,23 +205,73 @@ class EdgeSpec:
         return cls(**payload)
 
 
+class NodeEditor(Viewer):
+    id = param.String(default="", doc="ID of the node.", constant=True)
+    data = param.Dict(default={}, doc="Data for the node.")
+
+
+class JsonNodeEditor(NodeEditor):
+    def __panel__(self):
+        return JSONEditor.from_param(self.param.data)
+
+
+class ParamNodeEditor(NodeEditor):
+    def __init__(self, **params):
+        params.update(params.get("data", {}))
+        super().__init__(**params)
+        edit_params = [p for p in self.param if p not in NodeEditor.param]
+        self.param.watch(self._update_data, edit_params)
+        self._panel = pn.Param(self, parameters=edit_params, show_name=False, margin=0, default_layout=Paper)
+
+    def _update_data(self, *events: tuple[param.parameterized.Event]) -> None:
+        self.data = dict(self.data, **{event.name: event.new for event in events})
+
+    def __panel__(self):
+        return self._panel
+
+
 class ReactFlow(ReactComponent):
     """React Flow component wrapper."""
 
     nodes = param.List(default=[], doc="Canonical list of node dictionaries.")
     edges = param.List(default=[], doc="Canonical list of edge dictionaries.")
-    node_types = param.Dict(default={}, doc="Node type schema definitions keyed by type name.")
-    edge_types = param.Dict(default={}, doc="Edge type schema definitions keyed by type name.")
-    default_edge_options = param.Dict(default={}, doc="Default React Flow edge options.")
-    selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
-    viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
-    sync_mode = param.ObjectSelector(default="event", objects=["event", "debounce"], doc="Sync mode for JS->Python updates.")
+    node_types = param.Dict(default={}, doc="Node type schema definitions keyed by type name.", precedence=-1)
+    edge_types = param.Dict(default={}, doc="Edge type schema definitions keyed by type name.", precedence=-1)
+
     debounce_ms = param.Integer(default=150, bounds=(0, None), doc="Debounce delay in milliseconds when sync_mode='debounce'.")
+
+    default_edge_options = param.Dict(default={}, doc="Default React Flow edge options.")
+
     editable = param.Boolean(default=True, doc="Enable interactive editing on the canvas.")
+
+    editor_mode = param.ObjectSelector(
+        default="toolbar",
+        objects=["toolbar", "node", "side"],
+        doc="Where to render node editors: toolbar, node, or side panel.",
+    )
+
     enable_connect = param.Boolean(default=True, doc="Allow connecting nodes to create edges.")
+
     enable_delete = param.Boolean(default=True, doc="Allow deleting selected nodes or edges.")
+
     enable_multiselect = param.Boolean(default=True, doc="Allow multiselect with modifier key.")
+
+    selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
+
     show_minimap = param.Boolean(default=True, doc="Show the minimap overlay.")
+
+    sync_mode = param.ObjectSelector(default="event", objects=["event", "debounce"], doc="Sync mode for JS->Python updates.")
+
+    viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
+
+    top_panel = Children(default=[], doc="Children rendered in a top-center panel.")
+    bottom_panel = Children(default=[], doc="Children rendered in a bottom-center panel.")
+    left_panel = Children(default=[], doc="Children rendered in a center-left panel.")
+    right_panel = Children(default=[], doc="Children rendered in a center-right panel.")
+
+    # Internal view parameters
+    _node_editors = param.Dict(default={}, doc="Per-node editors for node mode.", precedence=-1)
+    _node_editor_views = Children(default=[], doc="Toolbar content rendered inside NodeToolbar.")
     _views = Children(default=[], doc="Panel viewables rendered inside nodes via view_idx.")
 
     _bundle = DIST_PATH / "panel-reactflow.bundle.js"
@@ -226,12 +280,15 @@ class ReactFlow(ReactComponent):
     _stylesheets = [DIST_PATH / "panel-reactflow.bundle.css", DIST_PATH / "css" / "reactflow.css"]
 
     def __init__(self, **params: Any):
-        params["node_types"] = _coerce_spec_map(params.get("node_types"))
-        params["edge_types"] = _coerce_spec_map(params.get("edge_types"))
+        self._node_ids = []
         super().__init__(**params)
+        self._editor = None
+        self._node_watchers = {}
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
+        self.param.watch(self._update_node_editors, ["nodes", "editor_mode", "selection"])
+        self._update_node_editors()
 
     @classmethod
     def _esm_path(cls, compiled: bool | Literal["compiling"] = True) -> os.PathLike | None:
@@ -254,22 +311,70 @@ class ReactFlow(ReactComponent):
     def _bundle_path(cls) -> os.PathLike | None:
         return cls._bundle
 
+    def _apply_node_editor_changes(self, event: param.parameterized.Event) -> None:
+        self.patch_node_data(event.obj.id, event.new)
+
+    def _update_node_editors(self, *events: tuple[param.parameterized.Event]) -> None:
+        node_ids = [node["id"] for node in self.nodes]
+        edit_changed = any(event.name == "editor_mode" for event in events)
+        if node_ids == self._node_ids and not edit_changed:
+            return
+
+        # Unwatch old editors
+        for node_id in set(self._node_editors.keys()) - set(node_ids):
+            watcher = self._node_watchers[node_id]
+            editor = self._node_editors[node_id]
+            editor.param.unwatch(watcher)
+        self._node_ids = node_ids
+
+        # Construct new editors
+        editors = {}
+        for node in self.nodes:
+            node_id = node.get("id")
+            if node_id in self._node_editors:
+                editors[node_id] = self._node_editors[node_id]
+                continue
+            editor_cls = self.node_types.get(node.get("type", "panel"), JsonNodeEditor)
+            editors[node_id] = editor = editor_cls(id=node_id, data=node.get("data", {}))
+            self._node_watchers[node_id] = editor.param.watch(self._apply_node_editor_changes, "data")
+        self._node_editors = editors
+        self.param.trigger("_node_editor_views")
+
+    def _apply_toolbar_changes(self, event: param.parameterized.Event) -> None:
+        self.patch_node_data(event.obj.id, event.new)
+
     def _get_children(self, data_model, doc, root, parent, comm) -> tuple[dict[str, list[UIElement] | UIElement | None], list[UIElement]]:
-        # Look for Panel views in the "view" key of each node
         views = []
+        editors = []
         for node in self.nodes:
             view = node.get("view", None)
             if view is not None:
                 views.append(view)
+            editor = self._node_editors.get(node.get("id"))
+            editors.append(editor.__panel__())
+        children: dict[str, list[UIElement] | UIElement | None] = {}
+        old_models: list[UIElement] = []
         if views:
-            views, old_models = self._get_child_model(views, doc, root, parent, comm)
-        else:
-            old_models = []
-        return {"_views": views}, old_models
+            views, view_models = self._get_child_model(views, doc, root, parent, comm)
+            children["_views"] = views
+            old_models += view_models
+        if editors:
+            editor_models, editor_old = self._get_child_model(editors, doc, root, parent, comm)
+            children["_node_editor_views"] = editor_models
+            old_models += editor_old
+        for name in ("top_panel", "bottom_panel", "left_panel", "right_panel"):
+            panels = list(getattr(self, name, []) or [])
+            if panels:
+                panel_models, panel_old = self._get_child_model(panels, doc, root, parent, comm)
+                children[name] = panel_models
+                old_models += panel_old
+            else:
+                children[name] = []
+        return children, old_models
 
     def _process_param_change(self, params):
         params = super()._process_param_change(params)
-        if "nodes" in params and any("view" in node for node in params["nodes"]):
+        if "nodes" in params:
             nodes = []
             view_idx = 0
             for node in params["nodes"]:
@@ -282,6 +387,9 @@ class ReactFlow(ReactComponent):
                 node["data"] = data
                 nodes.append(node)
             params["nodes"] = nodes
+        params.pop("node_types", None)
+        params.pop("edge_types", None)
+        params.pop("_node_editors", None)
         return params
 
     def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
@@ -316,53 +424,56 @@ class ReactFlow(ReactComponent):
             if edges is not None:
                 self.edges = edges
             self._emit(msg_type, msg)
-            return
-        if msg_type == "node_moved":
+        elif msg_type == "node_moved":
             node_id = msg.get("node_id")
             position = msg.get("position")
             if node_id is None or position is None:
                 return
-            nodes = []
             for node in self.nodes:
                 if node.get("id") == node_id:
-                    node = {**node, "position": position}
-                nodes.append(node)
-            self.nodes = nodes
+                    node["position"] = position
             self._emit(msg_type, msg)
-            return
-        if msg_type == "selection_changed":
+        elif msg_type == "selection_changed":
             node_ids = msg.get("nodes") or []
             edge_ids = msg.get("edges") or []
-            nodes = [{**node, "selected": node.get("id") in node_ids} for node in self.nodes]
-            edges = [{**edge, "selected": edge.get("id") in edge_ids} for edge in self.edges]
-            self.nodes = nodes
-            self.edges = edges
+            for node in self.nodes:
+                node["selected"] = node.get("id") in node_ids
+            for edge in self.edges:
+                edge["selected"] = edge.get("id") in edge_ids
             self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
             self._emit(msg_type, msg)
-            return
-        if msg_type == "edge_added":
+        elif msg_type == "edge_added":
             edge = msg.get("edge")
             if edge is None:
                 return
             self.add_edge(edge)
             self._emit(msg_type, msg)
-            return
-        if msg_type == "node_deleted":
+        elif msg_type == "node_deleted":
             node_ids = msg.get("node_ids") or []
             if msg.get("node_id"):
                 node_ids = list(set(node_ids) | {msg.get("node_id")})
             for node_id in node_ids:
                 self.remove_node(node_id)
             self._emit(msg_type, msg)
-            return
-        if msg_type == "edge_deleted":
+        elif msg_type == "edge_deleted":
             edge_ids = msg.get("edge_ids") or []
             if msg.get("edge_id"):
                 edge_ids = list(set(edge_ids) | {msg.get("edge_id")})
             for edge_id in edge_ids:
                 self.remove_edge(edge_id)
             self._emit(msg_type, msg)
-            return
+        elif msg_type == "node_clicked":
+            node_id = msg.get("node_id")
+            if node_id is None:
+                return
+            self._build_toolbar_for_node(node_id)
+            self._emit(msg_type, msg)
+        elif msg_type == "toolbar_opened":
+            node_id = msg.get("node_id")
+            if node_id is None:
+                return
+            self._build_toolbar_for_node(node_id)
+            self._emit(msg_type, msg)
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node and any connected edges.
@@ -426,14 +537,13 @@ class ReactFlow(ReactComponent):
         patch:
             Dictionary of key/value pairs merged into ``node["data"]``.
         """
-        nodes = []
         for node in self.nodes:
             if node.get("id") == node_id:
                 data = dict(node.get("data", {}))
                 data.update(patch)
-                node = {**node, "data": data}
-            nodes.append(node)
-        self.nodes = nodes
+                node["data"] = data
+                break
+        self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
         self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
 
     def patch_edge_data(self, edge_id: str, patch: dict[str, Any]) -> None:
@@ -446,14 +556,13 @@ class ReactFlow(ReactComponent):
         patch:
             Dictionary of key/value pairs merged into ``edge["data"]``.
         """
-        edges = []
         for edge in self.edges:
             if edge.get("id") == edge_id:
                 data = dict(edge.get("data", {}))
                 data.update(patch)
-                edge = {**edge, "data": data}
-            edges.append(edge)
-        self.edges = edges
+                edge["data"] = data
+                break
+        self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
         self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
 
     def to_networkx(self, *, multigraph: bool = False):
@@ -560,6 +669,10 @@ class ReactFlow(ReactComponent):
         }
         if selection != self.selection:
             self.selection = selection
+            self._emit(
+                "selection_changed",
+                {"type": "selection_changed", "nodes": selection["nodes"], "edges": selection["edges"]},
+            )
 
     def _normalize_specs(self, event: param.parameterized.Event) -> None:
         normalized = _coerce_spec_map(event.new)
@@ -584,44 +697,3 @@ class ReactFlow(ReactComponent):
         for key in required:
             if key not in payload:
                 raise ValueError(f"Missing '{key}' in {kind} payload.")
-        self._validate_against_schema(payload, kind=kind)
-        sanitized = dict(payload)
-        sanitized.pop("view", None)
-        _ensure_jsonable(sanitized, f"{kind}:{payload.get('id')}")
-
-    def _validate_against_schema(self, payload: dict[str, Any], *, kind: str) -> None:
-        if kind == "node":
-            raw_schema = self.node_types.get(payload.get("type", "panel"))
-        else:
-            edge_type = payload.get("type")
-            raw_schema = self.edge_types.get(edge_type) if edge_type else None
-        if not raw_schema:
-            return
-        if kind == "node":
-            schema = raw_schema if isinstance(raw_schema, NodeTypeSpec) else NodeTypeSpec.from_dict(raw_schema)
-        else:
-            schema = raw_schema if isinstance(raw_schema, EdgeTypeSpec) else EdgeTypeSpec.from_dict(raw_schema)
-        properties = schema.properties or []
-        data = payload.get("data", {})
-        for prop in properties:
-            name = prop.name
-            if not name:
-                continue
-            value = data.get(name, prop.default)
-            if value is None:
-                continue
-            expected = prop.type
-            if expected == "str" and not isinstance(value, str):
-                raise ValueError(f"{kind} data '{name}' must be a string.")
-            if expected == "int" and not isinstance(value, int):
-                raise ValueError(f"{kind} data '{name}' must be an int.")
-            if expected == "float" and not isinstance(value, (int, float)):
-                raise ValueError(f"{kind} data '{name}' must be a float.")
-            if expected == "bool" and not isinstance(value, bool):
-                raise ValueError(f"{kind} data '{name}' must be a bool.")
-            if expected == "enum":
-                choices = prop.choices or []
-                if value not in choices:
-                    raise ValueError(f"{kind} data '{name}' must be one of {choices}.")
-            if expected == "json":
-                _ensure_jsonable(value, f"{kind}:{payload.get('id')}:{name}")
