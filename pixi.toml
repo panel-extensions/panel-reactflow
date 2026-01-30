@@ -12,6 +12,8 @@ pre-commit-run = "pre-commit run -a"
 
 [dependencies]
 python = ">=3.10"
+panel = ">=1.8.5"
+panel-material-ui = ">=0.8.0"
 
 [host-dependencies]
 python = ">=3.10"
