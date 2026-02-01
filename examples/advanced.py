@@ -43,8 +43,8 @@ nodes = [
 ]
 
 edges = [
-    {"id": "e1", "source": "start", "target": "process"},
-    {"id": "e2", "source": "process", "target": "finish"},
+    {"id": "e1", "source": "start", "target": "process", "label": "0.2"},
+    {"id": "e2", "source": "process", "target": "finish", "label": "0.5"},
 ]
 
 status = pn.pane.Markdown("**Last event:** _none_")
