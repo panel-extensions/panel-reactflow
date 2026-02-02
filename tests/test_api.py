@@ -1,8 +1,15 @@
 """Tests for the public API helpers."""
 
+try:
+    import networkx as nx
+except ImportError:
+    nx = None
 import panel as pn
+import pytest
 
 from panel_reactflow import EdgeSpec, NodeSpec, ReactFlow
+
+nx_available = pytest.mark.skipif(nx is None, reason="networkx is not installed")
 
 
 def test_node_spec_roundtrip() -> None:
@@ -60,3 +67,28 @@ def test_reactflow_events_and_selection() -> None:
     edge_id = flow.edges[0]["id"]
     flow.patch_edge_data(edge_id, {"weight": 0.25})
     assert flow.edges[0]["data"]["weight"] == 0.25
+
+
+@nx_available
+def test_reactflow_to_networkx() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "selected": True})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "selected": False})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {}})
+    graph = flow.to_networkx()
+    assert list(graph.nodes) == ["n1", "n2"]
+    assert list(graph.edges) == [("n1", "n2")]
+
+
+@nx_available
+def test_reactflow_from_networkx() -> None:
+    graph = nx.DiGraph()
+    graph.add_node("n1", position={"x": 0, "y": 0}, data={})
+    graph.add_node("n2", position={"x": 1, "y": 1}, data={})
+    graph.add_edge("n1", "n2", data={})
+    flow = ReactFlow.from_networkx(graph)
+    assert flow.nodes == [
+        {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "type": "panel"},
+        {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "type": "panel"},
+    ]
+    assert flow.edges == [{"id": "n1->n2", "source": "n1", "target": "n2", "data": {}}]

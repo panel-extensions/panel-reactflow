@@ -52,6 +52,7 @@ pytest-asyncio = "*"
 pytest-cov = "*"
 pytest-rerunfailures = "<16"
 pytest-xdist = "*"
+networkx = "*"
 mypy = "*"
 
 [feature.test.tasks]

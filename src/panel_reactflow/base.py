@@ -415,65 +415,61 @@ class ReactFlow(ReactComponent):
         """Handle sync messages from the frontend."""
         if not isinstance(msg, dict):
             return
-        msg_type = msg.get("type")
-        if msg_type == "sync":
-            nodes = msg.get("nodes")
-            edges = msg.get("edges")
-            if nodes is not None:
-                self.nodes = nodes
-            if edges is not None:
-                self.edges = edges
-            self._emit(msg_type, msg)
-        elif msg_type == "node_moved":
-            node_id = msg.get("node_id")
-            position = msg.get("position")
-            if node_id is None or position is None:
+        match msg.get("type"):
+            case "sync":
+                nodes = msg.get("nodes")
+                edges = msg.get("edges")
+                if nodes is not None:
+                    self.nodes = nodes
+                if edges is not None:
+                    self.edges = edges
+                self._emit("sync", msg)
+            case "node_moved":
+                node_id = msg.get("node_id")
+                position = msg.get("position")
+                if node_id is None or position is None:
+                    return
+                for node in self.nodes:
+                    if node.get("id") == node_id:
+                        node["position"] = position
+                self._emit("node_moved", msg)
+            case "selection_changed":
+                node_ids = msg.get("nodes") or []
+                edge_ids = msg.get("edges") or []
+                for node in self.nodes:
+                    node["selected"] = node.get("id") in node_ids
+                for edge in self.edges:
+                    edge["selected"] = edge.get("id") in edge_ids
+                self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
+                self._emit("selection_changed", msg)
+            case "edge_added":
+                edge = msg.get("edge")
+                if edge is None:
+                    return
+                self.add_edge(edge)
+                self._emit("edge_added", msg)
+            case "node_deleted":
+                node_ids = msg.get("node_ids") or []
+                if msg.get("node_id"):
+                    node_ids = list(set(node_ids) | {msg.get("node_id")})
+                for node_id in node_ids:
+                    self.remove_node(node_id)
+                self._emit("node_deleted", msg)
+            case "edge_deleted":
+                edge_ids = msg.get("edge_ids") or []
+                if msg.get("edge_id"):
+                    edge_ids = list(set(edge_ids) | {msg.get("edge_id")})
+                for edge_id in edge_ids:
+                    self.remove_edge(edge_id)
+                self._emit("edge_deleted", msg)
+            case "node_clicked":
+                node_id = msg.get("node_id")
+                if node_id is None:
+                    return
+                self._build_toolbar_for_node(node_id)
+                self._emit("node_clicked", msg)
+            case _:
                 return
-            for node in self.nodes:
-                if node.get("id") == node_id:
-                    node["position"] = position
-            self._emit(msg_type, msg)
-        elif msg_type == "selection_changed":
-            node_ids = msg.get("nodes") or []
-            edge_ids = msg.get("edges") or []
-            for node in self.nodes:
-                node["selected"] = node.get("id") in node_ids
-            for edge in self.edges:
-                edge["selected"] = edge.get("id") in edge_ids
-            self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
-            self._emit(msg_type, msg)
-        elif msg_type == "edge_added":
-            edge = msg.get("edge")
-            if edge is None:
-                return
-            self.add_edge(edge)
-            self._emit(msg_type, msg)
-        elif msg_type == "node_deleted":
-            node_ids = msg.get("node_ids") or []
-            if msg.get("node_id"):
-                node_ids = list(set(node_ids) | {msg.get("node_id")})
-            for node_id in node_ids:
-                self.remove_node(node_id)
-            self._emit(msg_type, msg)
-        elif msg_type == "edge_deleted":
-            edge_ids = msg.get("edge_ids") or []
-            if msg.get("edge_id"):
-                edge_ids = list(set(edge_ids) | {msg.get("edge_id")})
-            for edge_id in edge_ids:
-                self.remove_edge(edge_id)
-            self._emit(msg_type, msg)
-        elif msg_type == "node_clicked":
-            node_id = msg.get("node_id")
-            if node_id is None:
-                return
-            self._build_toolbar_for_node(node_id)
-            self._emit(msg_type, msg)
-        elif msg_type == "toolbar_opened":
-            node_id = msg.get("node_id")
-            if node_id is None:
-                return
-            self._build_toolbar_for_node(node_id)
-            self._emit(msg_type, msg)
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node and any connected edges.
@@ -626,22 +622,33 @@ class ReactFlow(ReactComponent):
                 position = {"x": position[0], "y": position[1]}
             node_data = dict(attrs)
             node_data.pop("type", None)
+            embedded_data = node_data.pop("data", None)
+            if isinstance(embedded_data, dict):
+                node_data = {**embedded_data, **node_data}
             nodes.append({"id": str(node_id), "position": position, "type": node_type, "data": node_data})
-        for source, target, key, attrs in graph.edges(keys=True, data=True):
+        if graph.is_multigraph():
+            edge_iter = graph.edges(keys=True, data=True)
+        else:
+            edge_iter = ((source, target, None, attrs) for source, target, attrs in graph.edges(data=True))
+        for source, target, key, attrs in edge_iter:
             edge_data = dict(attrs)
+            embedded_edge_data = edge_data.pop("data", None)
+            if isinstance(embedded_edge_data, dict):
+                edge_data = {**embedded_edge_data, **edge_data}
             label = edge_data.pop("label", None)
             edge_type = edge_data.pop("type", None)
             edge_id = key if key is not None else f"{source}->{target}"
-            edges.append(
-                {
-                    "id": str(edge_id),
-                    "source": str(source),
-                    "target": str(target),
-                    "label": label,
-                    "type": edge_type,
-                    "data": edge_data,
-                }
-            )
+            edge = {
+                "id": str(edge_id),
+                "source": str(source),
+                "target": str(target),
+                "data": edge_data,
+            }
+            if label is not None:
+                edge["label"] = label
+            if edge_type is not None:
+                edge["type"] = edge_type
+            edges.append(edge)
         return cls(nodes=nodes, edges=edges)
 
     def on(self, event_type: str, callback) -> None:
