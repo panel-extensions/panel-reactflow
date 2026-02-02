@@ -206,25 +206,25 @@ class EdgeSpec:
 
 
 class NodeEditor(Viewer):
-    id = param.String(default="", doc="ID of the node.", constant=True)
-    data = param.Dict(default={}, doc="Data for the node.")
+    _id = param.String(default="", doc="ID of the node.", constant=True)
+    _data = param.Dict(default={}, doc="Data for the node.")
 
 
 class JsonNodeEditor(NodeEditor):
     def __panel__(self):
-        return JSONEditor.from_param(self.param.data)
+        return JSONEditor.from_param(self.param._data)
 
 
 class ParamNodeEditor(NodeEditor):
     def __init__(self, **params):
-        params.update(params.get("data", {}))
+        params.update({p: v for p, v in params.get("_data", {}).items() if p in type(self).param})
         super().__init__(**params)
         edit_params = [p for p in self.param if p not in NodeEditor.param]
         self.param.watch(self._update_data, edit_params)
         self._panel = pn.Param(self, parameters=edit_params, show_name=False, margin=0, default_layout=Paper)
 
     def _update_data(self, *events: tuple[param.parameterized.Event]) -> None:
-        self.data = dict(self.data, **{event.name: event.new for event in events})
+        self._data = dict(self._data, **{event.name: event.new for event in events})
 
     def __panel__(self):
         return self._panel
@@ -335,8 +335,8 @@ class ReactFlow(ReactComponent):
                 editors[node_id] = self._node_editors[node_id]
                 continue
             editor_cls = self.node_types.get(node.get("type", "panel"), JsonNodeEditor)
-            editors[node_id] = editor = editor_cls(id=node_id, data=node.get("data", {}))
-            self._node_watchers[node_id] = editor.param.watch(self._apply_node_editor_changes, "data")
+            editors[node_id] = editor = editor_cls(_id=node_id, _data=node.get("data", {}))
+            self._node_watchers[node_id] = editor.param.watch(self._apply_node_editor_changes, "_data")
         self._node_editors = editors
         self.param.trigger("_node_editor_views")
 

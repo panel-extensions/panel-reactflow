@@ -202,7 +202,7 @@ function FlowInner({
   model,
   hydratedNodes,
   pyNodes,
-  pyEdges,
+  hydratedEdges,
   selectionSetter,
   currentSelection,
   views,
@@ -221,7 +221,7 @@ function FlowInner({
   viewport,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(pyEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const lastHydrated = useRef({ nodesSig: null, viewsRef: null, edgesSig: null });
@@ -252,7 +252,8 @@ function FlowInner({
               return edge;
             }
             const data = { ...(edge.data || {}), ...(msg.patch || {}) };
-            return { ...edge, data };
+            const nextLabel = msg.patch?.label ?? edge.label;
+            return { ...edge, data, label: nextLabel };
           })
         );
       }
@@ -293,12 +294,12 @@ function FlowInner({
   }, [hydratedNodes, pyNodes, setNodes]);
 
   useEffect(() => {
-    const edgesSig = signature(pyEdges);
+    const edgesSig = signature(hydratedEdges);
     if (edgesSig !== lastHydrated.current.edgesSig) {
       lastHydrated.current.edgesSig = edgesSig;
-      setEdges(pyEdges);
+      setEdges(hydratedEdges);
     }
-  }, [pyEdges, setEdges]);
+  }, [hydratedEdges, setEdges]);
 
   useEffect(() => {
     if (viewport) {
@@ -336,15 +337,24 @@ function FlowInner({
     [enableConnect, sendPatch, setEdges]
   );
 
-  const onNodeDragStop = useCallback(
-    (_event, node) => {
-      schedulePatch({
-        type: "node_moved",
-        node_id: node.id,
-        position: node.position,
+  const handleNodesChange = useCallback(
+    (changes) => {
+      onNodesChange(changes);
+      const moved = changes.filter(
+        (change) => change.type === "position" && change.dragging !== true
+      );
+      if (!moved.length) {
+        return;
+      }
+      moved.forEach((change) => {
+        schedulePatch({
+          type: "node_moved",
+          node_id: change.id,
+          position: change.position,
+        });
       });
     },
-    [schedulePatch]
+    [onNodesChange, schedulePatch]
   );
 
   const onSelectionChange = useCallback(
@@ -409,9 +419,8 @@ function FlowInner({
       edges={edges}
       nodeTypes={nodeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
-      onNodesChange={onNodesChange}
+      onNodesChange={handleNodesChange}
       onEdgesChange={onEdgesChange}
-      onNodeDragStop={onNodeDragStop}
       onSelectionChange={onSelectionChange}
       onNodesDelete={onNodesDelete}
       onEdgesDelete={onEdgesDelete}
@@ -478,6 +487,17 @@ export function render({ model, view }) {
     });
   }, [pyNodes, nodeEditors, views, editorMode]);
 
+  const hydratedEdges = useMemo(() => {
+    return (pyEdges || []).map((edge) => {
+      const data = edge.data || {};
+      const label = edge.label ?? data.label;
+      if (label === undefined) {
+        return edge;
+      }
+      return { ...edge, data, label };
+    });
+  }, [pyEdges]);
+
   const nodeTypes = useMemo(() => {
     const mapping = {};
     Object.entries(BUILTIN_NODE_TYPES).forEach(([typeName, spec]) => {
@@ -498,7 +518,7 @@ export function render({ model, view }) {
           model={model}
           hydratedNodes={hydratedNodes}
           pyNodes={pyNodes || []}
-          pyEdges={pyEdges || []}
+          hydratedEdges={hydratedEdges}
           selectionSetter={setSelection}
           currentSelection={selection}
           views={views}
