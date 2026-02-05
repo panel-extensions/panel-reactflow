@@ -198,6 +198,77 @@ def test_programmatic_add_remove_nodes_edges(page):
     expect(_edge_label_locator(page, "Edge B")).to_have_count(0)
 
 
+def test_delete_node_reindexes_views(page):
+    nodes = [
+        NodeSpec(
+            id="n1",
+            position={"x": 0, "y": 0},
+            data={"label": "Node A"},
+        ).to_dict()
+        | {"view": pn.pane.Markdown("View A")},
+        NodeSpec(
+            id="n2",
+            position={"x": 260, "y": 60},
+            data={"label": "Node B"},
+        ).to_dict()
+        | {"view": pn.pane.Markdown("View B")},
+        NodeSpec(
+            id="n3",
+            position={"x": 520, "y": 120},
+            data={"label": "Node C"},
+        ).to_dict(),
+    ]
+    flow = ReactFlow(nodes=nodes, width=900, height=600)
+    serve_component(page, flow)
+
+    expect(_node_locator(page, "View A")).to_have_count(1)
+    expect(_node_locator(page, "View B")).to_have_count(1)
+
+    _node_locator(page, "Node A").click(force=True)
+    page.keyboard.press("Backspace")
+
+    wait_until(lambda: all(node["id"] != "n1" for node in flow.nodes), timeout=8000)
+
+    expect(_node_locator(page, "View A")).to_have_count(0)
+    expect(_node_locator(page, "Node B").filter(has_text="View B")).to_have_count(1)
+
+
+def test_python_remove_node_reindexes_views(page):
+    nodes = [
+        NodeSpec(
+            id="n1",
+            position={"x": 0, "y": 0},
+            data={"label": "Node A"},
+        ).to_dict()
+        | {"view": pn.pane.Markdown("View A")},
+        NodeSpec(
+            id="n2",
+            position={"x": 260, "y": 60},
+            data={"label": "Node B"},
+        ).to_dict()
+        | {"view": pn.pane.Markdown("View B")},
+        NodeSpec(
+            id="n3",
+            position={"x": 520, "y": 120},
+            data={"label": "Node C"},
+        ).to_dict(),
+    ]
+    flow = ReactFlow(nodes=nodes, width=900, height=600)
+    serve_component(page, flow)
+
+    expect(_node_locator(page, "View A")).to_have_count(1)
+    expect(_node_locator(page, "View B")).to_have_count(1)
+
+    flow.remove_node("n1")
+
+    wait_until(lambda: all(node["id"] != "n1" for node in flow.nodes), timeout=8000)
+
+    breakpoint()
+
+    expect(_node_locator(page, "View A")).to_have_count(0)
+    expect(_node_locator(page, "Node B").filter(has_text="View B")).to_have_count(1)
+
+
 def test_editor_renders_in_toolbar_mode(page):
     flow = _make_flow(editor_mode="toolbar")
     serve_component(page, flow)
