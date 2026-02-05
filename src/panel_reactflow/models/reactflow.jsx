@@ -274,8 +274,17 @@ function FlowInner({
 
   useEffect(() => {
     const nodesSig = signature(pyNodes);
-    if (nodesSig === lastHydrated.current.nodesSig) return;
+    const viewsSig = signature(
+      (views || []).map((view) => view?.props?.id ?? null)
+    );
+    if (
+      nodesSig === lastHydrated.current.nodesSig &&
+      viewsSig === lastHydrated.current.viewsRef
+    ) {
+      return;
+    }
     lastHydrated.current.nodesSig = nodesSig;
+    lastHydrated.current.viewsRef = viewsSig;
 
     setNodes((curr) => {
       const nextById = new Map(hydratedNodes.map((n) => [n.id, n]));
@@ -291,7 +300,7 @@ function FlowInner({
       });
       return merged;
     });
-  }, [hydratedNodes, pyNodes, setNodes]);
+  }, [hydratedNodes, pyNodes, setNodes, views]);
 
   useEffect(() => {
     const edgesSig = signature(hydratedEdges);
@@ -379,6 +388,32 @@ function FlowInner({
   const onNodesDelete = useCallback(
     (deletedNodes) => {
       const deletedIds = deletedNodes.map((node) => node.id);
+      const deletedViewIdx = deletedNodes
+        .map((node) => node?.data?.view_idx)
+        .filter((value) => Number.isFinite(value))
+        .sort((a, b) => a - b);
+      if (deletedViewIdx.length) {
+        const deletedSet = new Set(deletedIds);
+        setNodes((current) =>
+          current.map((node) => {
+            if (deletedSet.has(node.id)) {
+              return node;
+            }
+            const viewIdx = node?.data?.view_idx;
+            if (!Number.isFinite(viewIdx)) {
+              return node;
+            }
+            const shift = deletedViewIdx.filter((idx) => idx < viewIdx).length;
+            if (!shift) {
+              return node;
+            }
+            return {
+              ...node,
+              data: { ...node.data, view_idx: viewIdx - shift },
+            };
+          })
+        );
+      }
       const deletedEdges = edgesRef.current.filter(
         (edge) =>
           deletedIds.includes(edge.source) || deletedIds.includes(edge.target)
@@ -390,7 +425,7 @@ function FlowInner({
         deleted_edges: deletedEdges.map((edge) => edge.id),
       });
     },
-    [schedulePatch]
+    [schedulePatch, setNodes]
   );
 
   const onEdgesDelete = useCallback(

@@ -1,6 +1,6 @@
 [project]
 name = "panel-reactflow"
-channels = ["conda-forge"]
+channels = ["conda-forge", "pyviz/label/dev"]
 platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [tasks]
@@ -12,7 +12,7 @@ pre-commit-run = "pre-commit run -a"
 
 [dependencies]
 python = ">=3.10"
-panel = ">=1.8.5"
+panel = ">=1.8.8a0"
 panel-material-ui = ">=0.8.0"
 bokeh = ">=3.8.0"
 packaging = "*"

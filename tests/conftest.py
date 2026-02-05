@@ -1,9 +1,6 @@
 """Holds fixtures and configuration for the test suite."""
 
-import pytest
-from panel.io.reload import _local_modules, _modules, _watched_files
-from panel.io.state import state
-from panel.theme import Design
+from panel.tests.conftest import document, comm  # noqa
 
 optional_markers = {
     "ui": {
@@ -29,21 +26,19 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "internet: mark test as requiring an internet connection")
 
 
-@pytest.fixture(autouse=True)
-def server_cleanup():
-    """Clean up server state after each test."""
-    try:
-        yield
-    finally:
-        state.reset()
-        _watched_files.clear()
-        _modules.clear()
-        _local_modules.clear()
+def pytest_collection_modifyitems(config, items):
+    skipped, selected = [], []
+    markers = [m for m in optional_markers if config.getoption(f"--{m}")]
+    empty = not markers
+    for item in items:
+        if empty and any(m in item.keywords for m in optional_markers):
+            skipped.append(item)
+        elif empty:
+            selected.append(item)
+        elif not empty and any(m in item.keywords for m in markers):
+            selected.append(item)
+        else:
+            skipped.append(item)
 
-
-@pytest.fixture(autouse=True)
-def cache_cleanup():
-    """Clean up cache."""
-    state.clear_caches()
-    Design._resolve_modifiers.cache_clear()
-    Design._cache.clear()
+    config.hook.pytest_deselected(items=skipped)
+    items[:] = selected
