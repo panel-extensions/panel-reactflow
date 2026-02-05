@@ -1,5 +1,7 @@
 """Holds fixtures and configuration for the test suite."""
 
+from panel.tests.conftest import document, comm  # noqa
+
 optional_markers = {
     "ui": {
         "help": "Runs UI related tests",
