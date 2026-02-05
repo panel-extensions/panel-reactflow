@@ -1,10 +1,5 @@
 """Holds fixtures and configuration for the test suite."""
 
-import pytest
-from panel.io.reload import _local_modules, _modules, _watched_files
-from panel.io.state import state
-from panel.theme import Design
-
 optional_markers = {
     "ui": {
         "help": "Runs UI related tests",
@@ -27,23 +22,3 @@ def pytest_configure(config):
         config.addinivalue_line("markers", "{}: {}".format(marker, info["marker-descr"]))
 
     config.addinivalue_line("markers", "internet: mark test as requiring an internet connection")
-
-
-@pytest.fixture(autouse=True)
-def server_cleanup():
-    """Clean up server state after each test."""
-    try:
-        yield
-    finally:
-        state.reset()
-        _watched_files.clear()
-        _modules.clear()
-        _local_modules.clear()
-
-
-@pytest.fixture(autouse=True)
-def cache_cleanup():
-    """Clean up cache."""
-    state.clear_caches()
-    Design._resolve_modifiers.cache_clear()
-    Design._cache.clear()

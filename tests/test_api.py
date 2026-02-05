@@ -55,15 +55,17 @@ def test_reactflow_add_node_with_view() -> None:
     assert events[-1]["type"] == "node_added"
 
 
-def test_view_idx_updates_on_remove_node() -> None:
+def test_view_idx_updates_on_remove_node(document, comm) -> None:
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}, view=pn.pane.Markdown("A"))
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}, view=pn.pane.Markdown("B"))
     flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}}, view=None)
 
+    model = flow.get_root(document, comm=comm)
+
     flow.remove_node("n1")
 
-    remaining = {node["id"]: node for node in flow.nodes}
+    remaining = {node["id"]: node for node in model.data.nodes}
     assert remaining["n2"]["data"]["view_idx"] == 0
     assert remaining["n3"]["data"].get("view_idx") is None
 
