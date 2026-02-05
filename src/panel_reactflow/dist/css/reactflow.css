@@ -21,3 +21,55 @@
     border-color: var(--xy-node-border-selected, #2684ff);
     box-shadow: 0 0 0 1px rgba(38, 132, 255, 0.35);
 }
+
+.rf-node-content {
+    padding: 8px 10px;
+    min-width: 140px;
+}
+
+.rf-node-toolbar-button {
+    position: absolute;
+    top: 7px;
+    right: 7px;
+    border: none;
+    background: transparent;
+    font-size: 17px;
+    line-height: 18px;
+    cursor: pointer;
+    z-index: 2;
+    padding: 0;
+    transition: color 0.1s;
+}
+
+.rf-node-toolbar-button--open {
+    color: #3477db;
+    filter: drop-shadow(0 0 1px #3477db) brightness(1.15);
+}
+
+.rf-node-toolbar-button--closed {
+    color: #888;
+    filter: none;
+}
+
+.rf-node-toolbar-icon {
+    opacity: 0.85;
+    transition: color 0.13s, filter 0.13s, opacity 0.13s, transform 0.18s;
+    background: none;
+    border-radius: 50%;
+    box-shadow: none;
+    stroke: #888;
+    filter: none;
+}
+
+.rf-node-toolbar-icon--open {
+    opacity: 1;
+    transform: rotate(22deg);
+    background: #eaf2fd;
+    box-shadow: 0 0 0 2px #cfe1fc;
+    stroke: #3477db;
+    filter: drop-shadow(0 0 1px #3477db) brightness(1.15);
+}
+
+.rf-node-toolbar-icon--closed {
+    transform: none;
+}
