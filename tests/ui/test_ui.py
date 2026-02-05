@@ -263,8 +263,6 @@ def test_python_remove_node_reindexes_views(page):
 
     wait_until(lambda: all(node["id"] != "n1" for node in flow.nodes), timeout=8000)
 
-    breakpoint()
-
     expect(_node_locator(page, "View A")).to_have_count(0)
     expect(_node_locator(page, "Node B").filter(has_text="View B")).to_have_count(1)
 
