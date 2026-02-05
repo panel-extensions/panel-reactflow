@@ -1,6 +1,6 @@
 [project]
 name = "panel-reactflow"
-channels = ["conda-forge"]
+channels = ["conda-forge", "pyviz/label/dev"]
 platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [tasks]
