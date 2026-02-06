@@ -520,8 +520,6 @@ export function render({ model, view }) {
     return mapping;
   }, [editorMode]);
 
-  console.log(nodeEditorMap, selection.nodes, view.model.data._node_editor_views, (selection.nodes.length && editorMode === "side") ? nodeEditorMap[selection.nodes[0]] : null)
-
   return (
     <div style={{ width: "100%", height: "100%" }}>
       <ReactFlowProvider>
