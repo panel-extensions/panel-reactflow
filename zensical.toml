@@ -21,7 +21,8 @@ nav = [
     {"React to Events" = "how-to/react-to-events.md"}
   ]},
   {"Examples" = "examples.md"},
-  {"Reference" = "reference/panel_reactflow.md"}
+  {"Reference" = "reference/panel_reactflow.md"},
+  {"Releases" = "releases.md"}
 ]
 
 # Theme configuration
