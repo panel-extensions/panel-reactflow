@@ -46,7 +46,7 @@ function renderHandles(direction, handles) {
 }
 
 function makeNodeComponent(typeName, typeSpec, editorMode) {
-  return function NodeComponent({ id, data, label }) {
+  return function NodeComponent({ id, data }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
@@ -55,7 +55,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
     const showInlineEditor = editorMode === "node" && hasEditor;
     const showView = data?.view && !spec.minimal;
 
-    const displayLabel = label ?? spec.label ?? typeName;
+    const displayLabel = data?._label ?? spec.label ?? typeName;
 
     const handleGearClick = (e) => {
       e.stopPropagation();
@@ -495,6 +495,7 @@ export function render({ model, view }) {
           view: baseView,
           editor: editorView,
           _hasEditor: hasEditor,
+          _label: node.label,
         },
       };
     });

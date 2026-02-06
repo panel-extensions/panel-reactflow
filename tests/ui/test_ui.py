@@ -290,16 +290,16 @@ def test_editor_renders_in_toolbar_mode(page):
     serve_component(page, flow)
 
     _node_locator(page, "Start").get_by_label("Show node toolbar").click()
-    expect(page.locator(".paper").nth(0)).to_be_visible()
-    expect(page.locator(".paper").nth(1)).not_to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(1)).not_to_be_visible()
 
 
 def test_editor_renders_in_node_mode(page):
     flow = _make_flow(editor_mode="node")
     serve_component(page, flow)
 
-    expect(page.locator(".paper").nth(0)).to_be_visible()
-    expect(page.locator(".paper").nth(1)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(1)).to_be_visible()
 
 
 def test_editor_renders_in_side_mode(page):
@@ -307,4 +307,4 @@ def test_editor_renders_in_side_mode(page):
     serve_component(page, flow)
 
     _node_locator(page, "Start").click()
-    expect(page.locator(".paper").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()

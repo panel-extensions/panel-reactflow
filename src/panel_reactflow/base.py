@@ -337,7 +337,7 @@ class Editor(Viewer):
             _data=data if data is not None else {},
             _schema=schema,
             _node_id=id,
-            _node_type=type,
+            _node_type=type or "",
             _on_patch=on_patch,
             **kwargs,
         )
