@@ -11,7 +11,7 @@ dropdown and a number input for those fields."  This separation lets you
 reuse the same type with different editors, or rely on the auto-generated
 form.
 
-![Screenshot: multiple node types with different schemas](../assets/screenshots/declare-types.png){: .screenshot-placeholder }
+![Screenshot: multiple node types with different schemas](../assets/screenshots/declare-types.png)
 
 ---
 

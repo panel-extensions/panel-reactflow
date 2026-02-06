@@ -14,7 +14,7 @@ If no editor is registered for a type, the built-in `SchemaEditor` is
 used: it auto-generates a form from the JSON Schema if one is present,
 or falls back to a raw JSON editor.
 
-![Screenshot: a node with schema-driven form editor open in the side panel](../assets/screenshots/define-editors-node.png){: .screenshot-placeholder }
+![Screenshot: a node with schema-driven form editor open in the side panel](../assets/screenshots/define-editors-node.png)
 
 ---
 
@@ -104,7 +104,7 @@ flow = ReactFlow(
 Edge editors work identically.  Register them via `edge_editors` (keyed by
 edge type) or `default_edge_editor` for a blanket default.
 
-![Screenshot: an edge editor open in the side panel](../assets/screenshots/define-editors-edge.png){: .screenshot-placeholder }
+![Screenshot: an edge editor open in the side panel](../assets/screenshots/define-editors-edge.png)
 
 ### Schema-driven edge editor
 

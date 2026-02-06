@@ -9,7 +9,7 @@ input at runtime.
 This guide covers how to create nodes and edges, use the helper dataclasses,
 and update data after the graph is live.
 
-![Screenshot: a simple two-node graph with one edge](../assets/screenshots/define-nodes-edges.png){: .screenshot-placeholder }
+![Screenshot: a simple two-node graph with one edge](../assets/screenshots/define-nodes-edges.png)
 
 ---
 

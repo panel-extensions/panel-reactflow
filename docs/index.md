@@ -6,6 +6,10 @@
 Define nodes and edges as plain dictionaries, attach JSON Schemas to
 generate forms, and plug in editors where you need full control.
 
+<video controls autoplay loop muted style="width:100%;border-radius:8px;margin:1em 0;">
+  <source src="https://assets.holoviz.org/panel-reactflow/videos/reactflow_demo.mp4" type="video/mp4">
+</video>
+
 !!! tip "Quick Demo"
     New to Panel‑ReactFlow? **[Try the 2‑minute quickstart →](quickstart.md)**
 
