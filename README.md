@@ -8,6 +8,8 @@
 
 A Panel wrapper for the React Flow JS library.
 
+![panel-reactflow demo](https://assets.holoviz.org/panel-reactflow/videos/reactflow_demo.gif)
+
 ## Features
 
 - Python-first, JSON-serializable graph state

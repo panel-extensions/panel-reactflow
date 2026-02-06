@@ -9,7 +9,7 @@ paths.
 This approach keeps your styling concerns completely separate from your
 Python logic and lets you iterate on visuals without restarting the server.
 
-![Screenshot: styled nodes with custom colors, borders, and shadow effects](../assets/screenshots/style-nodes-edges.png){: .screenshot-placeholder }
+![Screenshot: styled nodes with custom colors, borders, and shadow effects](../assets/screenshots/style-nodes-edges.png)
 
 ---
 

@@ -11,7 +11,7 @@ other Panel component.  This is ideal for at-a-glance previews: show a
 sparkline on a data-source node, a status badge on a pipeline step, or a
 thumbnail on an image-processing node.
 
-![Screenshot: nodes with embedded Panel views showing charts and markdown](../assets/screenshots/embed-views-in-nodes.png){: .screenshot-placeholder }
+![Screenshot: nodes with embedded Panel views showing charts and markdown](../assets/screenshots/embed-views-in-nodes.png)
 
 ---
 

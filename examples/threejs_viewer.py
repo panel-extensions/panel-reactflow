@@ -21,7 +21,7 @@ pn.extension("jsoneditor")
 class CubeViewer(JSComponent):
     """Configurable grid of rotating cubes rendered with Three.js."""
 
-    color = param.Color(default="#7c3aed")
+    color = param.Color(default="#9c5afd")
     num_cubes = param.Integer(default=8, bounds=(1, 64))
     cube_size = param.Number(default=0.5, bounds=(0.1, 2.0))
     rotation_speed = param.Number(default=0.01, bounds=(0.0, 0.05))
@@ -155,6 +155,7 @@ STYLES = """
   box-shadow: 0 0 0 2.5px rgba(124, 58, 237, .35),
               0 4px 24px rgba(124, 58, 237, .2);
 }
+.rf-node-content { padding: 0 }
 
 /* ── Shared controller styling ─────────────────────────── */
 .react-flow__node-color,
@@ -225,12 +226,12 @@ PARAM_MAP = {
 }
 
 DEFAULTS = {
-    "color":      "#7c3aed",
-    "count":      8,
-    "size":       0.5,
-    "speed":      0.01,
-    "spacing":    1.8,
-    "background": "#0f172a",
+    "color":      CubeViewer.color,
+    "count":      CubeViewer.num_cubes,
+    "size":       CubeViewer.cube_size,
+    "speed":      CubeViewer.rotation_speed,
+    "spacing":    CubeViewer.spacing,
+    "background": CubeViewer.background,
 }
 
 LABELS = {
@@ -259,7 +260,7 @@ node_types = {
 def _make_widget(ctrl_type, value):
     """Return the appropriate Panel widget for *ctrl_type*."""
     if ctrl_type in ("color", "background"):
-        return pmui.ColorPicker(value=value, name="", stylesheets=[".MuiPopover-paper { max-height: none !important; }"])
+        return pmui.ColorPicker(value=value, name="", stylesheets=[".MuiPopover-paper { max-height: none !important; max-width: none !important; }"])
     if ctrl_type == "count":
         return pmui.IntSlider(value=value, start=1, end=64, name="")
     if ctrl_type == "size":
@@ -279,14 +280,14 @@ def _make_widget(ctrl_type, value):
 
 # ── Create the viewer and the flow ──────────────────────────────────────────
 
-viewer_component = CubeViewer(width=420, height=300)
+viewer_component = CubeViewer(margin=0, width=420, height=300)
 
 flow = ReactFlow(
     nodes=[
         {
             "id": "viewer",
             "type": "viewer",
-            "label": "3D Cube Viewer",
+            "label": "",
             "position": {"x": 500, "y": 100},
             "data": {},
             "view": viewer_component,

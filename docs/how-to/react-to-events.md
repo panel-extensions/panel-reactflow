@@ -10,7 +10,7 @@ Events are registered with `flow.on(event_type, callback)`.  The callback
 receives a single dict containing the event payload.  You can also listen
 for **all** events at once by subscribing to `"*"`.
 
-![Screenshot: a status bar updating in response to graph events](../assets/screenshots/react-to-events.png){: .screenshot-placeholder }
+![Screenshot: a status bar updating in response to graph events](../assets/screenshots/react-to-events.png)
 
 ---
 

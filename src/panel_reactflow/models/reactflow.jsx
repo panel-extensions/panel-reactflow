@@ -101,11 +101,11 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
           </button>
         )}
         {renderHandles("input", spec.inputs)}
-        <div style={{ fontWeight: 600 }}>
+        <div style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
           {displayLabel}
         </div>
         {(showView || showInlineEditor) && (
-          <div style={{ marginTop: 6 }}>
+          <div>
             {data.view}
             {showInlineEditor ? data.editor : null}
           </div>
