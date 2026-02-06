@@ -11,9 +11,17 @@ extra_css = ["assets/extra.css"]
 extra_javascript = ["assets/extra.js"]
 nav = [
   {"Home" = "index.md"},
-  {"Quick Start" = "quick_start.md"},
-  {"Installation" = "installation.md"},
-  {"FAQ" = "faq.md"}
+  {"Quickstart" = "quickstart.md"},
+  {"How-to" = [
+    {"Define Nodes & Edges" = "how-to/define-nodes-edges.md"},
+    {"Declare Node & Edge Types" = "how-to/declare-types.md"},
+    {"Define Editors" = "how-to/define-editors.md"},
+    {"Embed Views in Nodes" = "how-to/embed-views-in-nodes.md"},
+    {"Style Nodes & Edges" = "how-to/style-nodes-edges.md"},
+    {"React to Events" = "how-to/react-to-events.md"}
+  ]},
+  {"Examples" = "examples.md"},
+  {"Reference" = "reference/panel_reactflow.md"}
 ]
 
 # Theme configuration

@@ -1,11 +1,10 @@
 """UI tests for ReactFlow using Playwright."""
 
 import panel as pn
-import param
 import pytest
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import EdgeSpec, NodeSpec, ParamNodeEditor, ReactFlow
+from panel_reactflow import EdgeSpec, NodeSpec, NodeType, ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -16,9 +15,17 @@ pn.extension()
 pytestmark = pytest.mark.ui
 
 
-class SimpleEditor(ParamNodeEditor):
-    status = param.Selector(objects=["idle", "running"], label="Status")
-    notes = param.String(default="Initial note", label="Notes")
+_TASK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {
+            "type": "string",
+            "enum": ["idle", "running"],
+            "title": "Status",
+        },
+        "notes": {"type": "string", "title": "Notes"},
+    },
+}
 
 
 def _make_flow(*, editor_mode="toolbar", include_edge=True):
@@ -26,13 +33,15 @@ def _make_flow(*, editor_mode="toolbar", include_edge=True):
         NodeSpec(
             id="n1",
             position={"x": 0, "y": 0},
-            data={"label": "Start", "status": "idle", "notes": "Alpha"},
+            label="Start",
+            data={"status": "idle", "notes": "Alpha"},
         ).to_dict()
         | {"view": pn.pane.Markdown("Node view for start")},
         NodeSpec(
             id="n2",
             position={"x": 260, "y": 60},
-            data={"label": "End", "status": "running", "notes": "Beta"},
+            label="End",
+            data={"status": "running", "notes": "Beta"},
         ).to_dict(),
     ]
     edges = []
@@ -48,7 +57,9 @@ def _make_flow(*, editor_mode="toolbar", include_edge=True):
     flow = ReactFlow(
         nodes=nodes,
         edges=edges,
-        node_types={"panel": SimpleEditor},
+        node_types={
+            "panel": NodeType(type="panel", label="Panel", schema=_TASK_SCHEMA),
+        },
         editor_mode=editor_mode,
         top_panel=[pn.pane.Markdown("Top panel content")],
         bottom_panel=[pn.pane.Markdown("Bottom panel content")],
@@ -164,12 +175,12 @@ def test_selection_syncs_between_ui_and_python(page):
     wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
 
 
-def test_patch_node_and_edge_data_updates_ui(page):
+def test_patch_node_and_edge_labels_update_ui(page):
     flow = _make_flow()
     serve_component(page, flow)
 
-    flow.patch_node_data("n1", {"label": "Start patched"})
-    flow.patch_edge_data("e1", {"label": "Edge patched"})
+    flow.nodes = [{**node, "label": "Start patched"} if node["id"] == "n1" else node for node in flow.nodes]
+    flow.edges = [{**edge, "label": "Edge patched"} if edge["id"] == "e1" else edge for edge in flow.edges]
 
     expect(_node_locator(page, "Start patched")).to_have_count(1)
     expect(_edge_label_locator(page, "Edge patched")).to_have_count(1)
@@ -183,7 +194,8 @@ def test_programmatic_add_remove_nodes_edges(page):
         NodeSpec(
             id="n3",
             position={"x": 520, "y": 140},
-            data={"label": "New Node", "status": "idle", "notes": "Gamma"},
+            label="New Node",
+            data={"status": "idle", "notes": "Gamma"},
         )
     )
     flow.add_edge(EdgeSpec(id="e2", source="n2", target="n3", label="Edge B"))
@@ -203,19 +215,22 @@ def test_delete_node_reindexes_views(page):
         NodeSpec(
             id="n1",
             position={"x": 0, "y": 0},
-            data={"label": "Node A"},
+            label="Node A",
+            data={},
         ).to_dict()
         | {"view": pn.pane.Markdown("View A")},
         NodeSpec(
             id="n2",
             position={"x": 260, "y": 60},
-            data={"label": "Node B"},
+            label="Node B",
+            data={},
         ).to_dict()
         | {"view": pn.pane.Markdown("View B")},
         NodeSpec(
             id="n3",
             position={"x": 520, "y": 120},
-            data={"label": "Node C"},
+            label="Node C",
+            data={},
         ).to_dict(),
     ]
     flow = ReactFlow(nodes=nodes, width=900, height=600)
@@ -238,19 +253,22 @@ def test_python_remove_node_reindexes_views(page):
         NodeSpec(
             id="n1",
             position={"x": 0, "y": 0},
-            data={"label": "Node A"},
+            label="Node A",
+            data={},
         ).to_dict()
         | {"view": pn.pane.Markdown("View A")},
         NodeSpec(
             id="n2",
             position={"x": 260, "y": 60},
-            data={"label": "Node B"},
+            label="Node B",
+            data={},
         ).to_dict()
         | {"view": pn.pane.Markdown("View B")},
         NodeSpec(
             id="n3",
             position={"x": 520, "y": 120},
-            data={"label": "Node C"},
+            label="Node C",
+            data={},
         ).to_dict(),
     ]
     flow = ReactFlow(nodes=nodes, width=900, height=600)
@@ -272,16 +290,16 @@ def test_editor_renders_in_toolbar_mode(page):
     serve_component(page, flow)
 
     _node_locator(page, "Start").get_by_label("Show node toolbar").click()
-    expect(page.locator(".paper").nth(0)).to_be_visible()
-    expect(page.locator(".paper").nth(1)).not_to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(1)).not_to_be_visible()
 
 
 def test_editor_renders_in_node_mode(page):
     flow = _make_flow(editor_mode="node")
     serve_component(page, flow)
 
-    expect(page.locator(".paper").nth(0)).to_be_visible()
-    expect(page.locator(".paper").nth(1)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(1)).to_be_visible()
 
 
 def test_editor_renders_in_side_mode(page):
@@ -289,4 +307,4 @@ def test_editor_renders_in_side_mode(page):
     serve_component(page, flow)
 
     _node_locator(page, "Start").click()
-    expect(page.locator(".paper").nth(0)).to_be_visible()
+    expect(page.locator(".jsoneditor").nth(0)).to_be_visible()

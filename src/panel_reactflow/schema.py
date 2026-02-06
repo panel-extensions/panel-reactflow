@@ -1,0 +1,236 @@
+import pandas as pd
+import panel as pn
+import param  # type: ignore
+from panel.layout.base import Panel
+from panel.pane.base import PaneBase
+from panel.widgets.base import WidgetBase
+from panel_material_ui import (
+    Checkbox,
+    DatePicker,
+    DateRangeSlider,
+    DatetimeInput,
+    DatetimePicker,
+    FloatInput,
+    FloatSlider,
+    IntInput,
+    IntRangeSlider,
+    IntSlider,
+    LiteralInput,
+    MultiChoice,
+    Paper,
+    RangeSlider,
+    Select,
+    TextInput,
+)
+
+
+class JSONSchema(PaneBase):
+    default_layout = param.ClassSelector(
+        default=Paper,
+        class_=(Panel,),
+        is_instance=False,
+        doc="""
+        Defines the layout the model(s) returned by the pane will
+        be placed in.""",
+    )
+
+    multi = param.Boolean(
+        default=True,
+        doc="""
+        Whether to pick multi-select and range widgets by default.""",
+    )
+
+    properties = param.List(
+        default=[],
+        doc="""
+        If set this serves as a whitelist of properties to display on
+        the supplied schema object.""",
+    )
+
+    schema = param.Dict(
+        doc="""
+        A valid jsonschema"""
+    )
+
+    widgets = param.Dict(
+        doc="""
+        Dictionary of widget overrides, mapping from parameter name
+        to widget class."""
+    )
+
+    _precedence = ["enum", "type"]
+
+    _unpack = True
+
+    _select_widget = Select
+    _multi_select_widget = MultiChoice
+    _bounded_number_widget = FloatSlider
+    _bounded_number_range_widget = RangeSlider
+    _unbounded_number_widget = FloatInput
+    _list_select_widget = MultiChoice
+    _bounded_int_widget = IntSlider
+    _bounded_int_range_widget = IntRangeSlider
+    _unbounded_int_widget = IntInput
+    _string_widget = TextInput
+    _boolean_widget = Checkbox
+    _literal_widget = LiteralInput
+    _unbounded_date_widget = DatePicker
+    _date_range_widget = DateRangeSlider
+
+    # Not available until Panel 0.11
+    try:
+        _datetime_range_widget = pn.widgets.DatetimeRangeInput
+    except Exception:
+        _datetime_range_widget = DateRangeSlider
+
+    # Not available until Panel 0.12
+    try:
+        _unbounded_datetime_widget = DatetimePicker
+        _datetime_range_widget = pn.widgets.DatetimeRangePicker
+    except Exception:
+        _unbounded_datetime_widget = DatetimeInput
+
+    def _array_type(self, schema):
+        if "items" in schema and not schema.get("additionalItems", True):
+            items = schema["items"]
+            if len(items) == 2:
+                if all(s["type"] == "number" for s in items):
+                    return RangeSlider, {}
+                elif all(s["type"] == "integer" for s in items):
+                    return IntRangeSlider, {}
+            elif "enum" in items:
+                return self._list_select_type, {"options": items["enum"]}
+        else:
+            return self._literal_widget, {"type": (list, tuple)}
+
+    def _number_type(self, schema):
+        if "inclusiveMaximum" in schema and "inclusiveMinimum" in schema:
+            if self.multi:
+                wtype = self._bounded_number_range_widget
+            else:
+                wtype = self._bounded_number_widget
+            return wtype, {"start": float(schema["inclusiveMinimum"]), "end": float(schema["inclusiveMaximum"])}
+        else:
+            return self._unbounded_number_widget, {}
+
+    def _integer_type(self, schema):
+        if "inclusiveMaximum" in schema and "inclusiveMinimum" in schema:
+            if self.multi:
+                wtype = self._bounded_int_range_widget
+            else:
+                wtype = self._bounded_int_widget
+            return wtype, {"start": int(schema["inclusiveMinimum"]), "end": int(schema["inclusiveMaximum"])}
+        else:
+            return self._unbounded_int_widget, {"step": 1}
+
+    def _boolean_type(self, schema):
+        return self._boolean_widget, {}
+
+    def _string_type(self, schema):
+        if schema.get("format") in ("date", "date-time", "datetime"):
+            if "formatMaximum" in schema and "formatMinimum" in schema:
+                dt_min = pd.to_datetime(schema["formatMinimum"])
+                if dt_min.tz:
+                    dt_min = dt_min.astimezone("UTC").tz_localize(None)
+                dt_max = pd.to_datetime(schema["formatMaximum"])
+                if dt_max.tz:
+                    dt_max = dt_max.astimezone("UTC").tz_localize(None)
+                dt_range = {"start": dt_min.to_pydatetime(), "end": dt_max.to_pydatetime()}
+                if schema.get("format") == "date":
+                    wtype = self._date_range_widget
+                else:
+                    wtype = self._datetime_range_widget
+                return wtype, dt_range
+            if "inclusiveMaximum" in schema and "inclusiveMinimum" in schema:
+                dt_min = pd.to_datetime(schema["inclusiveMinimum"])
+                if dt_min.tz:
+                    dt_min = dt_min.astimezone("UTC").tz_localize(None)
+                dt_max = pd.to_datetime(schema["inclusiveMaximum"])
+                if dt_max.tz:
+                    dt_max = dt_max.astimezone("UTC").tz_localize(None)
+                dt_range = {"start": dt_min.to_pydatetime(), "end": dt_max.to_pydatetime()}
+                if schema.get("format") == "date":
+                    wtype = self._date_range_widget
+                else:
+                    wtype = self._datetime_range_widget
+                return wtype, dt_range
+            elif schema.get("format") == "date":
+                return self._unbounded_date_widget, {}
+            else:
+                return self._unbounded_datetime_widget, {}
+        return self._string_widget, {}
+
+    def _enum(self, schema):
+        wtype = self._multi_select_widget if self.multi else self._select_widget
+        try:
+            options = sorted(schema["enum"])
+        except TypeError:
+            options = schema["enum"]
+        return wtype, {"options": options}
+
+    def __init__(self, object=None, schema=None, **params):
+        if schema is not None:
+            params["schema"] = schema
+        super().__init__(object, **params)
+        self._widgets = {}
+        self._update_widgets_from_schema()
+
+    @param.depends("schema", watch=True)
+    def _update_widgets_from_schema(self):
+        if not self.schema:
+            self.layout[:] = []
+            return
+
+        values = {} if self.object is None else self.object
+        widgets = []
+        for p, schema in self.schema.items():
+            if p == "__len__" or self.properties and p not in self.properties:
+                continue
+            for prop in self._precedence:
+                if prop in schema:
+                    break
+
+            if self.widgets is None or p not in self.widgets:
+                wtype, kwargs = self._widget_type(prop, schema)
+            elif isinstance(self.widgets[p], dict):
+                kwargs = dict(self.widgets[p])
+                if "type" in kwargs:
+                    wtype = kwargs.pop("type")
+                else:
+                    wtype = self._widget_type(prop, schema)
+            else:
+                _, kwargs = self._widget_type(prop, schema)
+                wtype = self.widgets[p]
+
+            if isinstance(wtype, WidgetBase):
+                widget = wtype
+            else:
+                if p in values:
+                    kwargs["value"] = values[p]
+                widget = wtype(name=schema.get("title", p), **kwargs)
+            self._widgets[p] = widget
+            widgets.append(widget)
+        self.layout[:] = widgets
+
+    def _widget_type(self, prop, schema):
+        if prop == "enum":
+            wtype, kwargs = self._enum(schema)
+        else:
+            wtype, kwargs = getattr(self, f"_{schema[prop]}_{prop}")(schema)
+        return wtype, kwargs
+
+    @param.depends("object", watch=True)
+    def _update_widget_values(self):
+        if not self.object:
+            return
+        for p, value in self.object.items():
+            self._widgets[p].value = value
+
+    def _get_model(self, doc, root=None, parent=None, comm=None):
+        model = self.layout._get_model(doc, root, parent, comm)
+        self._models[root.ref["id"]] = (model, parent)
+        return model
+
+    def _cleanup(self, root):
+        self.layout._cleanup(root)
+        super()._cleanup(root)

@@ -9,14 +9,16 @@ nodes = [
         "id": "n1",
         "position": {"x": 0, "y": 0},
         "type": "panel",
-        "data": {"label": "Start"},
+        "label": "Start",
+        "data": {},
         "view": pn.pane.Markdown("Node 1 content"),
     },
     {
         "id": "n2",
         "position": {"x": 260, "y": 60},
         "type": "panel",
-        "data": {"label": "End"},
+        "label": "End",
+        "data": {},
         "view": pn.pane.Markdown("Node 2 content"),
     },
 ]
