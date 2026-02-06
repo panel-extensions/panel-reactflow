@@ -24,19 +24,6 @@ const BUILTIN_NODE_TYPES = {
   minimal: { label: "Minimal", minimal: true },
 };
 
-function getPropertySummary(data, spec) {
-  if (!spec?.properties?.length) {
-    return [];
-  }
-  return spec.properties
-    .filter((prop) => prop.visible_in_node)
-    .map((prop) => {
-      const value = data?.[prop.name] ?? prop.default;
-      const label = prop.label || prop.name;
-      return { label, value };
-    });
-}
-
 function renderHandles(direction, handles) {
   if (!handles?.length) {
     return (
@@ -58,16 +45,17 @@ function renderHandles(direction, handles) {
   ));
 }
 
-function makeNodeComponent(typeName, model, typeSpec, editorMode) {
-  return function NodeComponent({ id, data }) {
+function makeNodeComponent(typeName, typeSpec, editorMode) {
+  return function NodeComponent({ id, data, label }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
     const spec = typeSpec || {};
-    const showGear = editorMode === "toolbar";
-    const showToolbar = (editorMode === "toolbar" && toolbarOpen);
+    const hasEditor = data?._hasEditor;
+    const showGear = editorMode === "toolbar" && hasEditor;
+    const showToolbar = (editorMode === "toolbar" && toolbarOpen && hasEditor);
+    const showInlineEditor = editorMode === "node" && hasEditor;
     const showView = data?.view && !spec.minimal;
 
-    const summary = getPropertySummary(data, spec);
-    const label = data?.label || spec.label || typeName;
+    const displayLabel = label ?? spec.label ?? typeName;
 
     const handleGearClick = (e) => {
       e.stopPropagation();
@@ -113,23 +101,13 @@ function makeNodeComponent(typeName, model, typeSpec, editorMode) {
           </button>
         )}
         {renderHandles("input", spec.inputs)}
-        <div style={{ fontWeight: 600, marginBottom: summary.length ? 6 : 0 }}>
-          {label}
+        <div style={{ fontWeight: 600 }}>
+          {displayLabel}
         </div>
-        {summary.length > 0 && (
-          <div style={{ display: "grid", gap: "2px"}}>
-            {summary.map((item) => (
-              <div key={item.label}>
-                <span style={{ opacity: 0.7 }}>{item.label}:</span>{" "}
-                <span>{String(item.value ?? "")}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {(showView || editorMode === "node") && (
+        {(showView || showInlineEditor) && (
           <div style={{ marginTop: 6 }}>
             {data.view}
-            {editorMode === "node" ? data.editor : null}
+            {showInlineEditor ? data.editor : null}
           </div>
         )}
         {renderHandles("output", spec.outputs)}
@@ -454,6 +432,7 @@ function FlowInner({
 export function render({ model, view }) {
   const [pyNodes] = model.useState("nodes");
   const [pyEdges] = model.useState("edges");
+  const [pyNodeTypes] = model.useState("node_types");
   const [defaultEdgeOptions] = model.useState("default_edge_options");
   const [selection, setSelection] = model.useState("selection");
   const [syncMode] = model.useState("sync_mode");
@@ -467,15 +446,36 @@ export function render({ model, view }) {
   const [viewport, setViewport] = model.useState("viewport");
   const views = model.get_child("_views");
   const nodeEditors = model.get_child("_node_editor_views");
+  const edgeEditors = model.get_child("_edge_editor_views");
   const topPanels = model.get_child("top_panel");
   const bottomPanels = model.get_child("bottom_panel");
   const leftPanels = model.get_child("left_panel");
   const rightPanels = model.get_child("right_panel");
 
+  const allNodeTypes = useMemo(
+    () => ({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }),
+    [pyNodeTypes]
+  );
+
   const nodeEditorMap = {};
+  const nodeHasEditorMap = {};
   pyNodes.forEach((node, idx) => {
     if (node && node.id !== undefined) {
       nodeEditorMap[node.id] = nodeEditors[idx];
+      const data = node.data || {};
+      const typeSpec = allNodeTypes[node.type] || {};
+      const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
+      nodeHasEditorMap[node.id] = realKeys.length > 0 || !!typeSpec.schema;
+    }
+  });
+
+  const edgeEditorMap = {};
+  const edgeHasEditorMap = {};
+  (pyEdges || []).forEach((edge, idx) => {
+    if (edge && edge.id !== undefined) {
+      edgeEditorMap[edge.id] = edgeEditors[idx];
+      const data = edge.data || {};
+      edgeHasEditorMap[edge.id] = Object.keys(data).length > 0;
     }
   });
 
@@ -485,21 +485,25 @@ export function render({ model, view }) {
       const viewIndex = data.view_idx;
       const baseView = views[viewIndex];
       const editorView = nodeEditors[idx];
+      const typeSpec = allNodeTypes[node.type] || {};
+      const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
+      const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
       return {
         ...node,
         data: {
           ...data,
           view: baseView,
           editor: editorView,
+          _hasEditor: hasEditor,
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editorMode]);
+  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
       const data = edge.data || {};
-      const label = edge.label ?? data.label;
+      const label = edge.label;
       if (label === undefined) {
         return edge;
       }
@@ -507,18 +511,17 @@ export function render({ model, view }) {
     });
   }, [pyEdges]);
 
-  const nodeTypes = useMemo(() => {
+  const hydratedNodeTypes = useMemo(() => {
     const mapping = {};
-    Object.entries(BUILTIN_NODE_TYPES).forEach(([typeName, spec]) => {
+    Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
       mapping[typeName] = makeNodeComponent(
         typeName,
-        model,
         spec,
         editorMode,
       );
     });
     return mapping;
-  }, [editorMode]);
+  }, [editorMode, pyNodeTypes]);
 
   return (
     <div style={{ width: "100%", height: "100%" }}>
@@ -533,7 +536,7 @@ export function render({ model, view }) {
           views={views}
           viewportSetter={setViewport}
           defaultEdgeOptions={defaultEdgeOptions}
-          nodeTypes={nodeTypes}
+          nodeTypes={hydratedNodeTypes}
           editable={editable}
           enableConnect={enableConnect}
           enableDelete={enableDelete}
@@ -554,7 +557,8 @@ export function render({ model, view }) {
         </Panel>
         <Panel key="right-panel" position="center-right">
           {rightPanels}
-          {(selection.nodes.length && editorMode === "side") ? nodeEditorMap[selection.nodes[0]] : null}
+          {(selection.nodes.length && editorMode === "side" && nodeHasEditorMap[selection.nodes[0]]) ? nodeEditorMap[selection.nodes[0]] : null}
+          {(selection.edges.length && !selection.nodes.length && edgeHasEditorMap[selection.edges[0]]) ? edgeEditorMap[selection.edges[0]] : null}
         </Panel>
       </ReactFlowProvider>
     </div>

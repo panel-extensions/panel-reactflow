@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -47,80 +47,177 @@ def _ensure_jsonable(value: Any, path: str) -> None:
         raise ValueError(f"Value at {path} is not JSON-serializable.") from exc
 
 
-def _coerce_spec_map(specs: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+def _is_param_class(obj: Any) -> bool:
+    """Check if *obj* is a ``param.Parameterized`` **subclass** (not instance)."""
+    return isinstance(obj, type) and issubclass(obj, param.Parameterized)
+
+
+def _is_pydantic_class(obj: Any) -> bool:
+    """Check if *obj* is a Pydantic ``BaseModel`` subclass."""
+    try:
+        from pydantic import BaseModel
+
+        return isinstance(obj, type) and issubclass(obj, BaseModel)
+    except ImportError:
+        return False
+
+
+def _param_to_jsonschema(parameterized_cls: type) -> dict[str, Any]:
+    """Convert a ``param.Parameterized`` class to a JSON Schema dict.
+
+    Uses ``parameterized_cls.param.schema()`` for the per-property
+    schemas, then wraps them in a standard JSON Schema object envelope
+    while filtering out base ``Parameterized`` params and private
+    (``_``-prefixed) params.
+    """
+    base_params = set(param.Parameterized.param)
+    raw = parameterized_cls.param.schema()
+    properties = {name: prop for name, prop in raw.items() if name not in base_params and not name.startswith("_")}
+    return {"type": "object", "properties": properties}
+
+
+def _pydantic_to_jsonschema(model_cls: type) -> dict[str, Any]:
+    """Convert a Pydantic ``BaseModel`` class to a JSON Schema dict."""
+    return model_cls.model_json_schema()
+
+
+def _normalize_schema(schema: Any) -> dict[str, Any] | None:
+    """Normalize a schema source to a JSON Schema dict (or ``None``)."""
+    if schema is None:
+        return None
+    if isinstance(schema, SchemaSource):
+        if schema.kind == "jsonschema":
+            return schema.value
+        elif schema.kind == "param":
+            return _param_to_jsonschema(schema.value)
+        elif schema.kind == "pydantic":
+            return _pydantic_to_jsonschema(schema.value)
+    if isinstance(schema, dict):
+        return schema
+    if _is_param_class(schema):
+        return _param_to_jsonschema(schema)
+    if _is_pydantic_class(schema):
+        return _pydantic_to_jsonschema(schema)
+    raise ValueError(f"Cannot normalize schema: {schema!r}")
+
+
+def _validate_data(data: dict[str, Any], schema: dict[str, Any] | None) -> None:
+    """Validate *data* against a JSON Schema if available."""
+    if schema is None:
+        return
+    try:
+        import jsonschema as _js
+    except ImportError:
+        return
+    try:
+        _js.validate(data, schema)
+    except _js.ValidationError as exc:
+        path = ".".join(str(p) for p in exc.absolute_path) or "(root)"
+        raise ValueError(f"Validation failed at {path}: {exc.message}") from exc
+
+
+def _coerce_spec_map(specs: dict[str, Any] | None, *, edge: bool = False) -> dict[str, dict[str, Any]]:
+    """Normalize a dict of type specs to JSON-serializable descriptors."""
     if not specs:
         return {}
     normalized: dict[str, dict[str, Any]] = {}
     for key, value in specs.items():
-        if hasattr(value, "to_dict"):
+        if hasattr(value, "to_dict") and callable(value.to_dict):
             normalized[key] = value.to_dict()
         elif isinstance(value, dict):
             normalized[key] = value
+        elif _is_param_class(value):
+            klass = EdgeType if edge else NodeType
+            normalized[key] = klass(type=key, schema=value).to_dict()
+        elif _is_pydantic_class(value):
+            klass = EdgeType if edge else NodeType
+            normalized[key] = klass(type=key, schema=value).to_dict()
         else:
             raise ValueError(f"Unsupported spec type for '{key}'.")
     return normalized
 
 
 @dataclass
-class PropertySpec:
-    """Schema definition for a node or edge property."""
+class SchemaSource:
+    """Explicit schema source wrapper.
 
-    name: str
-    type: str = "str"
-    default: Any = None
-    label: str | None = None
-    help: str | None = None
-    choices: list[Any] | None = None
-    format: str | None = None
-    visible_in_node: bool = False
-    editable: bool = True
+    Parameters
+    ----------
+    kind:
+        One of ``"jsonschema"``, ``"param"``, or ``"pydantic"``.
+    value:
+        The schema value (a JSON Schema dict, Param class, or Pydantic class).
+    """
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "PropertySpec":
-        return cls(**payload)
+    kind: Literal["jsonschema", "param", "pydantic"]
+    value: Any
 
 
 @dataclass
-class NodeTypeSpec:
-    """Schema definition for a node type."""
+class NodeType:
+    """Type definition for a node.
+
+    Parameters
+    ----------
+    type:
+        Unique type name.
+    label:
+        Optional human-readable label.
+    schema:
+        Optional data schema. Accepts a JSON Schema dict, a
+        ``param.Parameterized`` subclass, a Pydantic ``BaseModel``
+        subclass, or a :class:`SchemaSource` wrapper. Normalized to
+        JSON Schema when serialized.
+    inputs:
+        Optional list of input port names.
+    outputs:
+        Optional list of output port names.
+    pane_policy:
+        Display policy (default ``"single"``).
+    """
 
     type: str
     label: str | None = None
-    properties: list[PropertySpec] | None = None
+    schema: Any = None
     inputs: list[str] | None = None
     outputs: list[str] | None = None
     pane_policy: str = "single"
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["properties"] = [p.to_dict() for p in self.properties or []]
-        return payload
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "NodeTypeSpec":
-        props = [PropertySpec.from_dict(p) for p in payload.get("properties", [])]
-        return cls(**{**payload, "properties": props})
+        return {
+            "type": self.type,
+            "label": self.label,
+            "schema": _normalize_schema(self.schema),
+            "inputs": self.inputs,
+            "outputs": self.outputs,
+            "pane_policy": self.pane_policy,
+        }
 
 
 @dataclass
-class EdgeTypeSpec:
-    """Schema definition for an edge type."""
+class EdgeType:
+    """Type definition for an edge.
+
+    Parameters
+    ----------
+    type:
+        Unique type name.
+    label:
+        Optional human-readable label.
+    schema:
+        Optional data schema (same formats as :class:`NodeType`).
+    """
 
     type: str
-    properties: list[PropertySpec] | None = None
+    label: str | None = None
+    schema: Any = None
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["properties"] = [p.to_dict() for p in self.properties or []]
-        return payload
-
-    @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "EdgeTypeSpec":
-        props = [PropertySpec.from_dict(p) for p in payload.get("properties", [])]
-        return cls(**{**payload, "properties": props})
+        return {
+            "type": self.type,
+            "label": self.label,
+            "schema": _normalize_schema(self.schema),
+        }
 
 
 @dataclass
@@ -130,6 +227,7 @@ class NodeSpec:
     id: str
     position: dict[str, float] | dict[str, Any] = None
     type: str = "panel"
+    label: str | None = None
     data: dict[str, Any] | None = None
     selected: bool = False
     draggable: bool = True
@@ -149,6 +247,7 @@ class NodeSpec:
             "id": self.id,
             "position": self.position,
             "type": self.type,
+            "label": self.label,
             "data": self.data,
             "selected": self.selected,
             "draggable": self.draggable,
@@ -205,26 +304,108 @@ class EdgeSpec:
         return cls(**payload)
 
 
-class NodeEditor(Viewer):
-    _id = param.String(default="", doc="ID of the node.", constant=True)
-    _data = param.Dict(default={}, doc="Data for the node.")
+class Editor(Viewer):
+    """Base class for node/edge editors.
+
+    All editors follow the unified signature::
+
+        editor(data, schema, *, id, type, on_patch) -> Viewable
+
+    Parameters
+    ----------
+    data : dict
+        Current node or edge data dictionary.
+    schema : dict | None
+        Normalized JSON Schema for the node/edge type, or ``None``.
+    id : str
+        Node or edge identifier.
+    type : str
+        Node or edge type name.
+    on_patch : callable
+        Callback ``on_patch(patch_dict)`` to report data changes
+        back to the graph.
+    """
+
+    _data = param.Dict(default={}, doc="Node or edge data.")
+    _schema = param.Dict(default=None, allow_None=True, doc="JSON Schema for data.")
+    _node_id = param.String(default="", doc="Node or edge ID.")
+    _node_type = param.String(default="", doc="Node or edge type.")
+    _on_patch = param.Callable(default=None, allow_None=True, doc="Callback to report data changes.")
+
+    def __init__(self, data=None, schema=None, *, id="", type="", on_patch=None, **kwargs):
+        super().__init__(
+            _data=data if data is not None else {},
+            _schema=schema,
+            _node_id=id,
+            _node_type=type,
+            _on_patch=on_patch,
+            **kwargs,
+        )
 
 
-class JsonNodeEditor(NodeEditor):
+class JsonEditor(Editor):
+    """Editor that always renders a raw JSON editor."""
+
+    def __init__(self, data=None, schema=None, **kwargs):
+        super().__init__(data, schema, **kwargs)
+        self._editor = JSONEditor(value=self._data)
+        self._editor.param.watch(self._on_json_change, "value")
+
+    def _on_json_change(self, event: param.parameterized.Event) -> None:
+        if self._on_patch is not None and event.new != self._data:
+            self._data = event.new
+            self._on_patch(event.new)
+
     def __panel__(self):
-        return JSONEditor.from_param(self.param._data)
+        return self._editor
 
 
-class ParamNodeEditor(NodeEditor):
-    def __init__(self, **params):
-        params.update({p: v for p, v in params.get("_data", {}).items() if p in type(self).param})
-        super().__init__(**params)
-        edit_params = [p for p in self.param if p not in NodeEditor.param]
-        self.param.watch(self._update_data, edit_params)
-        self._panel = pn.Param(self, parameters=edit_params, show_name=False, margin=0, default_layout=Paper)
+class SchemaEditor(Editor):
+    """Smart default editor.
 
-    def _update_data(self, *events: tuple[param.parameterized.Event]) -> None:
-        self._data = dict(self._data, **{event.name: event.new for event in events})
+    When a JSON Schema with ``properties`` is available, uses
+    :class:`~panel_reactflow.schema.JSONSchema` to render a form of
+    widgets derived from the schema.  Otherwise falls back to a raw
+    :class:`~panel.widgets.JSONEditor`.
+    """
+
+    def __init__(self, data=None, schema=None, **kwargs):
+        super().__init__(data, schema, **kwargs)
+        if self._schema and self._schema.get("properties"):
+            try:
+                from .schema import JSONSchema
+
+                self._form = JSONSchema(
+                    self._data,
+                    schema=self._schema["properties"],
+                    multi=False,
+                )
+                for name, widget in self._form._widgets.items():
+                    widget.param.watch(
+                        lambda event, _n=name: self._on_widget_change(_n, event),
+                        "value",
+                    )
+                self._panel = Paper(self._form, margin=0)
+            except Exception:
+                # Graceful fallback if JSONSchema rendering fails
+                # (e.g. missing pandas dependency).
+                self._init_json_fallback()
+        else:
+            self._init_json_fallback()
+
+    def _init_json_fallback(self) -> None:
+        self._json_editor = JSONEditor(value=self._data)
+        self._json_editor.param.watch(self._on_json_change, "value")
+        self._panel = self._json_editor
+
+    def _on_widget_change(self, name: str, event: param.parameterized.Event) -> None:
+        if self._on_patch is not None:
+            self._on_patch({name: event.new})
+
+    def _on_json_change(self, event: param.parameterized.Event) -> None:
+        if self._on_patch is not None and event.new != self._data:
+            self._data = event.new
+            self._on_patch(event.new)
 
     def __panel__(self):
         return self._panel
@@ -235,8 +416,13 @@ class ReactFlow(ReactComponent):
 
     nodes = param.List(default=[], doc="Canonical list of node dictionaries.")
     edges = param.List(default=[], doc="Canonical list of edge dictionaries.")
-    node_types = param.Dict(default={}, doc="Node type schema definitions keyed by type name.", precedence=-1)
-    edge_types = param.Dict(default={}, doc="Edge type schema definitions keyed by type name.", precedence=-1)
+    node_types = param.Dict(default={}, doc="Node type descriptors keyed by type name.")
+    edge_types = param.Dict(default={}, doc="Edge type descriptors keyed by type name.")
+
+    node_editors = param.Dict(default={}, doc="Node editor factories keyed by type name.", precedence=-1)
+    edge_editors = param.Dict(default={}, doc="Edge editor factories keyed by type name.", precedence=-1)
+    default_node_editor = param.Parameter(default=None, doc="Default node editor factory.", precedence=-1)
+    default_edge_editor = param.Parameter(default=None, doc="Default edge editor factory.", precedence=-1)
 
     debounce_ms = param.Integer(default=150, bounds=(0, None), doc="Debounce delay in milliseconds when sync_mode='debounce'.")
 
@@ -258,9 +444,12 @@ class ReactFlow(ReactComponent):
 
     selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
 
-    show_minimap = param.Boolean(default=True, doc="Show the minimap overlay.")
+    show_minimap = param.Boolean(default=False, doc="Show the minimap overlay.")
 
     sync_mode = param.ObjectSelector(default="event", objects=["event", "debounce"], doc="Sync mode for JS->Python updates.")
+
+    validate_on_add = param.Boolean(default=True, doc="Validate data against schema on add_node/add_edge.")
+    validate_on_patch = param.Boolean(default=False, doc="Validate data against schema on patch_node_data/patch_edge_data.")
 
     viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
 
@@ -270,8 +459,10 @@ class ReactFlow(ReactComponent):
     right_panel = Children(default=[], doc="Children rendered in a center-right panel.")
 
     # Internal view parameters
-    _node_editors = param.Dict(default={}, doc="Per-node editors for node mode.", precedence=-1)
-    _node_editor_views = Children(default=[], doc="Toolbar content rendered inside NodeToolbar.")
+    _node_editors = param.Dict(default={}, doc="Per-node editors.", precedence=-1)
+    _node_editor_views = Children(default=[], doc="Node editor views (one per node, same order).")
+    _edge_editors = param.Dict(default={}, doc="Per-edge editors.", precedence=-1)
+    _edge_editor_views = Children(default=[], doc="Edge editor views (one per edge, same order).")
     _views = Children(default=[], doc="Panel viewables rendered inside nodes via view_idx.")
 
     _bundle = DIST_PATH / "panel-reactflow.bundle.js"
@@ -280,15 +471,28 @@ class ReactFlow(ReactComponent):
     _stylesheets = [DIST_PATH / "panel-reactflow.bundle.css", DIST_PATH / "css" / "reactflow.css"]
 
     def __init__(self, **params: Any):
-        self._node_ids = []
+        self._node_ids: list[str] = []
+        self._edge_ids: list[str] = []
+        # Normalize type specs before parent init so the frontend receives
+        # JSON-serializable descriptors from the start.
+        if "node_types" in params:
+            params["node_types"] = _coerce_spec_map(params["node_types"])
+        if "edge_types" in params:
+            params["edge_types"] = _coerce_spec_map(params["edge_types"], edge=True)
         super().__init__(**params)
-        self._editor = None
-        self._node_watchers = {}
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
-        self.param.watch(self._update_node_editors, ["nodes", "editor_mode", "selection"])
+        self.param.watch(
+            self._update_node_editors,
+            ["nodes", "editor_mode", "selection", "node_editors", "default_node_editor"],
+        )
+        self.param.watch(
+            self._update_edge_editors,
+            ["edges", "selection", "edge_editors", "default_edge_editor"],
+        )
         self._update_node_editors()
+        self._update_edge_editors()
 
     @classmethod
     def _esm_path(cls, compiled: bool | Literal["compiling"] = True) -> os.PathLike | None:
@@ -311,57 +515,135 @@ class ReactFlow(ReactComponent):
     def _bundle_path(cls) -> os.PathLike | None:
         return cls._bundle
 
-    def _apply_node_editor_changes(self, event: param.parameterized.Event) -> None:
-        self.patch_node_data(event.obj.id, event.new)
+    def _get_node_schema(self, node_type: str) -> dict[str, Any] | None:
+        """Return the normalized JSON Schema for *node_type*, or ``None``."""
+        type_spec = self.node_types.get(node_type)
+        if type_spec is None:
+            return None
+        return type_spec.get("schema")
+
+    def _get_edge_schema(self, edge_type: str) -> dict[str, Any] | None:
+        """Return the normalized JSON Schema for *edge_type*, or ``None``."""
+        type_spec = self.edge_types.get(edge_type)
+        if type_spec is None:
+            return None
+        return type_spec.get("schema")
+
+    def _create_editor(
+        self,
+        factory: Any,
+        item_id: str,
+        data: dict,
+        schema: dict | None,
+        item_type: str,
+        *,
+        patch_fn: Callable[[str, dict], None],
+    ) -> Any:
+        """Instantiate an editor from *factory*.
+
+        All editors (classes and plain callables) receive the unified
+        signature ``(data, schema, *, id, type, on_patch)``.
+
+        *patch_fn* is the method to call when data changes –
+        ``patch_node_data`` for nodes, ``patch_edge_data`` for edges.
+        """
+
+        def on_patch(patch: dict) -> None:
+            patch_fn(item_id, patch)
+
+        return factory(data, schema, id=item_id, type=item_type, on_patch=on_patch)
 
     def _update_node_editors(self, *events: tuple[param.parameterized.Event]) -> None:
         node_ids = [node["id"] for node in self.nodes]
-        edit_changed = any(event.name == "editor_mode" for event in events)
-        if node_ids == self._node_ids and not edit_changed:
+        config_changed = any(event.name in ("editor_mode", "node_editors", "default_node_editor") for event in events)
+        if node_ids == self._node_ids and not config_changed:
             return
-
-        # Unwatch old editors
-        for node_id in set(self._node_editors.keys()) - set(node_ids):
-            watcher = self._node_watchers[node_id]
-            editor = self._node_editors[node_id]
-            editor.param.unwatch(watcher)
         self._node_ids = node_ids
 
-        # Construct new editors
         editors = {}
         for node in self.nodes:
             node_id = node.get("id")
-            if node_id in self._node_editors:
+            if node_id in self._node_editors and not config_changed:
                 editors[node_id] = self._node_editors[node_id]
                 continue
-            editor_cls = self.node_types.get(node.get("type", "panel"), JsonNodeEditor)
-            editors[node_id] = editor = editor_cls(_id=node_id, _data=node.get("data", {}))
-            self._node_watchers[node_id] = editor.param.watch(self._apply_node_editor_changes, "_data")
+            node_type = node.get("type", "panel")
+            editor_factory = self.node_editors.get(node_type) or self.default_node_editor or SchemaEditor
+            schema = self._get_node_schema(node_type)
+            data = node.get("data", {})
+            editor = self._create_editor(
+                editor_factory,
+                node_id,
+                data,
+                schema,
+                node_type,
+                patch_fn=self.patch_node_data,
+            )
+            editors[node_id] = editor
         self._node_editors = editors
         self.param.trigger("_node_editor_views")
 
-    def _apply_toolbar_changes(self, event: param.parameterized.Event) -> None:
-        self.patch_node_data(event.obj.id, event.new)
+    def _update_edge_editors(self, *events: tuple[param.parameterized.Event]) -> None:
+        edge_ids = [edge["id"] for edge in self.edges]
+        config_changed = any(event.name in ("edge_editors", "default_edge_editor") for event in events)
+        if edge_ids == self._edge_ids and not config_changed:
+            return
+        self._edge_ids = edge_ids
+
+        editors = {}
+        for edge in self.edges:
+            edge_id = edge.get("id")
+            if edge_id in self._edge_editors and not config_changed:
+                editors[edge_id] = self._edge_editors[edge_id]
+                continue
+            edge_type = edge.get("type", "")
+            editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor or SchemaEditor
+            schema = self._get_edge_schema(edge_type) if edge_type else None
+            data = edge.get("data", {})
+            editor = self._create_editor(
+                editor_factory,
+                edge_id,
+                data,
+                schema,
+                edge_type,
+                patch_fn=self.patch_edge_data,
+            )
+            editors[edge_id] = editor
+        self._edge_editors = editors
+        self.param.trigger("_edge_editor_views")
+
+    @staticmethod
+    def _resolve_editor_view(editor: Any) -> Any:
+        """Return a Panel viewable from an editor (class or plain object)."""
+        if editor is None:
+            return pn.pane.HTML("")
+        if hasattr(editor, "__panel__"):
+            return editor.__panel__()
+        return pn.panel(editor)
 
     def _get_children(self, data_model, doc, root, parent, comm) -> tuple[dict[str, list[UIElement] | UIElement | None], list[UIElement]]:
         views = []
-        editors = []
+        node_editors = []
         for node in self.nodes:
             view = node.get("view", None)
             if view is not None:
                 views.append(view)
-            editor = self._node_editors.get(node.get("id"))
-            editors.append(editor.__panel__())
+            node_editors.append(self._resolve_editor_view(self._node_editors.get(node.get("id"))))
+        edge_editors = [self._resolve_editor_view(self._edge_editors.get(edge.get("id"))) for edge in self.edges]
+
         children: dict[str, list[UIElement] | UIElement | None] = {}
         old_models: list[UIElement] = []
         if views:
             views, view_models = self._get_child_model(views, doc, root, parent, comm)
             children["_views"] = views
             old_models += view_models
-        if editors:
-            editor_models, editor_old = self._get_child_model(editors, doc, root, parent, comm)
+        if node_editors:
+            editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
             children["_node_editor_views"] = editor_models
             old_models += editor_old
+        if edge_editors:
+            edge_models, edge_old = self._get_child_model(edge_editors, doc, root, parent, comm)
+            children["_edge_editor_views"] = edge_models
+            old_models += edge_old
         for name in ("top_panel", "bottom_panel", "left_panel", "right_panel"):
             panels = list(getattr(self, name, []) or [])
             if panels:
@@ -387,9 +669,17 @@ class ReactFlow(ReactComponent):
                 node["data"] = data
                 nodes.append(node)
             params["nodes"] = nodes
-        params.pop("node_types", None)
-        params.pop("edge_types", None)
+        # node_types / edge_types are now JSON-serializable descriptors
+        # and intentionally synced to the frontend.
+        # Pop Python-only editor registries and internal state.
+        params.pop("node_editors", None)
+        params.pop("edge_editors", None)
+        params.pop("default_node_editor", None)
+        params.pop("default_edge_editor", None)
+        params.pop("validate_on_add", None)
+        params.pop("validate_on_patch", None)
         params.pop("_node_editors", None)
+        params.pop("_edge_editors", None)
         return params
 
     def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
@@ -408,6 +698,9 @@ class ReactFlow(ReactComponent):
         payload.setdefault("data", {})
         payload.setdefault("position", {"x": 0.0, "y": 0.0})
         self._validate_graph_payload(payload, kind="node")
+        if self.validate_on_add:
+            schema = self._get_node_schema(payload.get("type", "panel"))
+            _validate_data(payload.get("data", {}), schema)
         self.nodes = self.nodes + [dict(payload, view=view)]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
@@ -466,7 +759,6 @@ class ReactFlow(ReactComponent):
                 node_id = msg.get("node_id")
                 if node_id is None:
                     return
-                self._build_toolbar_for_node(node_id)
                 self._emit("node_clicked", msg)
             case _:
                 return
@@ -507,6 +799,10 @@ class ReactFlow(ReactComponent):
         if not payload.get("id"):
             payload["id"] = self._generate_edge_id(payload["source"], payload["target"])
         self._validate_graph_payload(payload, kind="edge")
+        if self.validate_on_add:
+            edge_type = payload.get("type")
+            schema = self._get_edge_schema(edge_type) if edge_type else None
+            _validate_data(payload.get("data", {}), schema)
         self.edges = self.edges + [payload]
         self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
@@ -537,6 +833,9 @@ class ReactFlow(ReactComponent):
             if node.get("id") == node_id:
                 data = dict(node.get("data", {}))
                 data.update(patch)
+                if self.validate_on_patch:
+                    schema = self._get_node_schema(node.get("type", "panel"))
+                    _validate_data(data, schema)
                 node["data"] = data
                 break
         self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
@@ -556,6 +855,10 @@ class ReactFlow(ReactComponent):
             if edge.get("id") == edge_id:
                 data = dict(edge.get("data", {}))
                 data.update(patch)
+                if self.validate_on_patch:
+                    edge_type = edge.get("type")
+                    schema = self._get_edge_schema(edge_type) if edge_type else None
+                    _validate_data(data, schema)
                 edge["data"] = data
                 break
         self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
@@ -583,6 +886,8 @@ class ReactFlow(ReactComponent):
         for node in self.nodes:
             data = dict(node.get("data", {}))
             data.update({"position": node.get("position"), "type": node.get("type")})
+            if node.get("label") is not None:
+                data["label"] = node.get("label")
             graph.add_node(node["id"], **data)
         for edge in self.edges:
             data = dict(edge.get("data", {}))
@@ -620,12 +925,16 @@ class ReactFlow(ReactComponent):
             position = attrs.pop("position", {"x": default_position[0], "y": default_position[1]})
             if isinstance(position, (tuple, list)):
                 position = {"x": position[0], "y": position[1]}
+            label = attrs.pop("label", None)
             node_data = dict(attrs)
             node_data.pop("type", None)
             embedded_data = node_data.pop("data", None)
             if isinstance(embedded_data, dict):
                 node_data = {**embedded_data, **node_data}
-            nodes.append({"id": str(node_id), "position": position, "type": node_type, "data": node_data})
+            node_payload = {"id": str(node_id), "position": position, "type": node_type, "data": node_data}
+            if label is not None:
+                node_payload["label"] = label
+            nodes.append(node_payload)
         if graph.is_multigraph():
             edge_iter = graph.edges(keys=True, data=True)
         else:
@@ -682,7 +991,8 @@ class ReactFlow(ReactComponent):
             )
 
     def _normalize_specs(self, event: param.parameterized.Event) -> None:
-        normalized = _coerce_spec_map(event.new)
+        is_edge = event.name == "edge_types"
+        normalized = _coerce_spec_map(event.new, edge=is_edge)
         if normalized != event.new:
             setattr(self, event.name, normalized)
 
