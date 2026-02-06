@@ -74,13 +74,8 @@ function makeNodeComponent(typeName, model, typeSpec, editorMode) {
       toggleToolbar((v) => !v);
     };
 
-    const handleCloseToolbar = (e) => {
-      e.stopPropagation();
-      toggleToolbar(false);
-    };
-
     return (
-      <div style={{ padding: "8px 10px", minWidth: "140px" }}>
+      <div className="rf-node-content">
         {showToolbar ? (
           <NodeToolbar
             isVisible={true}
@@ -94,23 +89,11 @@ function makeNodeComponent(typeName, model, typeSpec, editorMode) {
           <button
             aria-label={showToolbar ? "Hide node toolbar" : "Show node toolbar"}
             onClick={handleGearClick}
-            style={{
-              position: "absolute",
-              top: "7px",
-              right: "7px",
-              border: "none",
-              background: "transparent",
-              fontSize: "17px",
-              lineHeight: "18px",
-              cursor: "pointer",
-              zIndex: 2,
-              padding: 0,
-              color: showToolbar ? "#3477db" : "#888",
-              filter: showToolbar
-                ? "drop-shadow(0 0 1px #3477db) brightness(1.15)"
-                : "none",
-              transition: "color 0.1s",
-            }}
+            className={`rf-node-toolbar-button ${
+              showToolbar
+                ? "rf-node-toolbar-button--open"
+                : "rf-node-toolbar-button--closed"
+            }`}
             tabIndex={0}
             type="button"
             title={showToolbar ? "Hide node toolbar" : "Show node toolbar"}
@@ -121,20 +104,11 @@ function makeNodeComponent(typeName, model, typeSpec, editorMode) {
               width={14}
               height={14}
               aria-hidden="true"
-              style={{
-                opacity: showToolbar ? 1 : 0.85,
-                transform: showToolbar ? "rotate(22deg)" : "none",
-                transition: "color 0.13s, filter 0.13s, opacity 0.13s, transform 0.18s",
-                background: showToolbar ? "#eaf2fd" : "none",
-                borderRadius: "50%",
-                boxShadow: showToolbar
-                  ? "0 0 0 2px #cfe1fc"
-                  : "none",
-                stroke: showToolbar ? "#3477db" : "#888",
-                filter: showToolbar
-                  ? "drop-shadow(0 0 1px #3477db) brightness(1.15)"
-                  : "none",
-              }}
+              className={`rf-node-toolbar-icon ${
+                showToolbar
+                  ? "rf-node-toolbar-icon--open"
+                  : "rf-node-toolbar-icon--closed"
+              }`}
             />
           </button>
         )}
@@ -569,27 +543,19 @@ export function render({ model, view }) {
           debounceMs={debounceMs}
           viewport={viewport}
         />
-        {(topPanels || []).map((panel, idx) => (
-          <Panel key={`top-${idx}`} position="top-center">
-            {panel}
-          </Panel>
-        ))}
-        {(bottomPanels || []).map((panel, idx) => (
-          <Panel key={`bottom-${idx}`} position="bottom-center">
-            {panel}
-          </Panel>
-        ))}
-        {(leftPanels || []).map((panel, idx) => (
-          <Panel key={`left-${idx}`} position="center-left">
-            {panel}
-          </Panel>
-        ))}
-        {(rightPanels || []).map((panel, idx) => (
-          <Panel key={`right-${idx}`} position="center-right">
-            {panel}
-            {(selection.nodes.length && editorMode === "side") ? nodeEditorMap[selection.nodes[0]] : null}
-          </Panel>
-        ))}
+        <Panel key="top-panel" position="top-center">
+          {topPanels}
+        </Panel>
+        <Panel key="bottom-panel" position="bottom-center">
+          {bottomPanels}
+        </Panel>
+        <Panel key="left-panel" position="center-left">
+          {leftPanels}
+        </Panel>
+        <Panel key="right-panel" position="center-right">
+          {rightPanels}
+          {(selection.nodes.length && editorMode === "side") ? nodeEditorMap[selection.nodes[0]] : null}
+        </Panel>
       </ReactFlowProvider>
     </div>
   );
