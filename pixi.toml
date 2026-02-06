@@ -1,4 +1,4 @@
-[project]
+[workspace]
 name = "panel-reactflow"
 channels = ["conda-forge", "pyviz/label/dev"]
 platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
@@ -100,9 +100,9 @@ mkdocs-gen-files = "*"
 mkdocs-literate-nav = "*"
 
 [feature.docs.tasks]
-docs-build = { cmd = 'zensical build --clean', depends-on = ['install'] }
-docs-serve = { cmd = 'zensical serve', depends-on = ['install'] }
-docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['install'] }
+docs-build = { cmd = 'zensical build --clean', depends-on = ['postinstall'] }
+docs-serve = { cmd = 'zensical serve', depends-on = ['postinstall'] }
+docs-clean = { cmd = 'rm -rf builtdocs', depends-on = ['postinstall'] }
 
 # =============================================
 # ================== BUILD ====================
