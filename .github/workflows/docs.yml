@@ -1,6 +1,5 @@
 name: Build documentation
 
-name: docs
 on:
   push:
     tags:
