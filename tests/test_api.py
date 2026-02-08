@@ -64,6 +64,27 @@ def test_node_spec_without_view() -> None:
     assert "view" not in payload
 
 
+def test_reactflow_add_node_with_nodespec_view() -> None:
+    """Test that NodeSpec view is preserved when passed to add_node."""
+    flow = ReactFlow()
+    view = pn.pane.Markdown("Hello")
+    node = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node", view=view)
+    flow.add_node(node)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["view"] is view
+
+
+def test_reactflow_add_node_view_parameter_overrides_nodespec() -> None:
+    """Test that add_node view parameter overrides NodeSpec view."""
+    flow = ReactFlow()
+    view1 = pn.pane.Markdown("View 1")
+    view2 = pn.pane.Markdown("View 2")
+    node = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node", view=view1)
+    flow.add_node(node, view=view2)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["view"] is view2
+
+
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()

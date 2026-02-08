@@ -414,6 +414,10 @@ class SchemaEditor(Editor):
         return self._panel
 
 
+# Sentinel value to distinguish "not provided" from "explicitly None"
+_NOT_PROVIDED = object()
+
+
 class ReactFlow(ReactComponent):
     """React Flow component wrapper."""
 
@@ -685,7 +689,7 @@ class ReactFlow(ReactComponent):
         params.pop("_edge_editors", None)
         return params
 
-    def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
+    def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any = _NOT_PROVIDED) -> None:
         """Add a node to the graph.
 
         Parameters
@@ -695,6 +699,7 @@ class ReactFlow(ReactComponent):
         view:
             Optional Panel viewable rendered inside the node. If provided,
             ``view`` is attached to the node and transformed into ``view_idx``.
+            If not provided, the view from the node dict/NodeSpec is preserved.
         """
         payload = self._coerce_node(node)
         payload.setdefault("type", "panel")
@@ -704,7 +709,10 @@ class ReactFlow(ReactComponent):
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        self.nodes = self.nodes + [dict(payload, view=view)]
+        # Override view if explicitly provided (even if None)
+        if view is not _NOT_PROVIDED:
+            payload["view"] = view
+        self.nodes = self.nodes + [payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
     def _handle_msg(self, msg: dict[str, Any]) -> None:
