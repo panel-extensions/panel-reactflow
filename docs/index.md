@@ -65,3 +65,4 @@ flow.servable()
 ## Reference
 
 - [API reference](reference/panel_reactflow.md)
+- [Release notes](releases.md)
