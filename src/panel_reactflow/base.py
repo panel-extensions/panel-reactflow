@@ -414,6 +414,9 @@ class NodeSpec:
         ``{"backgroundColor": "#ff0000", "border": "2px solid black"}``
     className : str, optional
         CSS class name applied to the node for custom styling.
+    view : Panel viewable, optional
+        Optional Panel viewable (widget, pane, layout) to render inside
+        the node. The view will be displayed as the node's content.
 
     Methods
     -------
@@ -452,6 +455,16 @@ class NodeSpec:
     ...     position={"x": 300, "y": 150},
     ...     label="Data Transform",
     ...     data={"operation": "filter", "threshold": 0.5}
+    ... )
+
+    Create a node with an embedded view:
+
+    >>> import panel as pn
+    >>> node = NodeSpec(
+    ...     id="plot1",
+    ...     position={"x": 400, "y": 200},
+    ...     label="Data Plot",
+    ...     view=pn.pane.Markdown("# Hello World")
     ... )
 
     Add to a ReactFlow graph:
@@ -1400,6 +1413,9 @@ class ReactFlow(ReactComponent):
         view : Panel viewable, optional
             Optional Panel viewable (widget, pane, layout) to render inside
             the node. The view will be displayed as the node's content.
+            If provided, this will override any ``view`` specified in the node
+            dictionary or :class:`NodeSpec`. If not provided, any ``view`` from
+            the node dictionary or :class:`NodeSpec` will be preserved.
 
         Raises
         ------
