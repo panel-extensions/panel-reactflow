@@ -235,6 +235,7 @@ class NodeSpec:
     deletable: bool = True
     style: dict[str, Any] | None = None
     className: str | None = None
+    view: Any | None = None
 
     def __post_init__(self) -> None:
         if self.position is None:
@@ -258,6 +259,8 @@ class NodeSpec:
             payload["style"] = self.style
         if self.className is not None:
             payload["className"] = self.className
+        if self.view is not None:
+            payload["view"] = self.view
         return payload
 
     @classmethod

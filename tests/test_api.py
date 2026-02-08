@@ -35,6 +35,35 @@ def test_node_spec_roundtrip() -> None:
     assert NodeSpec.from_dict(payload).to_dict() == payload
 
 
+def test_node_spec_with_view() -> None:
+    view = pn.pane.Markdown("Hello World")
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+        view=view,
+    )
+    payload = node.to_dict()
+    assert payload["id"] == "n1"
+    assert payload["label"] == "Node 1"
+    assert payload["view"] is view
+    # Test roundtrip with view
+    node_from_dict = NodeSpec.from_dict(payload)
+    assert node_from_dict.view is view
+    assert node_from_dict.to_dict() == payload
+
+
+def test_node_spec_without_view() -> None:
+    """Test that view is not included in dict when None."""
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+    )
+    payload = node.to_dict()
+    assert "view" not in payload
+
+
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()
