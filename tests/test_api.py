@@ -100,22 +100,22 @@ def test_reactflow_add_node_with_viewer(document, comm) -> None:
 
 def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
     """Test that arbitrary objects (e.g., HoloViews) work as node views via pn.panel().
-    
-    This addresses issue #13 where objects without __panel__() method 
+
+    This addresses issue #13 where objects without __panel__() method
     (like HoloViews Curve objects) would raise AttributeError.
     """
     class MockPlot:
         """Mock object simulating HoloViews/hvplot objects (no __panel__ method)."""
         def __repr__(self):
             return "MockPlot(data)"
-    
+
     flow = ReactFlow()
     mock_plot = MockPlot()
     flow.add_node(
         {"id": "n1", "position": {"x": 0, "y": 0}, "label": "Plot Node", "data": {}},
         view=mock_plot
     )
-    
+
     # This should not raise AttributeError about '_models'
     # The object should be converted via pn.panel()
     model = flow.get_root(document, comm=comm)
