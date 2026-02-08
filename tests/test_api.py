@@ -79,6 +79,25 @@ def test_view_idx_updates_on_remove_node(document, comm) -> None:
     assert remaining["n3"]["data"].get("view_idx") is None
 
 
+def test_reactflow_add_node_with_viewer(document, comm) -> None:
+    """Test that Viewer objects with __panel__() method work as node views."""
+    class MyViewer(pn.viewable.Viewer):
+        def __panel__(self):
+            return pn.pane.Markdown("Hello from Viewer!")
+    
+    flow = ReactFlow()
+    my_viewer = MyViewer()
+    flow.add_node(
+        {"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}},
+        view=my_viewer
+    )
+    
+    # This should not raise AttributeError about '_models'
+    model = flow.get_root(document, comm=comm)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["id"] == "n1"
+
+
 def test_reactflow_events_and_selection() -> None:
     flow = ReactFlow()
     events = []
