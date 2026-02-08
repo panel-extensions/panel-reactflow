@@ -8,7 +8,7 @@ import param
 
 from panel_reactflow import Pipeline
 
-pn.extension("jsoneditor")
+pn.extension("jsoneditor", "tabulator")
 
 
 class StockData(param.Parameterized):
@@ -56,11 +56,11 @@ class RSINode(param.Parameterized):
         return df
 
 
-class ChartNode(param.Parameterized):
+class ChartsNode(param.Parameterized):
     ma_data = param.DataFrame()
     rsi_data = param.DataFrame()
 
-    @param.output()
+    @param.output("price_plot", "rsi_plot")
     @param.depends("ma_data", "rsi_data")
     def plot(self):
         if self.ma_data is None or self.rsi_data is None:
@@ -70,16 +70,18 @@ class ChartNode(param.Parameterized):
             ylabel="Price",
             title="Price & Moving Average",
             legend="top_left",
-            height=200,
+            width=600,
+            height=400,
         )
         rsi_plot = self.rsi_data.hvplot.line(
             y="rsi",
             ylabel="RSI",
             title="RSI",
             color="orange",
-            height=150,
+            width=600,
+            height=400,
         )
-        return pn.Column(price_plot, rsi_plot, sizing_mode="stretch_width")
+        return price_plot, rsi_plot
 
 
 Pipeline(
@@ -87,8 +89,8 @@ Pipeline(
         ("Stock Data", StockData),
         ("MA", MANode),
         ("RSI", RSINode),
-        ("Chart", ChartNode),
+        ("Charts", ChartsNode),
     ],
-    graph={"Stock Data": ("MA", "RSI"), "MA": "Chart", "RSI": "Chart"},
+    graph={"Stock Data": ("MA", "RSI"), "MA": "Charts", "RSI": "Charts"},
     kwargs={"min_height": 600},
 ).servable()
