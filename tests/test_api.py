@@ -74,17 +74,6 @@ def test_reactflow_add_node_with_nodespec_view() -> None:
     assert flow.nodes[0]["view"] is view
 
 
-def test_reactflow_add_node_view_parameter_overrides_nodespec() -> None:
-    """Test that add_node view parameter overrides NodeSpec view."""
-    flow = ReactFlow()
-    view1 = pn.pane.Markdown("View 1")
-    view2 = pn.pane.Markdown("View 2")
-    node = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node", view=view1)
-    flow.add_node(node, view=view2)
-    assert len(flow.nodes) == 1
-    assert flow.nodes[0]["view"] is view2
-
-
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()
@@ -110,15 +99,15 @@ def test_reactflow_add_node_with_view() -> None:
     events = []
     flow.on("node_added", events.append)
     view = pn.pane.Markdown("Hello")
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}}, view=view)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}, "view": view})
     assert events[-1]["type"] == "node_added"
 
 
 def test_view_idx_updates_on_remove_node(document, comm) -> None:
     flow = ReactFlow()
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}, view=pn.pane.Markdown("A"))
-    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}, view=pn.pane.Markdown("B"))
-    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}}, view=None)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "view": pn.pane.Markdown("A")})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "view": pn.pane.Markdown("B")})
+    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}})
 
     model = flow.get_root(document, comm=comm)
 
