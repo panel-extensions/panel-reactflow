@@ -139,14 +139,50 @@ def _coerce_spec_map(specs: dict[str, Any] | None, *, edge: bool = False) -> dic
 
 @dataclass
 class SchemaSource:
-    """Explicit schema source wrapper.
+    """Explicit schema source wrapper for type definitions.
+
+    Use this wrapper when you need to explicitly specify the schema format
+    for node or edge types. This is useful when automatic detection might
+    be ambiguous or when you want to be explicit about the schema source.
 
     Parameters
     ----------
-    kind:
-        One of ``"jsonschema"``, ``"param"``, or ``"pydantic"``.
-    value:
-        The schema value (a JSON Schema dict, Param class, or Pydantic class).
+    kind : {"jsonschema", "param", "pydantic"}
+        The schema format type:
+
+        - ``"jsonschema"``: A standard JSON Schema dictionary
+        - ``"param"``: A ``param.Parameterized`` class
+        - ``"pydantic"``: A Pydantic ``BaseModel`` class
+    value : dict or type
+        The schema value matching the specified ``kind``:
+
+        - For ``"jsonschema"``: A JSON Schema dictionary
+        - For ``"param"``: A ``param.Parameterized`` subclass
+        - For ``"pydantic"``: A Pydantic ``BaseModel`` subclass
+
+    Examples
+    --------
+    Using a JSON Schema:
+
+    >>> from panel_reactflow import SchemaSource
+    >>> schema = SchemaSource(
+    ...     kind="jsonschema",
+    ...     value={"type": "object", "properties": {"name": {"type": "string"}}}
+    ... )
+
+    Using a Param class:
+
+    >>> import param
+    >>> class MyParams(param.Parameterized):
+    ...     label = param.String(default="")
+    >>> schema = SchemaSource(kind="param", value=MyParams)
+
+    Using a Pydantic model:
+
+    >>> from pydantic import BaseModel
+    >>> class MyModel(BaseModel):
+    ...     name: str
+    >>> schema = SchemaSource(kind="pydantic", value=MyModel)
     """
 
     kind: Literal["jsonschema", "param", "pydantic"]
@@ -155,25 +191,87 @@ class SchemaSource:
 
 @dataclass
 class NodeType:
-    """Type definition for a node.
+    """Define a custom node type with schema and port configuration.
+
+    Node types allow you to define reusable node templates with specific data
+    schemas, input/output ports, and display policies. When nodes are created
+    with this type, they automatically get schema validation and appropriate
+    editors.
 
     Parameters
     ----------
-    type:
-        Unique type name.
-    label:
-        Optional human-readable label.
-    schema:
-        Optional data schema. Accepts a JSON Schema dict, a
-        ``param.Parameterized`` subclass, a Pydantic ``BaseModel``
-        subclass, or a :class:`SchemaSource` wrapper. Normalized to
-        JSON Schema when serialized.
-    inputs:
-        Optional list of input port names.
-    outputs:
-        Optional list of output port names.
-    pane_policy:
-        Display policy (default ``"single"``).
+    type : str
+        Unique identifier for this node type. Used to reference this type
+        when creating nodes.
+    label : str, optional
+        Human-readable display name for this node type. If not provided,
+        the ``type`` value is used.
+    schema : dict or type, optional
+        Data schema for node validation and editor generation. Accepts:
+
+        - A JSON Schema dictionary
+        - A ``param.Parameterized`` subclass
+        - A Pydantic ``BaseModel`` subclass
+        - A :class:`SchemaSource` wrapper for explicit schema types
+
+        The schema is normalized to JSON Schema format internally.
+    inputs : list of str, optional
+        List of input port names. If provided, these ports will be rendered
+        on the node for incoming connections.
+    outputs : list of str, optional
+        List of output port names. If provided, these ports will be rendered
+        on the node for outgoing connections.
+    pane_policy : str, default "single"
+        Display policy for Panel viewables inside nodes.
+
+    Methods
+    -------
+    to_dict()
+        Convert this node type to a JSON-serializable dictionary.
+
+    Examples
+    --------
+    Define a simple node type with a JSON Schema:
+
+    >>> from panel_reactflow import NodeType
+    >>> transform_type = NodeType(
+    ...     type="transform",
+    ...     label="Data Transform",
+    ...     schema={
+    ...         "type": "object",
+    ...         "properties": {
+    ...             "operation": {"type": "string", "enum": ["filter", "map", "reduce"]},
+    ...             "parameter": {"type": "number"}
+    ...         }
+    ...     },
+    ...     inputs=["input"],
+    ...     outputs=["output"]
+    ... )
+
+    Define a node type with a Param class:
+
+    >>> import param
+    >>> class TransformParams(param.Parameterized):
+    ...     operation = param.Selector(default="filter", objects=["filter", "map", "reduce"])
+    ...     parameter = param.Number(default=1.0)
+    >>> transform_type = NodeType(
+    ...     type="transform",
+    ...     label="Data Transform",
+    ...     schema=TransformParams,
+    ...     inputs=["input"],
+    ...     outputs=["output"]
+    ... )
+
+    Use the node type in a ReactFlow graph:
+
+    >>> from panel_reactflow import ReactFlow, NodeSpec
+    >>> flow = ReactFlow(node_types={"transform": transform_type})
+    >>> flow.add_node(NodeSpec(
+    ...     id="t1",
+    ...     type="transform",
+    ...     position={"x": 100, "y": 100},
+    ...     data={"operation": "filter", "parameter": 2.5}
+    ... ))
     """
 
     type: str
@@ -184,6 +282,13 @@ class NodeType:
     pane_policy: str = "single"
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the node type to a JSON-serializable dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary representation with normalized schema.
+        """
         return {
             "type": self.type,
             "label": self.label,
@@ -196,16 +301,62 @@ class NodeType:
 
 @dataclass
 class EdgeType:
-    """Type definition for an edge.
+    """Define a custom edge type with schema for edge properties.
+
+    Edge types allow you to define reusable edge templates with specific data
+    schemas for validation and editor generation. Use this when your edges
+    have custom properties beyond the basic source/target relationship.
 
     Parameters
     ----------
-    type:
-        Unique type name.
-    label:
-        Optional human-readable label.
-    schema:
-        Optional data schema (same formats as :class:`NodeType`).
+    type : str
+        Unique identifier for this edge type. Used to reference this type
+        when creating edges.
+    label : str, optional
+        Human-readable display name for this edge type. If not provided,
+        the ``type`` value is used.
+    schema : dict or type, optional
+        Data schema for edge validation and editor generation. Accepts the
+        same formats as :class:`NodeType`:
+
+        - A JSON Schema dictionary
+        - A ``param.Parameterized`` subclass
+        - A Pydantic ``BaseModel`` subclass
+        - A :class:`SchemaSource` wrapper for explicit schema types
+
+    Methods
+    -------
+    to_dict()
+        Convert this edge type to a JSON-serializable dictionary.
+
+    Examples
+    --------
+    Define an edge type with properties:
+
+    >>> from panel_reactflow import EdgeType
+    >>> weighted_edge = EdgeType(
+    ...     type="weighted",
+    ...     label="Weighted Connection",
+    ...     schema={
+    ...         "type": "object",
+    ...         "properties": {
+    ...             "weight": {"type": "number", "minimum": 0, "maximum": 1},
+    ...             "label": {"type": "string"}
+    ...         }
+    ...     }
+    ... )
+
+    Use the edge type in a ReactFlow graph:
+
+    >>> from panel_reactflow import ReactFlow, EdgeSpec
+    >>> flow = ReactFlow(edge_types={"weighted": weighted_edge})
+    >>> flow.add_edge(EdgeSpec(
+    ...     id="e1",
+    ...     source="n1",
+    ...     target="n2",
+    ...     type="weighted",
+    ...     data={"weight": 0.75, "label": "strong"}
+    ... ))
     """
 
     type: str
@@ -213,6 +364,13 @@ class EdgeType:
     schema: Any = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the edge type to a JSON-serializable dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary representation with normalized schema.
+        """
         return {
             "type": self.type,
             "label": self.label,
@@ -222,7 +380,86 @@ class EdgeType:
 
 @dataclass
 class NodeSpec:
-    """Helper for constructing node dictionaries."""
+    """Builder for node dictionaries with validation and type safety.
+
+    This helper class simplifies node creation by providing a structured
+    interface with sensible defaults. It ensures all required fields are
+    present and provides convenient conversion to/from dictionaries.
+
+    Parameters
+    ----------
+    id : str
+        Unique identifier for the node. Must be unique within the graph.
+    position : dict, optional
+        Node position with ``x`` and ``y`` coordinates. Defaults to
+        ``{"x": 0.0, "y": 0.0}`` if not provided.
+    type : str, default "panel"
+        Node type identifier. Use ``"panel"`` for basic nodes or reference
+        a custom type defined in ``ReactFlow.node_types``.
+    label : str, optional
+        Display label shown on the node. If ``None``, no label is displayed.
+    data : dict, optional
+        Custom data dictionary for the node. Defaults to ``{}`` if not provided.
+        This is where you store node-specific properties that match the schema.
+    selected : bool, default False
+        Whether the node is currently selected in the UI.
+    draggable : bool, default True
+        Whether the node can be dragged by users.
+    connectable : bool, default True
+        Whether edges can be connected to/from this node.
+    deletable : bool, default True
+        Whether the node can be deleted by users.
+    style : dict, optional
+        CSS style dictionary applied to the node. Example:
+        ``{"backgroundColor": "#ff0000", "border": "2px solid black"}``
+    className : str, optional
+        CSS class name applied to the node for custom styling.
+
+    Methods
+    -------
+    to_dict()
+        Convert to a dictionary for use with ReactFlow.
+    from_dict(payload)
+        Create a NodeSpec from a dictionary.
+
+    Examples
+    --------
+    Create a basic node:
+
+    >>> from panel_reactflow import NodeSpec
+    >>> node = NodeSpec(
+    ...     id="node1",
+    ...     position={"x": 100, "y": 50},
+    ...     label="Start Node"
+    ... )
+    >>> node_dict = node.to_dict()
+
+    Create a node with custom styling:
+
+    >>> node = NodeSpec(
+    ...     id="node2",
+    ...     position={"x": 200, "y": 100},
+    ...     label="Process",
+    ...     style={"backgroundColor": "#e3f2fd", "border": "2px solid #1976d2"},
+    ...     className="custom-node"
+    ... )
+
+    Create a node with data:
+
+    >>> node = NodeSpec(
+    ...     id="transform1",
+    ...     type="transform",
+    ...     position={"x": 300, "y": 150},
+    ...     label="Data Transform",
+    ...     data={"operation": "filter", "threshold": 0.5}
+    ... )
+
+    Add to a ReactFlow graph:
+
+    >>> from panel_reactflow import ReactFlow
+    >>> flow = ReactFlow()
+    >>> flow.add_node(node)
+    """
 
     id: str
     position: dict[str, float] | dict[str, Any] = None
@@ -243,6 +480,13 @@ class NodeSpec:
             self.data = {}
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the NodeSpec to a dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary representation suitable for ReactFlow.
+        """
         payload = {
             "id": self.id,
             "position": self.position,
@@ -262,12 +506,101 @@ class NodeSpec:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "NodeSpec":
+        """Create a NodeSpec from a dictionary.
+
+        Parameters
+        ----------
+        payload : dict
+            Dictionary containing node properties.
+
+        Returns
+        -------
+        NodeSpec
+            A new NodeSpec instance.
+        """
         return cls(**payload)
 
 
 @dataclass
 class EdgeSpec:
-    """Helper for constructing edge dictionaries."""
+    """Builder for edge dictionaries with validation and type safety.
+
+    This helper class simplifies edge creation by providing a structured
+    interface with sensible defaults. It ensures all required fields are
+    present and provides convenient conversion to/from dictionaries.
+
+    Parameters
+    ----------
+    id : str
+        Unique identifier for the edge. Must be unique within the graph.
+    source : str
+        ID of the source node where the edge originates.
+    target : str
+        ID of the target node where the edge terminates.
+    label : str, optional
+        Display label shown on the edge. If ``None``, no label is displayed.
+    type : str, optional
+        Edge type identifier. Reference a custom type defined in
+        ``ReactFlow.edge_types`` for schema validation and custom rendering.
+    selected : bool, default False
+        Whether the edge is currently selected in the UI.
+    data : dict, optional
+        Custom data dictionary for the edge. Defaults to ``{}`` if not provided.
+        This is where you store edge-specific properties that match the schema.
+    style : dict, optional
+        CSS style dictionary applied to the edge line. Example:
+        ``{"stroke": "#ff0000", "strokeWidth": 3}``
+    markerEnd : dict, optional
+        Arrow marker configuration for the edge end. Example:
+        ``{"type": "arrow", "color": "#000000"}``
+
+    Methods
+    -------
+    to_dict()
+        Convert to a dictionary for use with ReactFlow.
+    from_dict(payload)
+        Create an EdgeSpec from a dictionary.
+
+    Examples
+    --------
+    Create a basic edge:
+
+    >>> from panel_reactflow import EdgeSpec
+    >>> edge = EdgeSpec(
+    ...     id="edge1",
+    ...     source="node1",
+    ...     target="node2"
+    ... )
+    >>> edge_dict = edge.to_dict()
+
+    Create an edge with styling:
+
+    >>> edge = EdgeSpec(
+    ...     id="edge2",
+    ...     source="node2",
+    ...     target="node3",
+    ...     label="Connection",
+    ...     style={"stroke": "#1976d2", "strokeWidth": 2},
+    ...     markerEnd={"type": "arrowclosed", "color": "#1976d2"}
+    ... )
+
+    Create a typed edge with data:
+
+    >>> edge = EdgeSpec(
+    ...     id="weighted_edge",
+    ...     source="n1",
+    ...     target="n2",
+    ...     type="weighted",
+    ...     label="0.75",
+    ...     data={"weight": 0.75, "confidence": 0.9}
+    ... )
+
+    Add to a ReactFlow graph:
+
+    >>> from panel_reactflow import ReactFlow
+    >>> flow = ReactFlow()
+    >>> flow.add_edge(edge)
+    """
 
     id: str
     source: str
@@ -284,6 +617,13 @@ class EdgeSpec:
             self.data = {}
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the EdgeSpec to a dictionary.
+
+        Returns
+        -------
+        dict
+            Dictionary representation suitable for ReactFlow.
+        """
         payload = {
             "id": self.id,
             "source": self.source,
@@ -301,29 +641,95 @@ class EdgeSpec:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "EdgeSpec":
+        """Create an EdgeSpec from a dictionary.
+
+        Parameters
+        ----------
+        payload : dict
+            Dictionary containing edge properties.
+
+        Returns
+        -------
+        EdgeSpec
+            A new EdgeSpec instance.
+        """
         return cls(**payload)
 
 
 class Editor(Viewer):
-    """Base class for node/edge editors.
+    """Base class for custom node and edge editors.
 
-    All editors follow the unified signature::
+    The Editor class provides a standardized interface for creating custom
+    property editors for nodes and edges. All editors receive a unified
+    signature and can report data changes back to the graph through a
+    callback mechanism.
+
+    All editor implementations (whether classes or functions) receive this
+    unified signature::
 
         editor(data, schema, *, id, type, on_patch) -> Viewable
 
     Parameters
     ----------
     data : dict
-        Current node or edge data dictionary.
-    schema : dict | None
-        Normalized JSON Schema for the node/edge type, or ``None``.
+        Current node or edge data dictionary. This contains all the custom
+        properties stored in the node/edge.
+    schema : dict or None
+        Normalized JSON Schema for the node/edge type, or ``None`` if no
+        schema is defined. Use this to drive form generation or validation.
     id : str
-        Node or edge identifier.
+        Unique identifier of the node or edge being edited.
     type : str
-        Node or edge type name.
+        Type name of the node or edge being edited.
     on_patch : callable
-        Callback ``on_patch(patch_dict)`` to report data changes
-        back to the graph.
+        Callback function ``on_patch(patch_dict)`` to report data changes
+        back to the graph. Call this with a dictionary of updated properties
+        when the user modifies data.
+
+    Examples
+    --------
+    Create a custom editor class:
+
+    >>> import panel as pn
+    >>> from panel_reactflow import Editor
+    >>>
+    >>> class ColorEditor(Editor):
+    ...     def __init__(self, data=None, schema=None, **kwargs):
+    ...         super().__init__(data, schema, **kwargs)
+    ...         self.color_picker = pn.widgets.ColorPicker(
+    ...             name="Node Color",
+    ...             value=self._data.get("color", "#000000")
+    ...         )
+    ...         self.color_picker.param.watch(self._on_change, "value")
+    ...
+    ...     def _on_change(self, event):
+    ...         if self._on_patch:
+    ...             self._on_patch({"color": event.new})
+    ...
+    ...     def __panel__(self):
+    ...         return self.color_picker
+
+    Use the custom editor:
+
+    >>> from panel_reactflow import ReactFlow
+    >>> flow = ReactFlow(
+    ...     node_editors={"panel": ColorEditor}
+    ... )
+
+    Create an editor as a simple function:
+
+    >>> def simple_editor(data, schema, *, id, type, on_patch):
+    ...     widget = pn.widgets.TextInput(
+    ...         name="Label",
+    ...         value=data.get("label", "")
+    ...     )
+    ...     widget.param.watch(
+    ...         lambda e: on_patch({"label": e.new}),
+    ...         "value"
+    ...     )
+    ...     return widget
+    >>>
+    >>> flow = ReactFlow(default_node_editor=simple_editor)
     """
 
     _data = param.Dict(default={}, doc="Node or edge data.")
@@ -344,7 +750,42 @@ class Editor(Viewer):
 
 
 class JsonEditor(Editor):
-    """Editor that always renders a raw JSON editor."""
+    """Simple JSON editor for node and edge data.
+
+    This editor provides a raw JSON editing interface using Panel's
+    JSONEditor widget. It's useful for debugging or when you want full
+    control over the data structure without schema-driven forms.
+
+    The editor automatically syncs changes back to the graph when the
+    user modifies the JSON content.
+
+    Parameters
+    ----------
+    data : dict, optional
+        Initial node or edge data dictionary. Defaults to ``{}``.
+    schema : dict, optional
+        JSON Schema (not used by this editor but part of the standard
+        interface). This editor ignores the schema and allows free-form
+        JSON editing.
+    **kwargs
+        Additional keyword arguments passed to the :class:`Editor` base class.
+
+    Examples
+    --------
+    Use as default editor for all nodes:
+
+    >>> from panel_reactflow import ReactFlow, JsonEditor
+    >>> flow = ReactFlow(default_node_editor=JsonEditor)
+
+    Use for specific node types:
+
+    >>> flow = ReactFlow(
+    ...     node_editors={"custom": JsonEditor}
+    ... )
+
+    The editor will display a JSON editor interface where users can
+    directly edit the node's data dictionary.
+    """
 
     def __init__(self, data=None, schema=None, **kwargs):
         super().__init__(data, schema, **kwargs)
@@ -361,12 +802,73 @@ class JsonEditor(Editor):
 
 
 class SchemaEditor(Editor):
-    """Smart default editor.
+    """Smart schema-driven editor with automatic form generation.
 
-    When a JSON Schema with ``properties`` is available, uses
-    :class:`~panel_reactflow.schema.JSONSchema` to render a form of
-    widgets derived from the schema.  Otherwise falls back to a raw
-    :class:`~panel.widgets.JSONEditor`.
+    This is the default editor used by ReactFlow. When a JSON Schema with
+    properties is available, it automatically generates an appropriate form
+    with widgets for each property based on the schema definition. If no
+    schema is available or form generation fails, it gracefully falls back
+    to a JSON editor.
+
+    The editor uses the ``panel_reactflow.schema.JSONSchema`` component to
+    render widgets based on JSON Schema property definitions, supporting
+    various types including strings, numbers, booleans, enums, dates, and
+    more.
+
+    Parameters
+    ----------
+    data : dict, optional
+        Initial node or edge data dictionary. Defaults to ``{}``.
+    schema : dict, optional
+        JSON Schema dictionary with a ``properties`` field defining the
+        form fields. Each property's schema determines the widget type.
+    **kwargs
+        Additional keyword arguments passed to the :class:`Editor` base class.
+
+    Examples
+    --------
+    The SchemaEditor is used automatically when you define node types:
+
+    >>> from panel_reactflow import ReactFlow, NodeType
+    >>> flow = ReactFlow(
+    ...     node_types={
+    ...         "transform": NodeType(
+    ...             type="transform",
+    ...             schema={
+    ...                 "type": "object",
+    ...                 "properties": {
+    ...                     "operation": {
+    ...                         "type": "string",
+    ...                         "enum": ["filter", "map", "reduce"],
+    ...                         "title": "Operation"
+    ...                     },
+    ...                     "threshold": {
+    ...                         "type": "number",
+    ...                         "minimum": 0,
+    ...                         "maximum": 1,
+    ...                         "title": "Threshold"
+    ...                     }
+    ...                 }
+    ...             }
+    ...         )
+    ...     }
+    ... )
+
+    The editor will automatically generate:
+    - A Select widget for the "operation" property (due to enum)
+    - A Slider widget for the "threshold" property (due to min/max)
+
+    Set as default editor explicitly:
+
+    >>> from panel_reactflow import SchemaEditor
+    >>> flow = ReactFlow(default_node_editor=SchemaEditor)
+
+    Notes
+    -----
+    The editor falls back to :class:`JsonEditor` if:
+    - No schema is provided
+    - Schema has no ``properties`` field
+    - Form generation fails (e.g., missing dependencies)
     """
 
     def __init__(self, data=None, schema=None, **kwargs):
@@ -412,7 +914,195 @@ class SchemaEditor(Editor):
 
 
 class ReactFlow(ReactComponent):
-    """React Flow component wrapper."""
+    """Interactive flow-based graph visualization and editing component.
+
+    ReactFlow is a Panel wrapper around the React Flow library, providing
+    a Python-first interface for creating interactive node-based graphs.
+    It supports dragging, connecting, selecting, and deleting nodes and edges,
+    with automatic synchronization between Python and JavaScript.
+
+    The component is ideal for building workflow editors, data pipelines,
+    state machines, mind maps, and other node-based interfaces.
+
+    Parameters
+    ----------
+    nodes : list of dict, default []
+        List of node dictionaries defining the graph nodes. Each node should
+        have at minimum ``id``, ``position``, and ``type`` fields. Use
+        :class:`NodeSpec` for type-safe node creation.
+    edges : list of dict, default []
+        List of edge dictionaries defining connections between nodes. Each edge
+        should have ``id``, ``source``, and ``target`` fields. Use
+        :class:`EdgeSpec` for type-safe edge creation.
+    node_types : dict, default {}
+        Dictionary mapping type names to :class:`NodeType` definitions or dicts.
+        Define custom node types with schemas, ports, and validation.
+    edge_types : dict, default {}
+        Dictionary mapping type names to :class:`EdgeType` definitions or dicts.
+        Define custom edge types with schemas and validation.
+    node_editors : dict, default {}
+        Dictionary mapping node type names to custom editor classes or functions.
+        Editors must follow the standard signature:
+        ``editor(data, schema, *, id, type, on_patch)``.
+    edge_editors : dict, default {}
+        Dictionary mapping edge type names to custom editor classes or functions.
+    default_node_editor : type or callable, optional
+        Default editor factory used for nodes without a specific editor.
+        Defaults to :class:`SchemaEditor`.
+    default_edge_editor : type or callable, optional
+        Default editor factory used for edges without a specific editor.
+        Defaults to :class:`SchemaEditor`.
+    debounce_ms : int, default 150
+        Debounce delay in milliseconds when ``sync_mode='debounce'``.
+        Controls how often updates are sent from JavaScript to Python.
+    default_edge_options : dict, default {}
+        Default React Flow edge options applied to all edges (e.g., ``animated``,
+        ``type``). See React Flow documentation for available options.
+    editable : bool, default True
+        Enable interactive editing on the canvas (drag, connect, delete).
+        Set to ``False`` for read-only visualization.
+    editor_mode : {"toolbar", "node", "side"}, default "toolbar"
+        Where to render node editors:
+
+        - ``"toolbar"``: Editors appear in a toolbar above the canvas
+        - ``"node"``: Editors appear embedded within each node
+        - ``"side"``: Editors appear in a side panel
+    enable_connect : bool, default True
+        Allow users to create new edges by connecting nodes.
+    enable_delete : bool, default True
+        Allow users to delete selected nodes or edges using keyboard shortcuts.
+    enable_multiselect : bool, default True
+        Allow selecting multiple nodes/edges with modifier keys (Shift/Ctrl).
+    selection : dict, default {"nodes": [], "edges": []}
+        Current selection state with lists of selected node and edge IDs.
+        Read-only; updated automatically when selection changes.
+    show_minimap : bool, default False
+        Show a minimap overlay in the corner for navigation in large graphs.
+    sync_mode : {"event", "debounce"}, default "event"
+        Synchronization mode for JavaScript to Python updates:
+
+        - ``"event"``: Immediate sync on every change
+        - ``"debounce"``: Batched sync with ``debounce_ms`` delay
+    validate_on_add : bool, default True
+        Validate node/edge data against schemas when adding via
+        :meth:`add_node` or :meth:`add_edge`.
+    validate_on_patch : bool, default False
+        Validate node/edge data against schemas when patching via
+        :meth:`patch_node_data` or :meth:`patch_edge_data`.
+    viewport : dict, optional
+        Persisted viewport state with ``x``, ``y`` (position) and ``zoom``.
+        Set to restore a specific view on initialization.
+    top_panel : list, default []
+        Panel viewables rendered in a top-center overlay panel.
+    bottom_panel : list, default []
+        Panel viewables rendered in a bottom-center overlay panel.
+    left_panel : list, default []
+        Panel viewables rendered in a center-left overlay panel.
+    right_panel : list, default []
+        Panel viewables rendered in a center-right overlay panel.
+
+    Examples
+    --------
+    Create a basic flow graph:
+
+    >>> import panel as pn
+    >>> from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec
+    >>>
+    >>> pn.extension()
+    >>>
+    >>> nodes = [
+    ...     NodeSpec(id="1", position={"x": 0, "y": 0}, label="Start").to_dict(),
+    ...     NodeSpec(id="2", position={"x": 200, "y": 0}, label="Process").to_dict(),
+    ...     NodeSpec(id="3", position={"x": 400, "y": 0}, label="End").to_dict(),
+    ... ]
+    >>> edges = [
+    ...     EdgeSpec(id="e1", source="1", target="2").to_dict(),
+    ...     EdgeSpec(id="e2", source="2", target="3").to_dict(),
+    ... ]
+    >>> flow = ReactFlow(nodes=nodes, edges=edges)
+    >>> flow.servable()
+
+    Define custom node types with schemas:
+
+    >>> from panel_reactflow import NodeType
+    >>> import param
+    >>>
+    >>> class FilterParams(param.Parameterized):
+    ...     threshold = param.Number(default=0.5, bounds=(0, 1))
+    ...     operation = param.Selector(default="gt", objects=["gt", "lt", "eq"])
+    >>>
+    >>> flow = ReactFlow(
+    ...     node_types={
+    ...         "filter": NodeType(
+    ...             type="filter",
+    ...             label="Filter Node",
+    ...             schema=FilterParams,
+    ...             inputs=["input"],
+    ...             outputs=["output"]
+    ...         )
+    ...     }
+    ... )
+    >>> flow.add_node(NodeSpec(
+    ...     id="f1",
+    ...     type="filter",
+    ...     position={"x": 100, "y": 100},
+    ...     data={"threshold": 0.7, "operation": "gt"}
+    ... ))
+
+    Listen to events:
+
+    >>> def on_node_moved(event):
+    ...     print(f"Node {event['node_id']} moved to {event['position']}")
+    >>>
+    >>> flow.on("node_moved", on_node_moved)
+    >>> flow.on("edge_added", lambda e: print(f"Edge added: {e['edge']}"))
+
+    Embed Panel viewables in nodes:
+
+    >>> nodes = [
+    ...     {
+    ...         "id": "plot1",
+    ...         "position": {"x": 0, "y": 0},
+    ...         "label": "Markdown View",
+    ...         "view": pn.pane.Markdown("# Hello World"),
+    ...         "data": {}
+    ...     }
+    ... ]
+    >>> flow = ReactFlow(nodes=nodes)
+
+    Convert from/to NetworkX:
+
+    >>> import networkx as nx
+    >>> G = nx.DiGraph()
+    >>> G.add_edge("A", "B", weight=0.5)
+    >>> G.add_edge("B", "C", weight=0.8)
+    >>>
+    >>> flow = ReactFlow.from_networkx(G)
+    >>>
+    >>> # Make modifications...
+    >>>
+    >>> G_modified = flow.to_networkx()
+
+    See Also
+    --------
+    NodeSpec : Builder for node dictionaries
+    EdgeSpec : Builder for edge dictionaries
+    NodeType : Define custom node types with schemas
+    EdgeType : Define custom edge types with schemas
+    Editor : Base class for custom editors
+    SchemaEditor : Smart schema-driven editor (default)
+    JsonEditor : Simple JSON editor
+
+    Notes
+    -----
+    The component requires the Panel extension to be loaded. Make sure to
+    call ``pn.extension()`` before using ReactFlow.
+
+    For optimal performance with large graphs (>100 nodes), consider:
+    - Using ``sync_mode='debounce'`` with appropriate ``debounce_ms``
+    - Setting ``validate_on_patch=False`` if validation is expensive
+    - Disabling ``show_minimap`` if not needed
+    """
 
     nodes = param.List(default=[], doc="Canonical list of node dictionaries.")
     edges = param.List(default=[], doc="Canonical list of edge dictionaries.")
@@ -685,13 +1375,74 @@ class ReactFlow(ReactComponent):
     def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
         """Add a node to the graph.
 
+        Adds a new node to the graph with optional validation. If a ``view``
+        is provided, it will be embedded inside the node and rendered as
+        Panel content.
+
         Parameters
         ----------
-        node:
-            Node dictionary or ``NodeSpec`` instance to add.
-        view:
-            Optional Panel viewable rendered inside the node. If provided,
-            ``view`` is attached to the node and transformed into ``view_idx``.
+        node : dict or NodeSpec
+            Node dictionary or :class:`NodeSpec` instance to add. The only
+            required field is ``id``. Other fields have defaults:
+
+            - ``id``: Unique node identifier (required)
+            - ``position``: Dict with ``x`` and ``y`` coordinates
+              (defaults to ``{"x": 0.0, "y": 0.0}``)
+            - ``type``: Node type (defaults to ``"panel"``)
+            - ``data``: Custom data dict (defaults to ``{}``)
+        view : Panel viewable, optional
+            Optional Panel viewable (widget, pane, layout) to render inside
+            the node. The view will be displayed as the node's content.
+
+        Raises
+        ------
+        ValueError
+            If the node is missing the required ``id`` field or if
+            validation is enabled and the data doesn't match the schema.
+
+        Examples
+        --------
+        Add a simple node:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_node({
+        ...     "id": "n1",
+        ...     "position": {"x": 0, "y": 0},
+        ...     "type": "panel",
+        ...     "label": "My Node",
+        ...     "data": {}
+        ... })
+
+        Add a node using NodeSpec:
+
+        >>> from panel_reactflow import NodeSpec
+        >>> flow.add_node(NodeSpec(
+        ...     id="n2",
+        ...     position={"x": 100, "y": 100},
+        ...     label="Another Node"
+        ... ))
+
+        Add a node with embedded view:
+
+        >>> import panel as pn
+        >>> flow.add_node(
+        ...     NodeSpec(id="plot1", position={"x": 200, "y": 0}),
+        ...     view=pn.pane.Markdown("# Hello World")
+        ... )
+
+        Add a typed node with data:
+
+        >>> flow.add_node(NodeSpec(
+        ...     id="filter1",
+        ...     type="filter",
+        ...     position={"x": 300, "y": 100},
+        ...     data={"threshold": 0.7, "operation": "gt"}
+        ... ))
+
+        See Also
+        --------
+        remove_node : Remove a node from the graph
+        NodeSpec : Helper for constructing node dictionaries
         """
         payload = self._coerce_node(node)
         payload.setdefault("type", "panel")
@@ -764,12 +1515,32 @@ class ReactFlow(ReactComponent):
                 return
 
     def remove_node(self, node_id: str) -> None:
-        """Remove a node and any connected edges.
+        """Remove a node and all connected edges from the graph.
+
+        Removes the specified node and automatically removes any edges that
+        are connected to it (either as source or target). This ensures the
+        graph remains consistent.
 
         Parameters
         ----------
-        node_id:
-            Identifier of the node to remove.
+        node_id : str
+            Unique identifier of the node to remove.
+
+        Examples
+        --------
+        Remove a node:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_node(NodeSpec(id="n1", position={"x": 0, "y": 0}))
+        >>> flow.add_node(NodeSpec(id="n2", position={"x": 100, "y": 0}))
+        >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
+        >>>
+        >>> flow.remove_node("n1")  # Also removes edge "e1"
+
+        See Also
+        --------
+        add_node : Add a node to the graph
+        remove_edge : Remove an edge from the graph
         """
         nodes = [node for node in self.nodes if node.get("id") != node_id]
         removed_edges = [edge for edge in self.edges if edge.get("source") == node_id or edge.get("target") == node_id]
@@ -789,10 +1560,72 @@ class ReactFlow(ReactComponent):
     def add_edge(self, edge: dict[str, Any] | EdgeSpec) -> None:
         """Add an edge to the graph.
 
+        Adds a new edge connecting two nodes with optional validation. If no
+        ``id`` is provided, one will be automatically generated based on the
+        source and target nodes.
+
         Parameters
         ----------
-        edge:
-            Edge dictionary or ``EdgeSpec`` instance to add.
+        edge : dict or EdgeSpec
+            Edge dictionary or :class:`EdgeSpec` instance to add. Required
+            fields are ``source`` and ``target``. Other fields have defaults:
+
+            - ``source``: ID of the source node (required)
+            - ``target``: ID of the target node (required)
+            - ``id``: Unique edge identifier (auto-generated if not provided)
+            - ``data``: Custom data dict (defaults to ``{}``)
+
+        Raises
+        ------
+        ValueError
+            If the edge is missing required fields (``source``, ``target``)
+            or if validation is enabled and the data doesn't match the schema.
+
+        Examples
+        --------
+        Add a simple edge:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_edge({
+        ...     "id": "e1",
+        ...     "source": "n1",
+        ...     "target": "n2"
+        ... })
+
+        Add an edge using EdgeSpec:
+
+        >>> from panel_reactflow import EdgeSpec
+        >>> flow.add_edge(EdgeSpec(
+        ...     id="e2",
+        ...     source="n2",
+        ...     target="n3",
+        ...     label="Connection"
+        ... ))
+
+        Add a typed edge with data:
+
+        >>> flow.add_edge(EdgeSpec(
+        ...     id="weighted1",
+        ...     source="n1",
+        ...     target="n3",
+        ...     type="weighted",
+        ...     data={"weight": 0.75}
+        ... ))
+
+        Add an edge with styling:
+
+        >>> flow.add_edge(EdgeSpec(
+        ...     id="e3",
+        ...     source="n3",
+        ...     target="n4",
+        ...     style={"stroke": "#ff0000", "strokeWidth": 3},
+        ...     markerEnd={"type": "arrowclosed", "color": "#ff0000"}
+        ... ))
+
+        See Also
+        --------
+        remove_edge : Remove an edge from the graph
+        EdgeSpec : Helper for constructing edge dictionaries
         """
         payload = self._coerce_edge(edge)
         payload.setdefault("data", {})
@@ -807,12 +1640,25 @@ class ReactFlow(ReactComponent):
         self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
     def remove_edge(self, edge_id: str) -> None:
-        """Remove an edge by id.
+        """Remove an edge from the graph by its ID.
 
         Parameters
         ----------
-        edge_id:
-            Identifier of the edge to remove.
+        edge_id : str
+            Unique identifier of the edge to remove.
+
+        Examples
+        --------
+        Remove an edge:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
+        >>> flow.remove_edge("e1")
+
+        See Also
+        --------
+        add_edge : Add an edge to the graph
+        remove_node : Remove a node from the graph
         """
         removed = [edge for edge in self.edges if edge.get("id") == edge_id]
         self.edges = [edge for edge in self.edges if edge.get("id") != edge_id]
@@ -820,14 +1666,57 @@ class ReactFlow(ReactComponent):
             self._emit("edge_deleted", {"type": "edge_deleted", "edge_id": edge_id})
 
     def patch_node_data(self, node_id: str, patch: dict[str, Any]) -> None:
-        """Patch the ``data`` dict for a node.
+        """Update specific properties in a node's data dictionary.
+
+        Merges the provided patch dictionary into the node's existing ``data``
+        dict, allowing you to update individual properties without replacing
+        the entire data object.
 
         Parameters
         ----------
-        node_id:
-            Identifier of the node to update.
-        patch:
-            Dictionary of key/value pairs merged into ``node["data"]``.
+        node_id : str
+            Unique identifier of the node to update.
+        patch : dict
+            Dictionary of key-value pairs to merge into the node's ``data``.
+            Existing keys will be updated, new keys will be added.
+
+        Raises
+        ------
+        ValueError
+            If validation is enabled (``validate_on_patch=True``) and the
+            patched data doesn't match the node type's schema.
+
+        Examples
+        --------
+        Update a single property:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_node(NodeSpec(
+        ...     id="n1",
+        ...     position={"x": 0, "y": 0},
+        ...     data={"threshold": 0.5, "name": "Filter"}
+        ... ))
+        >>>
+        >>> # Update just the threshold
+        >>> flow.patch_node_data("n1", {"threshold": 0.8})
+
+        Update multiple properties:
+
+        >>> flow.patch_node_data("n1", {
+        ...     "threshold": 0.9,
+        ...     "name": "Updated Filter"
+        ... })
+
+        Notes
+        -----
+        This method is typically called automatically by editors when users
+        modify node properties in the UI. The patch is also sent to the
+        frontend to keep the visualization in sync.
+
+        See Also
+        --------
+        patch_edge_data : Update edge data properties
+        add_node : Add a new node to the graph
         """
         for node in self.nodes:
             if node.get("id") == node_id:
@@ -842,14 +1731,51 @@ class ReactFlow(ReactComponent):
         self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
 
     def patch_edge_data(self, edge_id: str, patch: dict[str, Any]) -> None:
-        """Patch the ``data`` dict for an edge.
+        """Update specific properties in an edge's data dictionary.
+
+        Merges the provided patch dictionary into the edge's existing ``data``
+        dict, allowing you to update individual properties without replacing
+        the entire data object.
 
         Parameters
         ----------
-        edge_id:
-            Identifier of the edge to update.
-        patch:
-            Dictionary of key/value pairs merged into ``edge["data"]``.
+        edge_id : str
+            Unique identifier of the edge to update.
+        patch : dict
+            Dictionary of key-value pairs to merge into the edge's ``data``.
+            Existing keys will be updated, new keys will be added.
+
+        Raises
+        ------
+        ValueError
+            If validation is enabled (``validate_on_patch=True``) and the
+            patched data doesn't match the edge type's schema.
+
+        Examples
+        --------
+        Update edge properties:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_edge(EdgeSpec(
+        ...     id="e1",
+        ...     source="n1",
+        ...     target="n2",
+        ...     data={"weight": 0.5, "label": "weak"}
+        ... ))
+        >>>
+        >>> # Update just the weight
+        >>> flow.patch_edge_data("e1", {"weight": 0.9, "label": "strong"})
+
+        Notes
+        -----
+        This method is typically called automatically by editors when users
+        modify edge properties in the UI. The patch is also sent to the
+        frontend to keep the visualization in sync.
+
+        See Also
+        --------
+        patch_node_data : Update node data properties
+        add_edge : Add a new edge to the graph
         """
         for edge in self.edges:
             if edge.get("id") == edge_id:
@@ -865,17 +1791,84 @@ class ReactFlow(ReactComponent):
         self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
 
     def to_networkx(self, *, multigraph: bool = False):
-        """Convert the current graph state to a NetworkX graph.
+        """Convert the current graph to NetworkX format.
+
+        Converts the ReactFlow graph state into a NetworkX graph object,
+        preserving node positions, types, labels, and data. Useful for
+        graph analysis, algorithms, and integration with the NetworkX
+        ecosystem.
 
         Parameters
         ----------
-        multigraph:
-            Whether to return a ``MultiDiGraph`` instead of a ``DiGraph``.
+        multigraph : bool, default False
+            If ``True``, returns a ``MultiDiGraph`` allowing multiple edges
+            between the same node pair. If ``False``, returns a ``DiGraph``
+            with single edges between nodes.
 
         Returns
         -------
-        networkx.Graph
-            NetworkX representation of the graph.
+        networkx.DiGraph or networkx.MultiDiGraph
+            NetworkX graph representation with node and edge data preserved.
+
+            Node attributes include:
+            - All properties from ``node["data"]``
+            - ``position``: Node position dict
+            - ``type``: Node type string
+            - ``label``: Node label (if present)
+
+            Edge attributes include:
+            - All properties from ``edge["data"]``
+            - ``label``: Edge label (if present)
+            - ``type``: Edge type string (if present)
+            - For MultiDiGraphs, ``key`` is the edge ID
+
+        Raises
+        ------
+        ImportError
+            If NetworkX is not installed.
+
+        Examples
+        --------
+        Convert to NetworkX and run graph algorithms:
+
+        >>> import networkx as nx
+        >>> from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec
+        >>>
+        >>> flow = ReactFlow()
+        >>> flow.add_node(NodeSpec(id="A", position={"x": 0, "y": 0}))
+        >>> flow.add_node(NodeSpec(id="B", position={"x": 100, "y": 0}))
+        >>> flow.add_node(NodeSpec(id="C", position={"x": 50, "y": 100}))
+        >>> flow.add_edge(EdgeSpec(id="e1", source="A", target="B"))
+        >>> flow.add_edge(EdgeSpec(id="e2", source="B", target="C"))
+        >>> flow.add_edge(EdgeSpec(id="e3", source="A", target="C"))
+        >>>
+        >>> G = flow.to_networkx()
+        >>>
+        >>> # Run NetworkX algorithms
+        >>> shortest = nx.shortest_path(G, "A", "C")
+        >>> print(shortest)  # ['A', 'C']
+        >>>
+        >>> centrality = nx.betweenness_centrality(G)
+        >>> print(centrality)
+
+        Convert with edge data:
+
+        >>> flow = ReactFlow()
+        >>> flow.add_node(NodeSpec(id="1", position={"x": 0, "y": 0}))
+        >>> flow.add_node(NodeSpec(id="2", position={"x": 100, "y": 0}))
+        >>> flow.add_edge(EdgeSpec(
+        ...     id="e1",
+        ...     source="1",
+        ...     target="2",
+        ...     data={"weight": 0.75, "distance": 10}
+        ... ))
+        >>>
+        >>> G = flow.to_networkx()
+        >>> print(G["1"]["2"]["weight"])  # 0.75
+
+        See Also
+        --------
+        from_networkx : Create ReactFlow from NetworkX graph
         """
         try:
             import networkx as nx  # type: ignore[import-not-found]
@@ -891,8 +1884,14 @@ class ReactFlow(ReactComponent):
             graph.add_node(node["id"], **data)
         for edge in self.edges:
             data = dict(edge.get("data", {}))
-            data.update({"label": edge.get("label"), "type": edge.get("type")})
-            graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
+            if edge.get("label") is not None:
+                data["label"] = edge["label"]
+            if edge.get("type") is not None:
+                data["type"] = edge["type"]
+            if multigraph:
+                graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
+            else:
+                graph.add_edge(edge["source"], edge["target"], **data)
         return graph
 
     @classmethod
@@ -905,23 +1904,89 @@ class ReactFlow(ReactComponent):
     ) -> "ReactFlow":
         """Create a ReactFlow instance from a NetworkX graph.
 
+        Converts a NetworkX graph into a ReactFlow component, extracting
+        node positions, labels, and data from node/edge attributes. This
+        enables seamless integration with NetworkX's graph creation and
+        analysis capabilities.
+
         Parameters
         ----------
-        graph:
-            A NetworkX graph instance.
-        node_type:
-            Default node type assigned to nodes.
-        default_position:
-            Default (x, y) position when none is provided in attributes.
+        graph : networkx.Graph
+            A NetworkX graph instance (directed or undirected). Node attributes
+            are converted to node data, and edge attributes to edge data.
+        node_type : str, default "panel"
+            Default node type assigned to all nodes. Use a custom type if you
+            want schema validation or custom rendering.
+        default_position : tuple of float, default (0.0, 0.0)
+            Default (x, y) position used when a node doesn't have a ``position``
+            attribute. Nodes can specify position via a ``position`` attribute
+            as either a dict ``{"x": ..., "y": ...}`` or tuple/list ``[x, y]``.
 
         Returns
         -------
         ReactFlow
-            ReactFlow instance populated with nodes and edges.
+            A new ReactFlow instance populated with nodes and edges from the
+            NetworkX graph.
+
+        Examples
+        --------
+        Create from a simple NetworkX graph:
+
+        >>> import networkx as nx
+        >>> from panel_reactflow import ReactFlow
+        >>>
+        >>> G = nx.DiGraph()
+        >>> G.add_node("A", position={"x": 0, "y": 0}, label="Start")
+        >>> G.add_node("B", position={"x": 100, "y": 0}, label="Process")
+        >>> G.add_node("C", position={"x": 200, "y": 0}, label="End")
+        >>> G.add_edge("A", "B", weight=0.5)
+        >>> G.add_edge("B", "C", weight=0.8)
+        >>>
+        >>> flow = ReactFlow.from_networkx(G)
+
+        Use with NetworkX graph generators:
+
+        >>> G = nx.karate_club_graph()
+        >>> # Add positions using a layout algorithm
+        >>> pos = nx.spring_layout(G, scale=500)
+        >>> for node_id, (x, y) in pos.items():
+        ...     G.nodes[node_id]["position"] = {"x": x, "y": y}
+        >>>
+        >>> flow = ReactFlow.from_networkx(G)
+
+        Custom node type and attributes:
+
+        >>> G = nx.DiGraph()
+        >>> G.add_node("filter1", position=[0, 0], threshold=0.5, op="gt")
+        >>> G.add_node("filter2", position=[100, 0], threshold=0.7, op="lt")
+        >>> G.add_edge("filter1", "filter2", label="pipe")
+        >>>
+        >>> flow = ReactFlow.from_networkx(G, node_type="filter")
+
+        Notes
+        -----
+        Node attributes are converted as follows:
+        - ``position``: Used directly (converted to dict if tuple/list)
+        - ``label``: Used as node label
+        - ``type``: Overrides the default ``node_type`` parameter
+        - ``data``: Merged with other attributes as node data
+        - All other attributes become node data properties
+
+        Edge attributes are converted as follows:
+        - ``label``: Used as edge label
+        - ``type``: Used as edge type
+        - ``data``: Merged with other attributes as edge data
+        - All other attributes become edge data properties
+        - For MultiDiGraphs, the edge key becomes the edge ID
+
+        See Also
+        --------
+        to_networkx : Convert ReactFlow to NetworkX graph
         """
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         for node_id, attrs in graph.nodes(data=True):
+            attrs = dict(attrs)  # avoids mutating the original graph
             position = attrs.pop("position", {"x": default_position[0], "y": default_position[1]})
             if isinstance(position, (tuple, list)):
                 position = {"x": position[0], "y": position[1]}
@@ -961,14 +2026,99 @@ class ReactFlow(ReactComponent):
         return cls(nodes=nodes, edges=edges)
 
     def on(self, event_type: str, callback) -> None:
-        """Register a Python callback for frontend events.
+        """Register a callback for graph events.
+
+        Subscribe to events emitted by the ReactFlow component. Events are
+        triggered by user interactions (node moves, selections, etc.) and
+        programmatic changes (adding/removing nodes/edges).
 
         Parameters
         ----------
-        event_type:
-            Event name to listen for (e.g. ``node_moved``). Use ``*`` for all events.
-        callback:
-            Callable invoked with the event payload.
+        event_type : str
+            Type of event to listen for. Use ``"*"`` to listen to all events.
+            Available event types:
+
+            - ``"node_added"``: Node was added to the graph
+            - ``"node_deleted"``: Node was removed from the graph
+            - ``"node_moved"``: Node was dragged to a new position
+            - ``"node_clicked"``: Node was clicked
+            - ``"node_data_changed"``: Node data was modified
+            - ``"edge_added"``: Edge was added to the graph
+            - ``"edge_deleted"``: Edge was removed from the graph
+            - ``"edge_data_changed"``: Edge data was modified
+            - ``"selection_changed"``: Selection changed
+            - ``"sync"``: Full graph sync from frontend
+            - ``"*"``: All events (wildcard)
+        callback : callable
+            Function called when the event occurs. Receives a single argument:
+            the event payload dictionary containing event-specific data.
+
+        Examples
+        --------
+        Listen for node movements:
+
+        >>> from panel_reactflow import ReactFlow
+        >>>
+        >>> flow = ReactFlow()
+        >>>
+        >>> def on_move(event):
+        ...     node_id = event["node_id"]
+        ...     position = event["position"]
+        ...     print(f"Node {node_id} moved to ({position['x']}, {position['y']})")
+        >>>
+        >>> flow.on("node_moved", on_move)
+
+        Track all graph changes:
+
+        >>> def on_any_event(event):
+        ...     event_type = event["type"]
+        ...     print(f"Event: {event_type}")
+        >>>
+        >>> flow.on("*", on_any_event)
+
+        Build a workflow tracker:
+
+        >>> nodes_added = []
+        >>> edges_added = []
+        >>>
+        >>> def track_node(event):
+        ...     nodes_added.append(event["node"])
+        >>>
+        >>> def track_edge(event):
+        ...     edges_added.append(event["edge"])
+        >>>
+        >>> flow.on("node_added", track_node)
+        >>> flow.on("edge_added", track_edge)
+
+        React to selection changes:
+
+        >>> def on_selection(event):
+        ...     selected_nodes = event["nodes"]
+        ...     selected_edges = event["edges"]
+        ...     print(f"Selected {len(selected_nodes)} nodes and {len(selected_edges)} edges")
+        >>>
+        >>> flow.on("selection_changed", on_selection)
+
+        Update analytics on data changes:
+
+        >>> def on_data_change(event):
+        ...     node_id = event["node_id"]
+        ...     patch = event["patch"]
+        ...     print(f"Node {node_id} updated: {patch}")
+        ...     # Update database, trigger recalculation, etc.
+        >>>
+        >>> flow.on("node_data_changed", on_data_change)
+
+        Notes
+        -----
+        Multiple callbacks can be registered for the same event type.
+        They will be called in the order they were registered.
+
+        The ``"*"`` wildcard receives all events, making it useful for
+        logging, debugging, or implementing undo/redo functionality.
+
+        Event payloads always include a ``"type"`` field indicating the
+        event type, plus event-specific fields.
         """
         self._event_handlers.setdefault(event_type, []).append(callback)
 
