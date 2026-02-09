@@ -37,7 +37,7 @@ import panel as pn
 
 from panel_reactflow import ReactFlow
 
-pn.extension()
+pn.extension("jsoneditor")
 
 nodes = [
     {

@@ -22,11 +22,15 @@ generate forms, and plug in editors where you need full control.
 
 ## Quickstart
 
+!!! tip "JSONEditor Extension Required"
+    ReactFlow requires the `jsoneditor` Panel extension for editing node and edge data.
+    Always call `pn.extension("jsoneditor")` at the start of your application.
+
 ```python
 import panel as pn
 from panel_reactflow import NodeType, ReactFlow
 
-pn.extension()
+pn.extension("jsoneditor")
 
 task_schema = {
     "type": "object",
