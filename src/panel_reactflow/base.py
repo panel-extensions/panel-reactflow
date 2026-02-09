@@ -553,6 +553,12 @@ class EdgeSpec:
     markerEnd : dict, optional
         Arrow marker configuration for the edge end. Example:
         ``{"type": "arrow", "color": "#000000"}``
+    sourceHandle : str, optional
+        ID of the specific handle on the source node where the edge originates.
+        Use this when the source node has multiple output handles defined.
+    targetHandle : str, optional
+        ID of the specific handle on the target node where the edge terminates.
+        Use this when the target node has multiple input handles defined.
 
     Methods
     -------
@@ -595,6 +601,16 @@ class EdgeSpec:
     ...     data={"weight": 0.75, "confidence": 0.9}
     ... )
 
+    Create an edge with specific handles:
+
+    >>> edge = EdgeSpec(
+    ...     id="handle_edge",
+    ...     source="producer",
+    ...     target="consumer",
+    ...     sourceHandle="result",
+    ...     targetHandle="mode"
+    ... )
+
     Add to a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow
@@ -611,6 +627,8 @@ class EdgeSpec:
     data: dict[str, Any] | None = None
     style: dict[str, Any] | None = None
     markerEnd: dict[str, Any] | None = None
+    sourceHandle: str | None = None
+    targetHandle: str | None = None
 
     def __post_init__(self) -> None:
         if self.data is None:
@@ -637,6 +655,10 @@ class EdgeSpec:
             payload["style"] = self.style
         if self.markerEnd is not None:
             payload["markerEnd"] = self.markerEnd
+        if self.sourceHandle is not None:
+            payload["sourceHandle"] = self.sourceHandle
+        if self.targetHandle is not None:
+            payload["targetHandle"] = self.targetHandle
         return payload
 
     @classmethod

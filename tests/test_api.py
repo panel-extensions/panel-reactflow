@@ -43,6 +43,37 @@ def test_edge_spec_roundtrip() -> None:
     assert EdgeSpec.from_dict(payload).to_dict() == payload
 
 
+def test_edge_spec_with_handles() -> None:
+    """Test that EdgeSpec correctly handles sourceHandle and targetHandle."""
+    edge = EdgeSpec(
+        id="e1",
+        source="producer",
+        target="consumer",
+        sourceHandle="result",
+        targetHandle="mode"
+    )
+    payload = edge.to_dict()
+    assert payload["source"] == "producer"
+    assert payload["target"] == "consumer"
+    assert payload["sourceHandle"] == "result"
+    assert payload["targetHandle"] == "mode"
+    # Test roundtrip
+    assert EdgeSpec.from_dict(payload).to_dict() == payload
+
+
+def test_edge_spec_without_handles() -> None:
+    """Test that EdgeSpec works without handles (backward compatibility)."""
+    edge = EdgeSpec(id="e1", source="n1", target="n2")
+    payload = edge.to_dict()
+    # When handles are None, they should not be in the payload
+    assert "sourceHandle" not in payload
+    assert "targetHandle" not in payload
+    # Test roundtrip
+    edge2 = EdgeSpec.from_dict(payload)
+    assert edge2.sourceHandle is None
+    assert edge2.targetHandle is None
+
+
 def test_reactflow_add_remove() -> None:
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "type": "panel", "data": {}})
