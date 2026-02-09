@@ -2157,14 +2157,14 @@ class ReactFlow(ReactComponent):
         """Normalize nodes list by converting NodeSpec objects to dicts."""
         normalized = [self._coerce_node(node) for node in event.new]
         # Only update if there were actual changes to avoid infinite recursion
-        if any(n1 is not n2 for n1, n2 in zip(normalized, event.new)):
+        if any(n1 is not n2 for n1, n2 in zip(normalized, event.new, strict=False)):
             self.nodes = normalized
 
     def _normalize_edges(self, event: param.parameterized.Event) -> None:
         """Normalize edges list by converting EdgeSpec objects to dicts."""
         normalized = [self._coerce_edge(edge) for edge in event.new]
         # Only update if there were actual changes to avoid infinite recursion
-        if any(e1 is not e2 for e1, e2 in zip(normalized, event.new)):
+        if any(e1 is not e2 for e1, e2 in zip(normalized, event.new, strict=False)):
             self.edges = normalized
 
     @staticmethod
@@ -2174,11 +2174,11 @@ class ReactFlow(ReactComponent):
 
     @staticmethod
     def _coerce_node(node: dict[str, Any] | NodeSpec) -> dict[str, Any]:
-        return node.to_dict() if hasattr(node, "to_dict") else dict(node)
+        return node.to_dict() if hasattr(node, "to_dict") else node
 
     @staticmethod
     def _coerce_edge(edge: dict[str, Any] | EdgeSpec) -> dict[str, Any]:
-        return edge.to_dict() if hasattr(edge, "to_dict") else dict(edge)
+        return edge.to_dict() if hasattr(edge, "to_dict") else edge
 
     def _validate_graph_payload(self, payload: dict[str, Any], *, kind: str) -> None:
         required = {"node": ["id", "position", "data"], "edge": ["id", "source", "target"]}[kind]
