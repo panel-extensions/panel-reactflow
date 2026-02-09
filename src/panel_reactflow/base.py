@@ -149,13 +149,13 @@ class SchemaSource:
     ----------
     kind : {"jsonschema", "param", "pydantic"}
         The schema format type:
-        
+
         - ``"jsonschema"``: A standard JSON Schema dictionary
         - ``"param"``: A ``param.Parameterized`` class
         - ``"pydantic"``: A Pydantic ``BaseModel`` class
     value : dict or type
         The schema value matching the specified ``kind``:
-        
+
         - For ``"jsonschema"``: A JSON Schema dictionary
         - For ``"param"``: A ``param.Parameterized`` subclass
         - For ``"pydantic"``: A Pydantic ``BaseModel`` subclass
@@ -174,7 +174,7 @@ class SchemaSource:
 
     >>> import param
     >>> class MyParams(param.Parameterized):
-    ...     name = param.String(default="")
+    ...     label = param.String(default="")
     >>> schema = SchemaSource(kind="param", value=MyParams)
 
     Using a Pydantic model:
@@ -208,12 +208,12 @@ class NodeType:
         the ``type`` value is used.
     schema : dict or type, optional
         Data schema for node validation and editor generation. Accepts:
-        
+
         - A JSON Schema dictionary
         - A ``param.Parameterized`` subclass
         - A Pydantic ``BaseModel`` subclass
         - A :class:`SchemaSource` wrapper for explicit schema types
-        
+
         The schema is normalized to JSON Schema format internally.
     inputs : list of str, optional
         List of input port names. If provided, these ports will be rendered
@@ -318,7 +318,7 @@ class EdgeType:
     schema : dict or type, optional
         Data schema for edge validation and editor generation. Accepts the
         same formats as :class:`NodeType`:
-        
+
         - A JSON Schema dictionary
         - A ``param.Parameterized`` subclass
         - A Pydantic ``BaseModel`` subclass
@@ -692,7 +692,7 @@ class Editor(Viewer):
 
     >>> import panel as pn
     >>> from panel_reactflow import Editor
-    >>> 
+    >>>
     >>> class ColorEditor(Editor):
     ...     def __init__(self, data=None, schema=None, **kwargs):
     ...         super().__init__(data, schema, **kwargs)
@@ -701,11 +701,11 @@ class Editor(Viewer):
     ...             value=self._data.get("color", "#000000")
     ...         )
     ...         self.color_picker.param.watch(self._on_change, "value")
-    ...     
+    ...
     ...     def _on_change(self, event):
     ...         if self._on_patch:
     ...             self._on_patch({"color": event.new})
-    ...     
+    ...
     ...     def __panel__(self):
     ...         return self.color_picker
 
@@ -728,7 +728,7 @@ class Editor(Viewer):
     ...         "value"
     ...     )
     ...     return widget
-    >>> 
+    >>>
     >>> flow = ReactFlow(default_node_editor=simple_editor)
     """
 
@@ -963,7 +963,7 @@ class ReactFlow(ReactComponent):
         Set to ``False`` for read-only visualization.
     editor_mode : {"toolbar", "node", "side"}, default "toolbar"
         Where to render node editors:
-        
+
         - ``"toolbar"``: Editors appear in a toolbar above the canvas
         - ``"node"``: Editors appear embedded within each node
         - ``"side"``: Editors appear in a side panel
@@ -980,7 +980,7 @@ class ReactFlow(ReactComponent):
         Show a minimap overlay in the corner for navigation in large graphs.
     sync_mode : {"event", "debounce"}, default "event"
         Synchronization mode for JavaScript to Python updates:
-        
+
         - ``"event"``: Immediate sync on every change
         - ``"debounce"``: Batched sync with ``debounce_ms`` delay
     validate_on_add : bool, default True
@@ -1007,17 +1007,17 @@ class ReactFlow(ReactComponent):
 
     >>> import panel as pn
     >>> from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec
-    >>> 
+    >>>
     >>> pn.extension()
-    >>> 
+    >>>
     >>> nodes = [
-    ...     NodeSpec(id="1", position={"x": 0, "y": 0}, label="Start"),
-    ...     NodeSpec(id="2", position={"x": 200, "y": 0}, label="Process"),
-    ...     NodeSpec(id="3", position={"x": 400, "y": 0}, label="End"),
+    ...     NodeSpec(id="1", position={"x": 0, "y": 0}, label="Start").to_dict(),
+    ...     NodeSpec(id="2", position={"x": 200, "y": 0}, label="Process").to_dict(),
+    ...     NodeSpec(id="3", position={"x": 400, "y": 0}, label="End").to_dict(),
     ... ]
     >>> edges = [
-    ...     EdgeSpec(id="e1", source="1", target="2"),
-    ...     EdgeSpec(id="e2", source="2", target="3"),
+    ...     EdgeSpec(id="e1", source="1", target="2").to_dict(),
+    ...     EdgeSpec(id="e2", source="2", target="3").to_dict(),
     ... ]
     >>> flow = ReactFlow(nodes=nodes, edges=edges)
     >>> flow.servable()
@@ -1026,11 +1026,11 @@ class ReactFlow(ReactComponent):
 
     >>> from panel_reactflow import NodeType
     >>> import param
-    >>> 
+    >>>
     >>> class FilterParams(param.Parameterized):
     ...     threshold = param.Number(default=0.5, bounds=(0, 1))
     ...     operation = param.Selector(default="gt", objects=["gt", "lt", "eq"])
-    >>> 
+    >>>
     >>> flow = ReactFlow(
     ...     node_types={
     ...         "filter": NodeType(
@@ -1053,7 +1053,7 @@ class ReactFlow(ReactComponent):
 
     >>> def on_node_moved(event):
     ...     print(f"Node {event['node_id']} moved to {event['position']}")
-    >>> 
+    >>>
     >>> flow.on("node_moved", on_node_moved)
     >>> flow.on("edge_added", lambda e: print(f"Edge added: {e['edge']}"))
 
@@ -1063,8 +1063,8 @@ class ReactFlow(ReactComponent):
     ...     {
     ...         "id": "plot1",
     ...         "position": {"x": 0, "y": 0},
-    ...         "label": "Scatter Plot",
-    ...         "view": pn.pane.Matplotlib(create_plot()),
+    ...         "label": "Markdown View",
+    ...         "view": pn.pane.Markdown("# Hello World"),
     ...         "data": {}
     ...     }
     ... ]
@@ -1076,11 +1076,11 @@ class ReactFlow(ReactComponent):
     >>> G = nx.DiGraph()
     >>> G.add_edge("A", "B", weight=0.5)
     >>> G.add_edge("B", "C", weight=0.8)
-    >>> 
+    >>>
     >>> flow = ReactFlow.from_networkx(G)
-    >>> 
+    >>>
     >>> # Make modifications...
-    >>> 
+    >>>
     >>> G_modified = flow.to_networkx()
 
     See Also
@@ -1382,10 +1382,12 @@ class ReactFlow(ReactComponent):
         Parameters
         ----------
         node : dict or NodeSpec
-            Node dictionary or :class:`NodeSpec` instance to add. Required fields:
-            
-            - ``id``: Unique node identifier
+            Node dictionary or :class:`NodeSpec` instance to add. The only
+            required field is ``id``. Other fields have defaults:
+
+            - ``id``: Unique node identifier (required)
             - ``position``: Dict with ``x`` and ``y`` coordinates
+              (defaults to ``{"x": 0.0, "y": 0.0}``)
             - ``type``: Node type (defaults to ``"panel"``)
             - ``data``: Custom data dict (defaults to ``{}``)
         view : Panel viewable, optional
@@ -1395,8 +1397,8 @@ class ReactFlow(ReactComponent):
         Raises
         ------
         ValueError
-            If the node is missing required fields (``id``, ``position``) or
-            if validation is enabled and the data doesn't match the schema.
+            If the node is missing the required ``id`` field or if
+            validation is enabled and the data doesn't match the schema.
 
         Examples
         --------
@@ -1532,7 +1534,7 @@ class ReactFlow(ReactComponent):
         >>> flow.add_node(NodeSpec(id="n1", position={"x": 0, "y": 0}))
         >>> flow.add_node(NodeSpec(id="n2", position={"x": 100, "y": 0}))
         >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
-        >>> 
+        >>>
         >>> flow.remove_node("n1")  # Also removes edge "e1"
 
         See Also
@@ -1565,18 +1567,19 @@ class ReactFlow(ReactComponent):
         Parameters
         ----------
         edge : dict or EdgeSpec
-            Edge dictionary or :class:`EdgeSpec` instance to add. Required fields:
-            
-            - ``source``: ID of the source node
-            - ``target``: ID of the target node
+            Edge dictionary or :class:`EdgeSpec` instance to add. Required
+            fields are ``source`` and ``target``. Other fields have defaults:
+
+            - ``source``: ID of the source node (required)
+            - ``target``: ID of the target node (required)
             - ``id``: Unique edge identifier (auto-generated if not provided)
             - ``data``: Custom data dict (defaults to ``{}``)
 
         Raises
         ------
         ValueError
-            If the edge is missing required fields (``source``, ``target``) or
-            if validation is enabled and the data doesn't match the schema.
+            If the edge is missing required fields (``source``, ``target``)
+            or if validation is enabled and the data doesn't match the schema.
 
         Examples
         --------
@@ -1693,7 +1696,7 @@ class ReactFlow(ReactComponent):
         ...     position={"x": 0, "y": 0},
         ...     data={"threshold": 0.5, "name": "Filter"}
         ... ))
-        >>> 
+        >>>
         >>> # Update just the threshold
         >>> flow.patch_node_data("n1", {"threshold": 0.8})
 
@@ -1759,7 +1762,7 @@ class ReactFlow(ReactComponent):
         ...     target="n2",
         ...     data={"weight": 0.5, "label": "weak"}
         ... ))
-        >>> 
+        >>>
         >>> # Update just the weight
         >>> flow.patch_edge_data("e1", {"weight": 0.9, "label": "strong"})
 
@@ -1806,13 +1809,13 @@ class ReactFlow(ReactComponent):
         -------
         networkx.DiGraph or networkx.MultiDiGraph
             NetworkX graph representation with node and edge data preserved.
-            
+
             Node attributes include:
             - All properties from ``node["data"]``
             - ``position``: Node position dict
             - ``type``: Node type string
             - ``label``: Node label (if present)
-            
+
             Edge attributes include:
             - All properties from ``edge["data"]``
             - ``label``: Edge label (if present)
@@ -1830,7 +1833,7 @@ class ReactFlow(ReactComponent):
 
         >>> import networkx as nx
         >>> from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec
-        >>> 
+        >>>
         >>> flow = ReactFlow()
         >>> flow.add_node(NodeSpec(id="A", position={"x": 0, "y": 0}))
         >>> flow.add_node(NodeSpec(id="B", position={"x": 100, "y": 0}))
@@ -1838,13 +1841,13 @@ class ReactFlow(ReactComponent):
         >>> flow.add_edge(EdgeSpec(id="e1", source="A", target="B"))
         >>> flow.add_edge(EdgeSpec(id="e2", source="B", target="C"))
         >>> flow.add_edge(EdgeSpec(id="e3", source="A", target="C"))
-        >>> 
+        >>>
         >>> G = flow.to_networkx()
-        >>> 
+        >>>
         >>> # Run NetworkX algorithms
         >>> shortest = nx.shortest_path(G, "A", "C")
         >>> print(shortest)  # ['A', 'C']
-        >>> 
+        >>>
         >>> centrality = nx.betweenness_centrality(G)
         >>> print(centrality)
 
@@ -1859,7 +1862,7 @@ class ReactFlow(ReactComponent):
         ...     target="2",
         ...     data={"weight": 0.75, "distance": 10}
         ... ))
-        >>> 
+        >>>
         >>> G = flow.to_networkx()
         >>> print(G["1"]["2"]["weight"])  # 0.75
 
@@ -1881,8 +1884,14 @@ class ReactFlow(ReactComponent):
             graph.add_node(node["id"], **data)
         for edge in self.edges:
             data = dict(edge.get("data", {}))
-            data.update({"label": edge.get("label"), "type": edge.get("type")})
-            graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
+            if edge.get("label") is not None:
+                data["label"] = edge["label"]
+            if edge.get("type") is not None:
+                data["type"] = edge["type"]
+            if multigraph:
+                graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
+            else:
+                graph.add_edge(edge["source"], edge["target"], **data)
         return graph
 
     @classmethod
@@ -1925,14 +1934,14 @@ class ReactFlow(ReactComponent):
 
         >>> import networkx as nx
         >>> from panel_reactflow import ReactFlow
-        >>> 
+        >>>
         >>> G = nx.DiGraph()
         >>> G.add_node("A", position={"x": 0, "y": 0}, label="Start")
         >>> G.add_node("B", position={"x": 100, "y": 0}, label="Process")
         >>> G.add_node("C", position={"x": 200, "y": 0}, label="End")
         >>> G.add_edge("A", "B", weight=0.5)
         >>> G.add_edge("B", "C", weight=0.8)
-        >>> 
+        >>>
         >>> flow = ReactFlow.from_networkx(G)
 
         Use with NetworkX graph generators:
@@ -1942,7 +1951,7 @@ class ReactFlow(ReactComponent):
         >>> pos = nx.spring_layout(G, scale=500)
         >>> for node_id, (x, y) in pos.items():
         ...     G.nodes[node_id]["position"] = {"x": x, "y": y}
-        >>> 
+        >>>
         >>> flow = ReactFlow.from_networkx(G)
 
         Custom node type and attributes:
@@ -1951,7 +1960,7 @@ class ReactFlow(ReactComponent):
         >>> G.add_node("filter1", position=[0, 0], threshold=0.5, op="gt")
         >>> G.add_node("filter2", position=[100, 0], threshold=0.7, op="lt")
         >>> G.add_edge("filter1", "filter2", label="pipe")
-        >>> 
+        >>>
         >>> flow = ReactFlow.from_networkx(G, node_type="filter")
 
         Notes
@@ -1977,6 +1986,7 @@ class ReactFlow(ReactComponent):
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         for node_id, attrs in graph.nodes(data=True):
+            attrs = dict(attrs)  # avoids mutating the original graph
             position = attrs.pop("position", {"x": default_position[0], "y": default_position[1]})
             if isinstance(position, (tuple, list)):
                 position = {"x": position[0], "y": position[1]}
@@ -2027,7 +2037,7 @@ class ReactFlow(ReactComponent):
         event_type : str
             Type of event to listen for. Use ``"*"`` to listen to all events.
             Available event types:
-            
+
             - ``"node_added"``: Node was added to the graph
             - ``"node_deleted"``: Node was removed from the graph
             - ``"node_moved"``: Node was dragged to a new position
@@ -2048,14 +2058,14 @@ class ReactFlow(ReactComponent):
         Listen for node movements:
 
         >>> from panel_reactflow import ReactFlow
-        >>> 
+        >>>
         >>> flow = ReactFlow()
-        >>> 
+        >>>
         >>> def on_move(event):
         ...     node_id = event["node_id"]
         ...     position = event["position"]
         ...     print(f"Node {node_id} moved to ({position['x']}, {position['y']})")
-        >>> 
+        >>>
         >>> flow.on("node_moved", on_move)
 
         Track all graph changes:
@@ -2063,20 +2073,20 @@ class ReactFlow(ReactComponent):
         >>> def on_any_event(event):
         ...     event_type = event["type"]
         ...     print(f"Event: {event_type}")
-        >>> 
+        >>>
         >>> flow.on("*", on_any_event)
 
         Build a workflow tracker:
 
         >>> nodes_added = []
         >>> edges_added = []
-        >>> 
+        >>>
         >>> def track_node(event):
         ...     nodes_added.append(event["node"])
-        >>> 
+        >>>
         >>> def track_edge(event):
         ...     edges_added.append(event["edge"])
-        >>> 
+        >>>
         >>> flow.on("node_added", track_node)
         >>> flow.on("edge_added", track_edge)
 
@@ -2086,7 +2096,7 @@ class ReactFlow(ReactComponent):
         ...     selected_nodes = event["nodes"]
         ...     selected_edges = event["edges"]
         ...     print(f"Selected {len(selected_nodes)} nodes and {len(selected_edges)} edges")
-        >>> 
+        >>>
         >>> flow.on("selection_changed", on_selection)
 
         Update analytics on data changes:
@@ -2096,7 +2106,7 @@ class ReactFlow(ReactComponent):
         ...     patch = event["patch"]
         ...     print(f"Node {node_id} updated: {patch}")
         ...     # Update database, trigger recalculation, etc.
-        >>> 
+        >>>
         >>> flow.on("node_data_changed", on_data_change)
 
         Notes
