@@ -1,7 +1,7 @@
 import pandas as pd
 import panel as pn
 import param  # type: ignore
-from panel.layout.base import Panel
+from panel.layout.base import ListLike, Panel
 from panel.pane.base import PaneBase
 from panel.widgets.base import WidgetBase
 from panel_material_ui import (
@@ -25,9 +25,15 @@ from panel_material_ui import (
 
 
 class JSONSchema(PaneBase):
+    # The default Paper component from
+    # panel_material_ui inherits from ReactComponent/ListLike, not from
+    # panel.layout.base.Panel.
     default_layout = param.ClassSelector(
         default=Paper,
-        class_=(Panel,),
+        class_=(
+            Panel,
+            ListLike,
+        ),
         is_instance=False,
         doc="""
         Defines the layout the model(s) returned by the pane will
