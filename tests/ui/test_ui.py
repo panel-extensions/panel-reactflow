@@ -10,7 +10,7 @@ pytest.importorskip("playwright")
 
 from playwright.sync_api import expect
 
-pn.extension()
+pn.extension("jsoneditor")
 
 pytestmark = pytest.mark.ui
 
