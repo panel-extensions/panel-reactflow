@@ -1162,13 +1162,11 @@ class ReactFlow(ReactComponent):
 
     def __init__(self, **params: Any):
         # Ensure jsoneditor extension is loaded since we use JSONEditor widgets
-        # in our default editors (JsonEditor and SchemaEditor fallback)
+        # in our default editors (JsonEditor and SchemaEditor fallback).
+        # panel_extension() is idempotent so this is safe to call multiple times.
         from panel.config import panel_extension as extension
-        from panel.io.state import state
-        # Only load if not already loaded (state._extensions is None before pn.extension() is called)
-        if state._extensions is None or 'jsoneditor' not in state._extensions:
-            extension('jsoneditor')
-        
+        extension('jsoneditor')
+
         self._node_ids: list[str] = []
         self._edge_ids: list[str] = []
         # Normalize type specs before parent init so the frontend receives
