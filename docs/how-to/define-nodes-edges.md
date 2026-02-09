@@ -112,15 +112,15 @@ from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec, NodeType
 # Define node types with multiple handles
 node_types = {
     "producer": NodeType(
-        type="producer", 
-        label="Producer", 
-        inputs=[], 
+        type="producer",
+        label="Producer",
+        inputs=[],
         outputs=["result", "error"]
     ),
     "consumer": NodeType(
-        type="consumer", 
-        label="Consumer", 
-        inputs=["data", "config"], 
+        type="consumer",
+        label="Consumer",
+        inputs=["data", "config"],
         outputs=[]
     ),
 }
@@ -134,8 +134,8 @@ nodes = [
 # Connect producer's "result" output to consumer's "data" input
 edges = [
     EdgeSpec(
-        id="e1", 
-        source="p", 
+        id="e1",
+        source="p",
         target="c",
         sourceHandle="result",
         targetHandle="data"

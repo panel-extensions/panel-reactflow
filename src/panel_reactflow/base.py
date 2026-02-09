@@ -1910,6 +1910,10 @@ class ReactFlow(ReactComponent):
                 data["label"] = edge["label"]
             if edge.get("type") is not None:
                 data["type"] = edge["type"]
+            if edge.get("sourceHandle") is not None:
+                data["sourceHandle"] = edge["sourceHandle"]
+            if edge.get("targetHandle") is not None:
+                data["targetHandle"] = edge["targetHandle"]
             if multigraph:
                 graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
             else:
@@ -2033,6 +2037,8 @@ class ReactFlow(ReactComponent):
                 edge_data = {**embedded_edge_data, **edge_data}
             label = edge_data.pop("label", None)
             edge_type = edge_data.pop("type", None)
+            source_handle = edge_data.pop("sourceHandle", None)
+            target_handle = edge_data.pop("targetHandle", None)
             edge_id = key if key is not None else f"{source}->{target}"
             edge = {
                 "id": str(edge_id),
@@ -2044,6 +2050,10 @@ class ReactFlow(ReactComponent):
                 edge["label"] = label
             if edge_type is not None:
                 edge["type"] = edge_type
+            if source_handle is not None:
+                edge["sourceHandle"] = source_handle
+            if target_handle is not None:
+                edge["targetHandle"] = target_handle
             edges.append(edge)
         return cls(nodes=nodes, edges=edges)
 

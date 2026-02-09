@@ -45,13 +45,7 @@ def test_edge_spec_roundtrip() -> None:
 
 def test_edge_spec_with_handles() -> None:
     """Test that EdgeSpec correctly handles sourceHandle and targetHandle."""
-    edge = EdgeSpec(
-        id="e1",
-        source="producer",
-        target="consumer",
-        sourceHandle="result",
-        targetHandle="mode"
-    )
+    edge = EdgeSpec(id="e1", source="producer", target="consumer", sourceHandle="result", targetHandle="mode")
     payload = edge.to_dict()
     assert payload["source"] == "producer"
     assert payload["target"] == "consumer"
@@ -72,6 +66,25 @@ def test_edge_spec_without_handles() -> None:
     edge2 = EdgeSpec.from_dict(payload)
     assert edge2.sourceHandle is None
     assert edge2.targetHandle is None
+
+
+def test_edge_spec_with_handles_via_add_edge() -> None:
+    """Test that sourceHandle/targetHandle survive add_edge via ReactFlow."""
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge(
+        EdgeSpec(
+            id="e1",
+            source="n1",
+            target="n2",
+            sourceHandle="out1",
+            targetHandle="in1",
+        )
+    )
+    edge = flow.edges[0]
+    assert edge["sourceHandle"] == "out1"
+    assert edge["targetHandle"] == "in1"
 
 
 def test_reactflow_add_remove() -> None:
@@ -147,6 +160,35 @@ def test_reactflow_from_networkx() -> None:
         {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "type": "panel"},
     ]
     assert flow.edges == [{"id": "n1->n2", "source": "n1", "target": "n2", "data": {}}]
+
+
+@nx_available
+def test_networkx_roundtrip_with_handles() -> None:
+    """Test that sourceHandle/targetHandle survive a NetworkX roundtrip."""
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge(
+        EdgeSpec(
+            id="e1",
+            source="n1",
+            target="n2",
+            sourceHandle="out",
+            targetHandle="in",
+        )
+    )
+    graph = flow.to_networkx()
+    # Handles stored as edge attributes
+    assert graph["n1"]["n2"]["sourceHandle"] == "out"
+    assert graph["n1"]["n2"]["targetHandle"] == "in"
+    # Roundtrip back
+    flow2 = ReactFlow.from_networkx(graph)
+    edge = flow2.edges[0]
+    assert edge["sourceHandle"] == "out"
+    assert edge["targetHandle"] == "in"
+    # Handles should not leak into data
+    assert "sourceHandle" not in edge["data"]
+    assert "targetHandle" not in edge["data"]
 
 
 # --- NodeType / EdgeType / SchemaSource tests ---
