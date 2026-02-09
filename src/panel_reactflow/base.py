@@ -929,10 +929,6 @@ class SchemaEditor(Editor):
         return self._panel
 
 
-# Sentinel value to distinguish "not provided" from "explicitly None"
-_NOT_PROVIDED = object()
-
-
 class ReactFlow(ReactComponent):
     """Interactive flow-based graph visualization and editing component.
 
@@ -1392,12 +1388,12 @@ class ReactFlow(ReactComponent):
         params.pop("_edge_editors", None)
         return params
 
-    def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any = _NOT_PROVIDED) -> None:
+    def add_node(self, node: dict[str, Any] | NodeSpec) -> None:
         """Add a node to the graph.
 
         Adds a new node to the graph with optional validation. If a ``view``
-        is provided, it will be embedded inside the node and rendered as
-        Panel content.
+        is included in the node dict or :class:`NodeSpec`, it will be embedded
+        inside the node and rendered as Panel content.
 
         Parameters
         ----------
@@ -1410,12 +1406,6 @@ class ReactFlow(ReactComponent):
               (defaults to ``{"x": 0.0, "y": 0.0}``)
             - ``type``: Node type (defaults to ``"panel"``)
             - ``data``: Custom data dict (defaults to ``{}``)
-        view : Panel viewable, optional
-            Optional Panel viewable (widget, pane, layout) to render inside
-            the node. The view will be displayed as the node's content.
-            If provided, this will override any ``view`` specified in the node
-            dictionary or :class:`NodeSpec`. If not provided, any ``view`` from
-            the node dictionary or :class:`NodeSpec` will be preserved.
 
         Raises
         ------
@@ -1445,13 +1435,14 @@ class ReactFlow(ReactComponent):
         ...     label="Another Node"
         ... ))
 
-        Add a node with embedded view:
+        Add a node with embedded view via NodeSpec:
 
         >>> import panel as pn
-        >>> flow.add_node(
-        ...     NodeSpec(id="plot1", position={"x": 200, "y": 0}),
+        >>> flow.add_node(NodeSpec(
+        ...     id="plot1",
+        ...     position={"x": 200, "y": 0},
         ...     view=pn.pane.Markdown("# Hello World")
-        ... )
+        ... ))
 
         Add a typed node with data:
 
@@ -1475,9 +1466,6 @@ class ReactFlow(ReactComponent):
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        # Override view if explicitly provided (even if None)
-        if view is not _NOT_PROVIDED:
-            payload["view"] = view
         self.nodes = self.nodes + [payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
