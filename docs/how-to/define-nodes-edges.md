@@ -63,14 +63,16 @@ edges = [
 ]
 ```
 
-| Key      | Required | Description |
-|----------|----------|-------------|
-| `id`     | yes      | Unique string identifier. |
-| `source` | yes      | ID of the source node. |
-| `target` | yes      | ID of the target node. |
-| `label`  | no       | Text rendered on the edge. |
-| `type`   | no       | Edge type name (for styling / editors). |
-| `data`   | no       | Arbitrary dict of payload data. |
+| Key            | Required | Description |
+|----------------|----------|-------------|
+| `id`           | yes      | Unique string identifier. |
+| `source`       | yes      | ID of the source node. |
+| `target`       | yes      | ID of the target node. |
+| `label`        | no       | Text rendered on the edge. |
+| `type`         | no       | Edge type name (for styling / editors). |
+| `data`         | no       | Arbitrary dict of payload data. |
+| `sourceHandle` | no       | Specific output handle on the source node. |
+| `targetHandle` | no       | Specific input handle on the target node. |
 
 ---
 
@@ -97,6 +99,53 @@ e1 = EdgeSpec(
     label="next",
 ).to_dict()
 ```
+
+---
+
+## Connect to specific handles
+
+When a node type defines multiple input or output handles (via `inputs=["a", "b"]` or `outputs=["x", "y"]`), you can route edges to specific handles using `sourceHandle` and `targetHandle`.
+
+```python
+from panel_reactflow import ReactFlow, NodeSpec, EdgeSpec, NodeType
+
+# Define node types with multiple handles
+node_types = {
+    "producer": NodeType(
+        type="producer", 
+        label="Producer", 
+        inputs=[], 
+        outputs=["result", "error"]
+    ),
+    "consumer": NodeType(
+        type="consumer", 
+        label="Consumer", 
+        inputs=["data", "config"], 
+        outputs=[]
+    ),
+}
+
+# Create nodes
+nodes = [
+    NodeSpec(id="p", type="producer", position={"x": 0, "y": 0}, label="Producer").to_dict(),
+    NodeSpec(id="c", type="consumer", position={"x": 400, "y": 0}, label="Consumer").to_dict(),
+]
+
+# Connect producer's "result" output to consumer's "data" input
+edges = [
+    EdgeSpec(
+        id="e1", 
+        source="p", 
+        target="c",
+        sourceHandle="result",
+        targetHandle="data"
+    ).to_dict(),
+]
+
+flow = ReactFlow(nodes=nodes, edges=edges, node_types=node_types)
+```
+
+Without `sourceHandle` and `targetHandle`, edges connect to the default (first) handle on each node.
 
 ---
 
