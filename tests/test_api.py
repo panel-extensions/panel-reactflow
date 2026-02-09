@@ -321,3 +321,93 @@ def test_node_types_dict_passthrough() -> None:
     spec = {"type": "task", "label": "Task", "schema": None, "inputs": None, "outputs": None}
     flow = ReactFlow(node_types={"task": spec})
     assert flow.node_types["task"] == spec
+
+
+def test_nodespec_autoserialize_on_init() -> None:
+    """NodeSpec objects should be automatically converted to dicts on init."""
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
+    node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
+    flow = ReactFlow(nodes=[node1, node2])
+    
+    # Verify nodes are now dictionaries
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[0]["label"] == "Node 1"
+    assert flow.nodes[1]["id"] == "n2"
+    assert flow.nodes[1]["label"] == "Node 2"
+
+
+def test_edgespec_autoserialize_on_init() -> None:
+    """EdgeSpec objects should be automatically converted to dicts on init."""
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
+    edge2 = EdgeSpec(id="e2", source="n2", target="n3")
+    flow = ReactFlow(edges=[edge1, edge2])
+    
+    # Verify edges are now dictionaries
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[0]["source"] == "n1"
+    assert flow.edges[0]["target"] == "n2"
+    assert flow.edges[0]["label"] == "Edge 1"
+    assert flow.edges[1]["id"] == "e2"
+
+
+def test_nodespec_autoserialize_on_assignment() -> None:
+    """NodeSpec objects should be automatically converted when assigned to nodes param."""
+    flow = ReactFlow()
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
+    node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
+    
+    # Assign NodeSpec objects directly
+    flow.nodes = [node1, node2]
+    
+    # Verify they were converted to dicts
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[1]["id"] == "n2"
+
+
+def test_edgespec_autoserialize_on_assignment() -> None:
+    """EdgeSpec objects should be automatically converted when assigned to edges param."""
+    flow = ReactFlow()
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
+    edge2 = EdgeSpec(id="e2", source="n2", target="n3")
+    
+    # Assign EdgeSpec objects directly
+    flow.edges = [edge1, edge2]
+    
+    # Verify they were converted to dicts
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[1]["id"] == "e2"
+
+
+def test_mixed_nodespec_and_dict() -> None:
+    """Should handle a mix of NodeSpec and dict objects."""
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0})
+    node2 = {"id": "n2", "position": {"x": 100, "y": 50}, "data": {}}
+    flow = ReactFlow(nodes=[node1, node2])
+    
+    # Both should be dicts
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[1]["id"] == "n2"
+
+
+def test_mixed_edgespec_and_dict() -> None:
+    """Should handle a mix of EdgeSpec and dict objects."""
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2")
+    edge2 = {"id": "e2", "source": "n2", "target": "n3", "data": {}}
+    flow = ReactFlow(edges=[edge1, edge2])
+    
+    # Both should be dicts
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[1]["id"] == "e2"
+
