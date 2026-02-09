@@ -25,9 +25,6 @@ from panel_material_ui import (
 
 
 class JSONSchema(PaneBase):
-    # The default Paper component from
-    # panel_material_ui inherits from ReactComponent/ListLike, not from
-    # panel.layout.base.Panel.
     default_layout = param.ClassSelector(
         default=Paper,
         class_=(
