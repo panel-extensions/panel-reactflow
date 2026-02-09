@@ -28,9 +28,7 @@
 }
 
 .rf-node-toolbar-button {
-    position: absolute;
-    top: 7px;
-    right: 7px;
+    float: right;
     border: none;
     background: transparent;
     font-size: 17px;
@@ -38,6 +36,7 @@
     cursor: pointer;
     z-index: 2;
     padding: 0;
+    margin: 0 0 0 6px;
     transition: color 0.1s;
 }
 
