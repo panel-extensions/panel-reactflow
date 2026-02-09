@@ -1164,8 +1164,8 @@ class ReactFlow(ReactComponent):
         # Ensure jsoneditor extension is loaded since we use JSONEditor widgets
         # in our default editors (JsonEditor and SchemaEditor fallback).
         # panel_extension() is idempotent so this is safe to call multiple times.
-        from panel.config import panel_extension as extension
-        extension('jsoneditor')
+        from panel.config import panel_extension
+        panel_extension('jsoneditor')
 
         self._node_ids: list[str] = []
         self._edge_ids: list[str] = []
