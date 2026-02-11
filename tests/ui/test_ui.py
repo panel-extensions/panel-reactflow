@@ -1,6 +1,7 @@
 """UI tests for ReactFlow using Playwright."""
 
 import panel as pn
+import panel.models.jsoneditor  # noqa
 import pytest
 from panel.tests.util import serve_component, wait_until
 
@@ -9,8 +10,6 @@ from panel_reactflow import EdgeSpec, NodeSpec, NodeType, ReactFlow
 pytest.importorskip("playwright")
 
 from playwright.sync_api import expect
-
-pn.extension()
 
 pytestmark = pytest.mark.ui
 
