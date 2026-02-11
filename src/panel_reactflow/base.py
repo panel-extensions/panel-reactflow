@@ -569,6 +569,12 @@ class EdgeSpec:
     markerEnd : dict, optional
         Arrow marker configuration for the edge end. Example:
         ``{"type": "arrow", "color": "#000000"}``
+    sourceHandle : str, optional
+        ID of the specific handle on the source node where the edge originates.
+        Use this when the source node has multiple output handles defined.
+    targetHandle : str, optional
+        ID of the specific handle on the target node where the edge terminates.
+        Use this when the target node has multiple input handles defined.
 
     Methods
     -------
@@ -611,6 +617,16 @@ class EdgeSpec:
     ...     data={"weight": 0.75, "confidence": 0.9}
     ... )
 
+    Create an edge with specific handles:
+
+    >>> edge = EdgeSpec(
+    ...     id="handle_edge",
+    ...     source="producer",
+    ...     target="consumer",
+    ...     sourceHandle="result",
+    ...     targetHandle="mode"
+    ... )
+
     Add to a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow
@@ -627,6 +643,8 @@ class EdgeSpec:
     data: dict[str, Any] | None = None
     style: dict[str, Any] | None = None
     markerEnd: dict[str, Any] | None = None
+    sourceHandle: str | None = None
+    targetHandle: str | None = None
 
     def __post_init__(self) -> None:
         if self.data is None:
@@ -653,6 +671,10 @@ class EdgeSpec:
             payload["style"] = self.style
         if self.markerEnd is not None:
             payload["markerEnd"] = self.markerEnd
+        if self.sourceHandle is not None:
+            payload["sourceHandle"] = self.sourceHandle
+        if self.targetHandle is not None:
+            payload["targetHandle"] = self.targetHandle
         return payload
 
     @classmethod
@@ -1909,6 +1931,10 @@ class ReactFlow(ReactComponent):
                 data["label"] = edge["label"]
             if edge.get("type") is not None:
                 data["type"] = edge["type"]
+            if edge.get("sourceHandle") is not None:
+                data["sourceHandle"] = edge["sourceHandle"]
+            if edge.get("targetHandle") is not None:
+                data["targetHandle"] = edge["targetHandle"]
             if multigraph:
                 graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
             else:
@@ -2032,6 +2058,8 @@ class ReactFlow(ReactComponent):
                 edge_data = {**embedded_edge_data, **edge_data}
             label = edge_data.pop("label", None)
             edge_type = edge_data.pop("type", None)
+            source_handle = edge_data.pop("sourceHandle", None)
+            target_handle = edge_data.pop("targetHandle", None)
             edge_id = key if key is not None else f"{source}->{target}"
             edge = {
                 "id": str(edge_id),
@@ -2043,6 +2071,10 @@ class ReactFlow(ReactComponent):
                 edge["label"] = label
             if edge_type is not None:
                 edge["type"] = edge_type
+            if source_handle is not None:
+                edge["sourceHandle"] = source_handle
+            if target_handle is not None:
+                edge["targetHandle"] = target_handle
             edges.append(edge)
         return cls(nodes=nodes, edges=edges)
 
