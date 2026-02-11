@@ -11,6 +11,9 @@ build-backend = "hatchling.build"
 [tool.setuptools_scm]
 version_scheme = "post-release"
 
+[tool.hatch.build]
+artifacts = ["src/panel_reactflow/dist/**"]
+
 [tool.hatch.build.hooks.custom]
 path = 'hatch_build.py'
 
