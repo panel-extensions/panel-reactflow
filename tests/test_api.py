@@ -171,7 +171,7 @@ def test_reactflow_add_node_with_viewer(document, comm) -> None:
 
     flow = ReactFlow()
     my_viewer = MyViewer()
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}}, view=my_viewer)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}, "view": my_viewer})
 
     # This should not raise AttributeError about '_models'
     _ = flow.get_root(document, comm=comm)
@@ -194,7 +194,7 @@ def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
 
     flow = ReactFlow()
     mock_plot = MockPlot()
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Plot Node", "data": {}}, view=mock_plot)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Plot Node", "data": {}, "view": mock_plot})
 
     # This should not raise AttributeError about '_models'
     # The object should be converted via pn.panel()
@@ -481,7 +481,7 @@ def test_nodespec_autoserialize_on_init() -> None:
     node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
     node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
     flow = ReactFlow(nodes=[node1, node2])
-    
+
     # Verify nodes are now dictionaries
     assert isinstance(flow.nodes[0], dict)
     assert isinstance(flow.nodes[1], dict)
@@ -496,7 +496,7 @@ def test_edgespec_autoserialize_on_init() -> None:
     edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
     edge2 = EdgeSpec(id="e2", source="n2", target="n3")
     flow = ReactFlow(edges=[edge1, edge2])
-    
+
     # Verify edges are now dictionaries
     assert isinstance(flow.edges[0], dict)
     assert isinstance(flow.edges[1], dict)
@@ -512,10 +512,10 @@ def test_nodespec_autoserialize_on_assignment() -> None:
     flow = ReactFlow()
     node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
     node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
-    
+
     # Assign NodeSpec objects directly
     flow.nodes = [node1, node2]
-    
+
     # Verify they were converted to dicts
     assert isinstance(flow.nodes[0], dict)
     assert isinstance(flow.nodes[1], dict)
@@ -528,10 +528,10 @@ def test_edgespec_autoserialize_on_assignment() -> None:
     flow = ReactFlow()
     edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
     edge2 = EdgeSpec(id="e2", source="n2", target="n3")
-    
+
     # Assign EdgeSpec objects directly
     flow.edges = [edge1, edge2]
-    
+
     # Verify they were converted to dicts
     assert isinstance(flow.edges[0], dict)
     assert isinstance(flow.edges[1], dict)
@@ -544,7 +544,7 @@ def test_mixed_nodespec_and_dict() -> None:
     node1 = NodeSpec(id="n1", position={"x": 0, "y": 0})
     node2 = {"id": "n2", "position": {"x": 100, "y": 50}, "data": {}}
     flow = ReactFlow(nodes=[node1, node2])
-    
+
     # Both should be dicts
     assert isinstance(flow.nodes[0], dict)
     assert isinstance(flow.nodes[1], dict)
@@ -557,10 +557,9 @@ def test_mixed_edgespec_and_dict() -> None:
     edge1 = EdgeSpec(id="e1", source="n1", target="n2")
     edge2 = {"id": "e2", "source": "n2", "target": "n3", "data": {}}
     flow = ReactFlow(edges=[edge1, edge2])
-    
+
     # Both should be dicts
     assert isinstance(flow.edges[0], dict)
     assert isinstance(flow.edges[1], dict)
     assert flow.edges[0]["id"] == "e1"
     assert flow.edges[1]["id"] == "e2"
-

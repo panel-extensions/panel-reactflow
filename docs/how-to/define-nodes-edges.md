@@ -119,10 +119,10 @@ flow = ReactFlow(nodes=nodes, edges=edges)
 !!! note "Automatic Serialization"
     `NodeSpec` and `EdgeSpec` objects are automatically converted to dictionaries
     when passed to `ReactFlow`. You don't need to call `.to_dict()` manually.
-    
+
     However, `.to_dict()` is still available if you need to convert them explicitly
     for other use cases:
-    
+
     ```python
     node_dict = NodeSpec(id="n1", position={"x": 0, "y": 0}).to_dict()
     ```
