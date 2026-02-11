@@ -1,5 +1,32 @@
 # Release Notes
 
+## Version 0.2.0
+
+This release focuses on stronger typed graph specs, better node-view handling,
+and improved docs and packaging.
+
+### Highlights
+
+- **`NodeSpec` view support** — added a `view` parameter to `NodeSpec` and
+  fixed `add_node` behavior so embedded views are preserved when adding nodes
+  programmatically.
+- **Safer embedded view handling** — fixed an `AttributeError` when node views
+  are Panel `Viewer` objects or other arbitrary view-like objects.
+- **`EdgeSpec` handle targeting** — added `sourceHandle` and `targetHandle`
+  fields to support explicit edge-to-port connections.
+- **Spec auto-serialization** — added automatic serialization for `NodeSpec`
+  and `EdgeSpec` objects to reduce boilerplate when using dataclass-based graph
+  definitions.
+- **Handle rendering fix** — corrected empty handle list behavior so `[]` is
+  treated distinctly from missing/undefined handles.
+- **Styling hook for labels** — added the `rf-node-label` CSS class on node
+  labels for easier targeted styling.
+- **Docs and onboarding updates** — quickstart and index docs now explicitly
+  document the required `pn.extension("jsoneditor")` setup; additional how-to
+  docs were updated for new handle and serialization behavior.
+- **Packaging reliability** — ensured the frontend `dist` assets are included
+  in distributions.
+
 ## Version 0.1.0
 
 *Initial release*
