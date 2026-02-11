@@ -25,6 +25,11 @@ const BUILTIN_NODE_TYPES = {
 };
 
 function renderHandles(direction, handles) {
+  // Explicitly empty array → no handles
+  if (Array.isArray(handles) && handles.length === 0) {
+    return null;
+  }
+  // null/undefined → default handle
   if (!handles?.length) {
     return (
       <Handle
