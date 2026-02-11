@@ -1,6 +1,7 @@
 """UI tests for ReactFlow using Playwright."""
 
 import panel as pn
+import panel.models.jsoneditor  # noqa
 import pytest
 from panel.tests.util import serve_component, wait_until
 
