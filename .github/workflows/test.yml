@@ -135,6 +135,7 @@ jobs:
         environment: ["test-ui"]
     timeout-minutes: 60
     env:
+      PYTHONIOENCODING: utf8
       PANEL_LOG_LEVEL: info
       FAIL: "--screenshot only-on-failure --full-page-screenshot --output ui_screenshots --tracing retain-on-failure"
     steps:
