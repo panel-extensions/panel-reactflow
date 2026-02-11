@@ -5,7 +5,7 @@ import panel.models.jsoneditor  # noqa
 import pytest
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import EdgeSpec, NodeSpec, NodeType, ReactFlow
+from panel_reactflow import EdgeSpec, JsonEditor, NodeSpec, NodeType, ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -30,12 +30,8 @@ _TASK_SCHEMA = {
 def _make_flow(*, editor_mode="toolbar", include_edge=True):
     nodes = [
         NodeSpec(
-            id="n1",
-            position={"x": 0, "y": 0},
-            label="Start",
-            data={"status": "idle", "notes": "Alpha"},
-        ).to_dict()
-        | {"view": pn.pane.Markdown("Node view for start")},
+            id="n1", position={"x": 0, "y": 0}, label="Start", data={"status": "idle", "notes": "Alpha"}, view=pn.pane.Markdown("Node view for start")
+        ).to_dict(),
         NodeSpec(
             id="n2",
             position={"x": 260, "y": 60},
@@ -56,6 +52,7 @@ def _make_flow(*, editor_mode="toolbar", include_edge=True):
     flow = ReactFlow(
         nodes=nodes,
         edges=edges,
+        node_editors={"panel": JsonEditor},
         node_types={
             "panel": NodeType(type="panel", label="Panel", schema=_TASK_SCHEMA),
         },

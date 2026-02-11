@@ -21,7 +21,6 @@ from panel.io.state import state
 from panel.util import base_version, classproperty
 from panel.viewable import Viewer
 from panel.widgets import JSONEditor
-from panel_material_ui import Paper
 
 from .__version import __version__  # noqa
 
@@ -925,7 +924,7 @@ class SchemaEditor(Editor):
                         lambda event, _n=name: self._on_widget_change(_n, event),
                         "value",
                     )
-                self._panel = Paper(self._form, margin=0)
+                self._panel = self._form.layout
             except Exception:
                 # Graceful fallback if JSONSchema rendering fails
                 # (e.g. missing pandas dependency).
