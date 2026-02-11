@@ -1169,8 +1169,15 @@ class ReactFlow(ReactComponent):
             params["node_types"] = _coerce_spec_map(params["node_types"])
         if "edge_types" in params:
             params["edge_types"] = _coerce_spec_map(params["edge_types"], edge=True)
+        # Normalize nodes and edges to ensure NodeSpec/EdgeSpec are converted to dicts
+        if "nodes" in params:
+            params["nodes"] = [ReactFlow._coerce_node(node) for node in params["nodes"]]
+        if "edges" in params:
+            params["edges"] = [ReactFlow._coerce_edge(edge) for edge in params["edges"]]
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
+        self.param.watch(self._normalize_nodes, ["nodes"])
+        self.param.watch(self._normalize_edges, ["edges"])
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
         self.param.watch(
@@ -2146,6 +2153,20 @@ class ReactFlow(ReactComponent):
         if normalized != event.new:
             setattr(self, event.name, normalized)
 
+    def _normalize_nodes(self, event: param.parameterized.Event) -> None:
+        """Normalize nodes list by converting NodeSpec objects to dicts."""
+        normalized = [self._coerce_node(node) for node in event.new]
+        # Only update if there were actual changes to avoid infinite recursion
+        if any(n1 is not n2 for n1, n2 in zip(normalized, event.new, strict=False)):
+            self.nodes = normalized
+
+    def _normalize_edges(self, event: param.parameterized.Event) -> None:
+        """Normalize edges list by converting EdgeSpec objects to dicts."""
+        normalized = [self._coerce_edge(edge) for edge in event.new]
+        # Only update if there were actual changes to avoid infinite recursion
+        if any(e1 is not e2 for e1, e2 in zip(normalized, event.new, strict=False)):
+            self.edges = normalized
+
     @staticmethod
     def _generate_edge_id(source: str, target: str) -> str:
         existing = f"{source}->{target}"
@@ -2153,11 +2174,11 @@ class ReactFlow(ReactComponent):
 
     @staticmethod
     def _coerce_node(node: dict[str, Any] | NodeSpec) -> dict[str, Any]:
-        return node.to_dict() if hasattr(node, "to_dict") else dict(node)
+        return node.to_dict() if hasattr(node, "to_dict") else node
 
     @staticmethod
     def _coerce_edge(edge: dict[str, Any] | EdgeSpec) -> dict[str, Any]:
-        return edge.to_dict() if hasattr(edge, "to_dict") else dict(edge)
+        return edge.to_dict() if hasattr(edge, "to_dict") else edge
 
     def _validate_graph_payload(self, payload: dict[str, Any], *, kind: str) -> None:
         required = {"node": ["id", "position", "data"], "edge": ["id", "source", "target"]}[kind]
