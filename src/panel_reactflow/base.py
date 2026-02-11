@@ -1361,7 +1361,7 @@ class ReactFlow(ReactComponent):
         for node in self.nodes:
             view = node.get("view", None)
             if view is not None:
-                views.append(view)
+                views.append(self._resolve_editor_view(view))
             node_editors.append(self._resolve_editor_view(self._node_editors.get(node.get("id"))))
         edge_editors = [self._resolve_editor_view(self._edge_editors.get(edge.get("id"))) for edge in self.edges]
 
