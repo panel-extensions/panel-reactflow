@@ -35,6 +35,45 @@ def test_node_spec_roundtrip() -> None:
     assert NodeSpec.from_dict(payload).to_dict() == payload
 
 
+def test_node_spec_with_view() -> None:
+    view = pn.pane.Markdown("Hello World")
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+        view=view,
+    )
+    payload = node.to_dict()
+    assert payload["id"] == "n1"
+    assert payload["label"] == "Node 1"
+    assert payload["view"] is view
+    # Test roundtrip with view
+    node_from_dict = NodeSpec.from_dict(payload)
+    assert node_from_dict.view is view
+    assert node_from_dict.to_dict() == payload
+
+
+def test_node_spec_without_view() -> None:
+    """Test that view is not included in dict when None."""
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+    )
+    payload = node.to_dict()
+    assert "view" not in payload
+
+
+def test_reactflow_add_node_with_nodespec_view() -> None:
+    """Test that NodeSpec view is preserved when passed to add_node."""
+    flow = ReactFlow()
+    view = pn.pane.Markdown("Hello")
+    node = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node", view=view)
+    flow.add_node(node)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["view"] is view
+
+
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()
@@ -60,15 +99,15 @@ def test_reactflow_add_node_with_view() -> None:
     events = []
     flow.on("node_added", events.append)
     view = pn.pane.Markdown("Hello")
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}}, view=view)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}, "view": view})
     assert events[-1]["type"] == "node_added"
 
 
 def test_view_idx_updates_on_remove_node(document, comm) -> None:
     flow = ReactFlow()
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}, view=pn.pane.Markdown("A"))
-    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}, view=pn.pane.Markdown("B"))
-    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}}, view=None)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "view": pn.pane.Markdown("A")})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "view": pn.pane.Markdown("B")})
+    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}})
 
     model = flow.get_root(document, comm=comm)
 

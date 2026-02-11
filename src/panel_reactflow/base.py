@@ -414,6 +414,9 @@ class NodeSpec:
         ``{"backgroundColor": "#ff0000", "border": "2px solid black"}``
     className : str, optional
         CSS class name applied to the node for custom styling.
+    view : Panel viewable, optional
+        Optional Panel viewable (widget, pane, layout) to render inside
+        the node. The view will be displayed as the node's content.
 
     Methods
     -------
@@ -454,6 +457,16 @@ class NodeSpec:
     ...     data={"operation": "filter", "threshold": 0.5}
     ... )
 
+    Create a node with an embedded view:
+
+    >>> import panel as pn
+    >>> node = NodeSpec(
+    ...     id="plot1",
+    ...     position={"x": 400, "y": 200},
+    ...     label="Data Plot",
+    ...     view=pn.pane.Markdown("# Hello World")
+    ... )
+
     Add to a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow
@@ -472,6 +485,7 @@ class NodeSpec:
     deletable: bool = True
     style: dict[str, Any] | None = None
     className: str | None = None
+    view: Any | None = None
 
     def __post_init__(self) -> None:
         if self.position is None:
@@ -502,6 +516,8 @@ class NodeSpec:
             payload["style"] = self.style
         if self.className is not None:
             payload["className"] = self.className
+        if self.view is not None:
+            payload["view"] = self.view
         return payload
 
     @classmethod
@@ -1379,12 +1395,12 @@ class ReactFlow(ReactComponent):
         params.pop("_edge_editors", None)
         return params
 
-    def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
+    def add_node(self, node: dict[str, Any] | NodeSpec) -> None:
         """Add a node to the graph.
 
         Adds a new node to the graph with optional validation. If a ``view``
-        is provided, it will be embedded inside the node and rendered as
-        Panel content.
+        is included in the node dict or :class:`NodeSpec`, it will be embedded
+        inside the node and rendered as Panel content.
 
         Parameters
         ----------
@@ -1397,9 +1413,6 @@ class ReactFlow(ReactComponent):
               (defaults to ``{"x": 0.0, "y": 0.0}``)
             - ``type``: Node type (defaults to ``"panel"``)
             - ``data``: Custom data dict (defaults to ``{}``)
-        view : Panel viewable, optional
-            Optional Panel viewable (widget, pane, layout) to render inside
-            the node. The view will be displayed as the node's content.
 
         Raises
         ------
@@ -1429,13 +1442,14 @@ class ReactFlow(ReactComponent):
         ...     label="Another Node"
         ... ))
 
-        Add a node with embedded view:
+        Add a node with embedded view via NodeSpec:
 
         >>> import panel as pn
-        >>> flow.add_node(
-        ...     NodeSpec(id="plot1", position={"x": 200, "y": 0}),
+        >>> flow.add_node(NodeSpec(
+        ...     id="plot1",
+        ...     position={"x": 200, "y": 0},
         ...     view=pn.pane.Markdown("# Hello World")
-        ... )
+        ... ))
 
         Add a typed node with data:
 
@@ -1459,7 +1473,7 @@ class ReactFlow(ReactComponent):
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        self.nodes = self.nodes + [dict(payload, view=view)]
+        self.nodes = self.nodes + [payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
     def _handle_msg(self, msg: dict[str, Any]) -> None:
