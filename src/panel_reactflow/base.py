@@ -414,6 +414,9 @@ class NodeSpec:
         ``{"backgroundColor": "#ff0000", "border": "2px solid black"}``
     className : str, optional
         CSS class name applied to the node for custom styling.
+    view : Panel viewable, optional
+        Optional Panel viewable (widget, pane, layout) to render inside
+        the node. The view will be displayed as the node's content.
 
     Methods
     -------
@@ -454,6 +457,16 @@ class NodeSpec:
     ...     data={"operation": "filter", "threshold": 0.5}
     ... )
 
+    Create a node with an embedded view:
+
+    >>> import panel as pn
+    >>> node = NodeSpec(
+    ...     id="plot1",
+    ...     position={"x": 400, "y": 200},
+    ...     label="Data Plot",
+    ...     view=pn.pane.Markdown("# Hello World")
+    ... )
+
     Add to a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow
@@ -472,6 +485,7 @@ class NodeSpec:
     deletable: bool = True
     style: dict[str, Any] | None = None
     className: str | None = None
+    view: Any | None = None
 
     def __post_init__(self) -> None:
         if self.position is None:
@@ -502,6 +516,8 @@ class NodeSpec:
             payload["style"] = self.style
         if self.className is not None:
             payload["className"] = self.className
+        if self.view is not None:
+            payload["view"] = self.view
         return payload
 
     @classmethod
@@ -553,6 +569,12 @@ class EdgeSpec:
     markerEnd : dict, optional
         Arrow marker configuration for the edge end. Example:
         ``{"type": "arrow", "color": "#000000"}``
+    sourceHandle : str, optional
+        ID of the specific handle on the source node where the edge originates.
+        Use this when the source node has multiple output handles defined.
+    targetHandle : str, optional
+        ID of the specific handle on the target node where the edge terminates.
+        Use this when the target node has multiple input handles defined.
 
     Methods
     -------
@@ -595,6 +617,16 @@ class EdgeSpec:
     ...     data={"weight": 0.75, "confidence": 0.9}
     ... )
 
+    Create an edge with specific handles:
+
+    >>> edge = EdgeSpec(
+    ...     id="handle_edge",
+    ...     source="producer",
+    ...     target="consumer",
+    ...     sourceHandle="result",
+    ...     targetHandle="mode"
+    ... )
+
     Add to a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow
@@ -611,6 +643,8 @@ class EdgeSpec:
     data: dict[str, Any] | None = None
     style: dict[str, Any] | None = None
     markerEnd: dict[str, Any] | None = None
+    sourceHandle: str | None = None
+    targetHandle: str | None = None
 
     def __post_init__(self) -> None:
         if self.data is None:
@@ -637,6 +671,10 @@ class EdgeSpec:
             payload["style"] = self.style
         if self.markerEnd is not None:
             payload["markerEnd"] = self.markerEnd
+        if self.sourceHandle is not None:
+            payload["sourceHandle"] = self.sourceHandle
+        if self.targetHandle is not None:
+            payload["targetHandle"] = self.targetHandle
         return payload
 
     @classmethod
@@ -1169,8 +1207,15 @@ class ReactFlow(ReactComponent):
             params["node_types"] = _coerce_spec_map(params["node_types"])
         if "edge_types" in params:
             params["edge_types"] = _coerce_spec_map(params["edge_types"], edge=True)
+        # Normalize nodes and edges to ensure NodeSpec/EdgeSpec are converted to dicts
+        if "nodes" in params:
+            params["nodes"] = [ReactFlow._coerce_node(node) for node in params["nodes"]]
+        if "edges" in params:
+            params["edges"] = [ReactFlow._coerce_edge(edge) for edge in params["edges"]]
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
+        self.param.watch(self._normalize_nodes, ["nodes"])
+        self.param.watch(self._normalize_edges, ["edges"])
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
         self.param.watch(
@@ -1316,7 +1361,7 @@ class ReactFlow(ReactComponent):
         for node in self.nodes:
             view = node.get("view", None)
             if view is not None:
-                views.append(view)
+                views.append(self._resolve_editor_view(view))
             node_editors.append(self._resolve_editor_view(self._node_editors.get(node.get("id"))))
         edge_editors = [self._resolve_editor_view(self._edge_editors.get(edge.get("id"))) for edge in self.edges]
 
@@ -1372,12 +1417,12 @@ class ReactFlow(ReactComponent):
         params.pop("_edge_editors", None)
         return params
 
-    def add_node(self, node: dict[str, Any] | NodeSpec, *, view: Any | None = None) -> None:
+    def add_node(self, node: dict[str, Any] | NodeSpec) -> None:
         """Add a node to the graph.
 
         Adds a new node to the graph with optional validation. If a ``view``
-        is provided, it will be embedded inside the node and rendered as
-        Panel content.
+        is included in the node dict or :class:`NodeSpec`, it will be embedded
+        inside the node and rendered as Panel content.
 
         Parameters
         ----------
@@ -1390,9 +1435,6 @@ class ReactFlow(ReactComponent):
               (defaults to ``{"x": 0.0, "y": 0.0}``)
             - ``type``: Node type (defaults to ``"panel"``)
             - ``data``: Custom data dict (defaults to ``{}``)
-        view : Panel viewable, optional
-            Optional Panel viewable (widget, pane, layout) to render inside
-            the node. The view will be displayed as the node's content.
 
         Raises
         ------
@@ -1422,13 +1464,14 @@ class ReactFlow(ReactComponent):
         ...     label="Another Node"
         ... ))
 
-        Add a node with embedded view:
+        Add a node with embedded view via NodeSpec:
 
         >>> import panel as pn
-        >>> flow.add_node(
-        ...     NodeSpec(id="plot1", position={"x": 200, "y": 0}),
+        >>> flow.add_node(NodeSpec(
+        ...     id="plot1",
+        ...     position={"x": 200, "y": 0},
         ...     view=pn.pane.Markdown("# Hello World")
-        ... )
+        ... ))
 
         Add a typed node with data:
 
@@ -1452,7 +1495,7 @@ class ReactFlow(ReactComponent):
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        self.nodes = self.nodes + [dict(payload, view=view)]
+        self.nodes = self.nodes + [payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
     def _handle_msg(self, msg: dict[str, Any]) -> None:
@@ -1888,6 +1931,10 @@ class ReactFlow(ReactComponent):
                 data["label"] = edge["label"]
             if edge.get("type") is not None:
                 data["type"] = edge["type"]
+            if edge.get("sourceHandle") is not None:
+                data["sourceHandle"] = edge["sourceHandle"]
+            if edge.get("targetHandle") is not None:
+                data["targetHandle"] = edge["targetHandle"]
             if multigraph:
                 graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
             else:
@@ -2011,6 +2058,8 @@ class ReactFlow(ReactComponent):
                 edge_data = {**embedded_edge_data, **edge_data}
             label = edge_data.pop("label", None)
             edge_type = edge_data.pop("type", None)
+            source_handle = edge_data.pop("sourceHandle", None)
+            target_handle = edge_data.pop("targetHandle", None)
             edge_id = key if key is not None else f"{source}->{target}"
             edge = {
                 "id": str(edge_id),
@@ -2022,6 +2071,10 @@ class ReactFlow(ReactComponent):
                 edge["label"] = label
             if edge_type is not None:
                 edge["type"] = edge_type
+            if source_handle is not None:
+                edge["sourceHandle"] = source_handle
+            if target_handle is not None:
+                edge["targetHandle"] = target_handle
             edges.append(edge)
         return cls(nodes=nodes, edges=edges)
 
@@ -2146,6 +2199,20 @@ class ReactFlow(ReactComponent):
         if normalized != event.new:
             setattr(self, event.name, normalized)
 
+    def _normalize_nodes(self, event: param.parameterized.Event) -> None:
+        """Normalize nodes list by converting NodeSpec objects to dicts."""
+        normalized = [self._coerce_node(node) for node in event.new]
+        # Only update if there were actual changes to avoid infinite recursion
+        if any(n1 is not n2 for n1, n2 in zip(normalized, event.new, strict=False)):
+            self.nodes = normalized
+
+    def _normalize_edges(self, event: param.parameterized.Event) -> None:
+        """Normalize edges list by converting EdgeSpec objects to dicts."""
+        normalized = [self._coerce_edge(edge) for edge in event.new]
+        # Only update if there were actual changes to avoid infinite recursion
+        if any(e1 is not e2 for e1, e2 in zip(normalized, event.new, strict=False)):
+            self.edges = normalized
+
     @staticmethod
     def _generate_edge_id(source: str, target: str) -> str:
         existing = f"{source}->{target}"
@@ -2153,11 +2220,11 @@ class ReactFlow(ReactComponent):
 
     @staticmethod
     def _coerce_node(node: dict[str, Any] | NodeSpec) -> dict[str, Any]:
-        return node.to_dict() if hasattr(node, "to_dict") else dict(node)
+        return node.to_dict() if hasattr(node, "to_dict") else node
 
     @staticmethod
     def _coerce_edge(edge: dict[str, Any] | EdgeSpec) -> dict[str, Any]:
-        return edge.to_dict() if hasattr(edge, "to_dict") else dict(edge)
+        return edge.to_dict() if hasattr(edge, "to_dict") else edge
 
     def _validate_graph_payload(self, payload: dict[str, Any], *, kind: str) -> None:
         required = {"node": ["id", "position", "data"], "edge": ["id", "source", "target"]}[kind]

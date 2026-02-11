@@ -1,19 +1,5 @@
 import React from "react";
-import {
-  Background,
-  Controls,
-  Handle,
-  MiniMap,
-  NodeToolbar,
-  Panel,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  addEdge,
-  useEdgesState,
-  useNodesState,
-  useReactFlow,
-} from "@xyflow/react";
+import { Background, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, addEdge, useEdgesState, useNodesState, useReactFlow } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 const { useCallback, useEffect, useMemo, useRef } = React;
@@ -25,13 +11,13 @@ const BUILTIN_NODE_TYPES = {
 };
 
 function renderHandles(direction, handles) {
+  // Explicitly empty array → no handles
+  if (Array.isArray(handles) && handles.length === 0) {
+    return null;
+  }
+  // null/undefined → default handle
   if (!handles?.length) {
-    return (
-      <Handle
-        type={direction === "input" ? "target" : "source"}
-        position={direction === "input" ? Position.Left : Position.Right}
-      />
-    );
+    return <Handle type={direction === "input" ? "target" : "source"} position={direction === "input" ? Position.Left : Position.Right} />;
   }
   const spacing = 100 / (handles.length + 1);
   return handles.map((handle, index) => (
@@ -51,7 +37,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
     const showGear = editorMode === "toolbar" && hasEditor;
-    const showToolbar = (editorMode === "toolbar" && toolbarOpen && hasEditor);
+    const showToolbar = editorMode === "toolbar" && toolbarOpen && hasEditor;
     const showInlineEditor = editorMode === "node" && hasEditor;
     const showView = data?.view && !spec.minimal;
 
@@ -65,43 +51,31 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
     return (
       <div className="rf-node-content">
         {showToolbar ? (
-          <NodeToolbar
-            isVisible={true}
-            position={Position.Top}
-            style={{background: "white"}}
-          >
+          <NodeToolbar isVisible={true} position={Position.Top} style={{ background: "white" }}>
             {data.editor}
           </NodeToolbar>
-        ): null}
+        ) : null}
         {showGear && (
           <button
             aria-label={showToolbar ? "Hide node toolbar" : "Show node toolbar"}
             onClick={handleGearClick}
-            className={`rf-node-toolbar-button ${
-              showToolbar
-                ? "rf-node-toolbar-button--open"
-                : "rf-node-toolbar-button--closed"
-            }`}
+            className={`rf-node-toolbar-button ${showToolbar ? "rf-node-toolbar-button--open" : "rf-node-toolbar-button--closed"}`}
             tabIndex={0}
             type="button"
             title={showToolbar ? "Hide node toolbar" : "Show node toolbar"}
           >
             <img
-              src={import.meta.url.replace(/(\/[^\/?#]+)?(\?.*)?$/,"/icons/gear.svg")}
+              src={import.meta.url.replace(/(\/[^\/?#]+)?(\?.*)?$/, "/icons/gear.svg")}
               alt=""
               width={14}
               height={14}
               aria-hidden="true"
-              className={`rf-node-toolbar-icon ${
-                showToolbar
-                  ? "rf-node-toolbar-icon--open"
-                  : "rf-node-toolbar-icon--closed"
-              }`}
+              className={`rf-node-toolbar-icon ${showToolbar ? "rf-node-toolbar-icon--open" : "rf-node-toolbar-icon--closed"}`}
             />
           </button>
         )}
         {renderHandles("input", spec.inputs)}
-        <div style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
+        <div className="rf-node-label" style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
           {displayLabel}
         </div>
         {(showView || showInlineEditor) && (
@@ -130,7 +104,7 @@ function useDebouncedSync(syncMode, debounceMs, syncFn) {
         syncFn(payload);
       }
     },
-    [syncMode, debounceMs, syncFn]
+    [syncMode, debounceMs, syncFn],
   );
 }
 
@@ -193,7 +167,7 @@ function FlowInner({
             }
             const data = { ...(node.data || {}), ...(msg.patch || {}) };
             return { ...node, data };
-          })
+          }),
         );
         return;
       }
@@ -206,7 +180,7 @@ function FlowInner({
             const data = { ...(edge.data || {}), ...(msg.patch || {}) };
             const nextLabel = msg.patch?.label ?? edge.label;
             return { ...edge, data, label: nextLabel };
-          })
+          }),
         );
       }
     };
@@ -226,13 +200,8 @@ function FlowInner({
 
   useEffect(() => {
     const nodesSig = signature(pyNodes);
-    const viewsSig = signature(
-      (views || []).map((view) => view?.props?.id ?? null)
-    );
-    if (
-      nodesSig === lastHydrated.current.nodesSig &&
-      viewsSig === lastHydrated.current.viewsRef
-    ) {
+    const viewsSig = signature((views || []).map((view) => view?.props?.id ?? null));
+    if (nodesSig === lastHydrated.current.nodesSig && viewsSig === lastHydrated.current.viewsRef) {
       return;
     }
     lastHydrated.current.nodesSig = nodesSig;
@@ -279,7 +248,7 @@ function FlowInner({
       }
       model.send_msg(payload);
     },
-    [model]
+    [model],
   );
 
   const schedulePatch = useDebouncedSync(syncMode, debounceMs, sendPatch);
@@ -295,15 +264,13 @@ function FlowInner({
       setEdges(updated);
       sendPatch({ type: "edge_added", edge: newEdge });
     },
-    [enableConnect, sendPatch, setEdges]
+    [enableConnect, sendPatch, setEdges],
   );
 
   const handleNodesChange = useCallback(
     (changes) => {
       onNodesChange(changes);
-      const moved = changes.filter(
-        (change) => change.type === "position" && change.dragging !== true
-      );
+      const moved = changes.filter((change) => change.type === "position" && change.dragging !== true);
       if (!moved.length) {
         return;
       }
@@ -315,7 +282,7 @@ function FlowInner({
         });
       });
     },
-    [onNodesChange, schedulePatch]
+    [onNodesChange, schedulePatch],
   );
 
   const onSelectionChange = useCallback(
@@ -334,7 +301,7 @@ function FlowInner({
         edges: selection.edges,
       });
     },
-    [currentSelection, schedulePatch, selectionSetter]
+    [currentSelection, schedulePatch, selectionSetter],
   );
 
   const onNodesDelete = useCallback(
@@ -363,13 +330,10 @@ function FlowInner({
               ...node,
               data: { ...node.data, view_idx: viewIdx - shift },
             };
-          })
+          }),
         );
       }
-      const deletedEdges = edgesRef.current.filter(
-        (edge) =>
-          deletedIds.includes(edge.source) || deletedIds.includes(edge.target)
-      );
+      const deletedEdges = edgesRef.current.filter((edge) => deletedIds.includes(edge.source) || deletedIds.includes(edge.target));
       schedulePatch({
         type: "node_deleted",
         node_id: deletedIds.length === 1 ? deletedIds[0] : null,
@@ -377,7 +341,7 @@ function FlowInner({
         deleted_edges: deletedEdges.map((edge) => edge.id),
       });
     },
-    [schedulePatch, setNodes]
+    [schedulePatch, setNodes],
   );
 
   const onEdgesDelete = useCallback(
@@ -388,7 +352,7 @@ function FlowInner({
         edge_ids: deletedEdges.map((edge) => edge.id),
       });
     },
-    [schedulePatch]
+    [schedulePatch],
   );
 
   const onMoveEnd = useCallback(
@@ -397,7 +361,7 @@ function FlowInner({
         viewportSetter(nextViewport);
       }
     },
-    [viewport, viewportSetter]
+    [viewport, viewportSetter],
   );
 
   return (
@@ -452,10 +416,7 @@ export function render({ model, view }) {
   const leftPanels = model.get_child("left_panel");
   const rightPanels = model.get_child("right_panel");
 
-  const allNodeTypes = useMemo(
-    () => ({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }),
-    [pyNodeTypes]
-  );
+  const allNodeTypes = useMemo(() => ({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }), [pyNodeTypes]);
 
   const nodeEditorMap = {};
   const nodeHasEditorMap = {};
@@ -515,11 +476,7 @@ export function render({ model, view }) {
   const hydratedNodeTypes = useMemo(() => {
     const mapping = {};
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
-      mapping[typeName] = makeNodeComponent(
-        typeName,
-        spec,
-        editorMode,
-      );
+      mapping[typeName] = makeNodeComponent(typeName, spec, editorMode);
     });
     return mapping;
   }, [editorMode, pyNodeTypes]);
@@ -558,8 +515,8 @@ export function render({ model, view }) {
         </Panel>
         <Panel key="right-panel" position="center-right">
           {rightPanels}
-          {(selection.nodes.length && editorMode === "side" && nodeHasEditorMap[selection.nodes[0]]) ? nodeEditorMap[selection.nodes[0]] : null}
-          {(selection.edges.length && !selection.nodes.length && edgeHasEditorMap[selection.edges[0]]) ? edgeEditorMap[selection.edges[0]] : null}
+          {selection.nodes.length && editorMode === "side" && nodeHasEditorMap[selection.nodes[0]] ? nodeEditorMap[selection.nodes[0]] : null}
+          {selection.edges.length && !selection.nodes.length && edgeHasEditorMap[selection.edges[0]] ? edgeEditorMap[selection.edges[0]] : null}
         </Panel>
       </ReactFlowProvider>
     </div>

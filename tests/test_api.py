@@ -35,12 +35,95 @@ def test_node_spec_roundtrip() -> None:
     assert NodeSpec.from_dict(payload).to_dict() == payload
 
 
+def test_node_spec_with_view() -> None:
+    view = pn.pane.Markdown("Hello World")
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+        view=view,
+    )
+    payload = node.to_dict()
+    assert payload["id"] == "n1"
+    assert payload["label"] == "Node 1"
+    assert payload["view"] is view
+    # Test roundtrip with view
+    node_from_dict = NodeSpec.from_dict(payload)
+    assert node_from_dict.view is view
+    assert node_from_dict.to_dict() == payload
+
+
+def test_node_spec_without_view() -> None:
+    """Test that view is not included in dict when None."""
+    node = NodeSpec(
+        id="n1",
+        position={"x": 1, "y": 2},
+        label="Node 1",
+    )
+    payload = node.to_dict()
+    assert "view" not in payload
+
+
+def test_reactflow_add_node_with_nodespec_view() -> None:
+    """Test that NodeSpec view is preserved when passed to add_node."""
+    flow = ReactFlow()
+    view = pn.pane.Markdown("Hello")
+    node = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node", view=view)
+    flow.add_node(node)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["view"] is view
+
+
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()
     assert payload["source"] == "n1"
     assert payload["data"]["weight"] == 0.5
     assert EdgeSpec.from_dict(payload).to_dict() == payload
+
+
+def test_edge_spec_with_handles() -> None:
+    """Test that EdgeSpec correctly handles sourceHandle and targetHandle."""
+    edge = EdgeSpec(id="e1", source="producer", target="consumer", sourceHandle="result", targetHandle="mode")
+    payload = edge.to_dict()
+    assert payload["source"] == "producer"
+    assert payload["target"] == "consumer"
+    assert payload["sourceHandle"] == "result"
+    assert payload["targetHandle"] == "mode"
+    # Test roundtrip
+    assert EdgeSpec.from_dict(payload).to_dict() == payload
+
+
+def test_edge_spec_without_handles() -> None:
+    """Test that EdgeSpec works without handles (backward compatibility)."""
+    edge = EdgeSpec(id="e1", source="n1", target="n2")
+    payload = edge.to_dict()
+    # When handles are None, they should not be in the payload
+    assert "sourceHandle" not in payload
+    assert "targetHandle" not in payload
+    # Test roundtrip
+    edge2 = EdgeSpec.from_dict(payload)
+    assert edge2.sourceHandle is None
+    assert edge2.targetHandle is None
+
+
+def test_edge_spec_with_handles_via_add_edge() -> None:
+    """Test that sourceHandle/targetHandle survive add_edge via ReactFlow."""
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge(
+        EdgeSpec(
+            id="e1",
+            source="n1",
+            target="n2",
+            sourceHandle="out1",
+            targetHandle="in1",
+        )
+    )
+    edge = flow.edges[0]
+    assert edge["sourceHandle"] == "out1"
+    assert edge["targetHandle"] == "in1"
 
 
 def test_reactflow_add_remove() -> None:
@@ -60,15 +143,15 @@ def test_reactflow_add_node_with_view() -> None:
     events = []
     flow.on("node_added", events.append)
     view = pn.pane.Markdown("Hello")
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}}, view=view)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Pane", "data": {}, "view": view})
     assert events[-1]["type"] == "node_added"
 
 
 def test_view_idx_updates_on_remove_node(document, comm) -> None:
     flow = ReactFlow()
-    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}, view=pn.pane.Markdown("A"))
-    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}, view=pn.pane.Markdown("B"))
-    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}}, view=None)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "view": pn.pane.Markdown("A")})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "view": pn.pane.Markdown("B")})
+    flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}})
 
     model = flow.get_root(document, comm=comm)
 
@@ -77,6 +160,47 @@ def test_view_idx_updates_on_remove_node(document, comm) -> None:
     remaining = {node["id"]: node for node in model.data.nodes}
     assert remaining["n2"]["data"]["view_idx"] == 0
     assert remaining["n3"]["data"].get("view_idx") is None
+
+
+def test_reactflow_add_node_with_viewer(document, comm) -> None:
+    """Test that Viewer objects with __panel__() method work as node views."""
+
+    class MyViewer(pn.viewable.Viewer):
+        def __panel__(self):
+            return pn.pane.Markdown("Hello from Viewer!")
+
+    flow = ReactFlow()
+    my_viewer = MyViewer()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}}, view=my_viewer)
+
+    # This should not raise AttributeError about '_models'
+    _ = flow.get_root(document, comm=comm)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["id"] == "n1"
+
+
+def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
+    """Test that arbitrary objects (e.g., HoloViews) work as node views via pn.panel().
+
+    This addresses issue #13 where objects without __panel__() method
+    (like HoloViews Curve objects) would raise AttributeError.
+    """
+
+    class MockPlot:
+        """Mock object simulating HoloViews/hvplot objects (no __panel__ method)."""
+
+        def __repr__(self):
+            return "MockPlot(data)"
+
+    flow = ReactFlow()
+    mock_plot = MockPlot()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Plot Node", "data": {}}, view=mock_plot)
+
+    # This should not raise AttributeError about '_models'
+    # The object should be converted via pn.panel()
+    _ = flow.get_root(document, comm=comm)
+    assert len(flow.nodes) == 1
+    assert flow.nodes[0]["id"] == "n1"
 
 
 def test_reactflow_events_and_selection() -> None:
@@ -116,6 +240,35 @@ def test_reactflow_from_networkx() -> None:
         {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "type": "panel"},
     ]
     assert flow.edges == [{"id": "n1->n2", "source": "n1", "target": "n2", "data": {}}]
+
+
+@nx_available
+def test_networkx_roundtrip_with_handles() -> None:
+    """Test that sourceHandle/targetHandle survive a NetworkX roundtrip."""
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge(
+        EdgeSpec(
+            id="e1",
+            source="n1",
+            target="n2",
+            sourceHandle="out",
+            targetHandle="in",
+        )
+    )
+    graph = flow.to_networkx()
+    # Handles stored as edge attributes
+    assert graph["n1"]["n2"]["sourceHandle"] == "out"
+    assert graph["n1"]["n2"]["targetHandle"] == "in"
+    # Roundtrip back
+    flow2 = ReactFlow.from_networkx(graph)
+    edge = flow2.edges[0]
+    assert edge["sourceHandle"] == "out"
+    assert edge["targetHandle"] == "in"
+    # Handles should not leak into data
+    assert "sourceHandle" not in edge["data"]
+    assert "targetHandle" not in edge["data"]
 
 
 # --- NodeType / EdgeType / SchemaSource tests ---
@@ -321,3 +474,93 @@ def test_node_types_dict_passthrough() -> None:
     spec = {"type": "task", "label": "Task", "schema": None, "inputs": None, "outputs": None}
     flow = ReactFlow(node_types={"task": spec})
     assert flow.node_types["task"] == spec
+
+
+def test_nodespec_autoserialize_on_init() -> None:
+    """NodeSpec objects should be automatically converted to dicts on init."""
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
+    node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
+    flow = ReactFlow(nodes=[node1, node2])
+    
+    # Verify nodes are now dictionaries
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[0]["label"] == "Node 1"
+    assert flow.nodes[1]["id"] == "n2"
+    assert flow.nodes[1]["label"] == "Node 2"
+
+
+def test_edgespec_autoserialize_on_init() -> None:
+    """EdgeSpec objects should be automatically converted to dicts on init."""
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
+    edge2 = EdgeSpec(id="e2", source="n2", target="n3")
+    flow = ReactFlow(edges=[edge1, edge2])
+    
+    # Verify edges are now dictionaries
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[0]["source"] == "n1"
+    assert flow.edges[0]["target"] == "n2"
+    assert flow.edges[0]["label"] == "Edge 1"
+    assert flow.edges[1]["id"] == "e2"
+
+
+def test_nodespec_autoserialize_on_assignment() -> None:
+    """NodeSpec objects should be automatically converted when assigned to nodes param."""
+    flow = ReactFlow()
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Node 1")
+    node2 = NodeSpec(id="n2", position={"x": 100, "y": 50}, label="Node 2")
+    
+    # Assign NodeSpec objects directly
+    flow.nodes = [node1, node2]
+    
+    # Verify they were converted to dicts
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[1]["id"] == "n2"
+
+
+def test_edgespec_autoserialize_on_assignment() -> None:
+    """EdgeSpec objects should be automatically converted when assigned to edges param."""
+    flow = ReactFlow()
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2", label="Edge 1")
+    edge2 = EdgeSpec(id="e2", source="n2", target="n3")
+    
+    # Assign EdgeSpec objects directly
+    flow.edges = [edge1, edge2]
+    
+    # Verify they were converted to dicts
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[1]["id"] == "e2"
+
+
+def test_mixed_nodespec_and_dict() -> None:
+    """Should handle a mix of NodeSpec and dict objects."""
+    node1 = NodeSpec(id="n1", position={"x": 0, "y": 0})
+    node2 = {"id": "n2", "position": {"x": 100, "y": 50}, "data": {}}
+    flow = ReactFlow(nodes=[node1, node2])
+    
+    # Both should be dicts
+    assert isinstance(flow.nodes[0], dict)
+    assert isinstance(flow.nodes[1], dict)
+    assert flow.nodes[0]["id"] == "n1"
+    assert flow.nodes[1]["id"] == "n2"
+
+
+def test_mixed_edgespec_and_dict() -> None:
+    """Should handle a mix of EdgeSpec and dict objects."""
+    edge1 = EdgeSpec(id="e1", source="n1", target="n2")
+    edge2 = {"id": "e2", "source": "n2", "target": "n3", "data": {}}
+    flow = ReactFlow(edges=[edge1, edge2])
+    
+    # Both should be dicts
+    assert isinstance(flow.edges[0], dict)
+    assert isinstance(flow.edges[1], dict)
+    assert flow.edges[0]["id"] == "e1"
+    assert flow.edges[1]["id"] == "e2"
+
