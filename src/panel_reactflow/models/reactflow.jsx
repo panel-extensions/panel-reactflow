@@ -48,10 +48,12 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
       toggleToolbar((v) => !v);
     };
 
+    console.log(data)
+
     return (
       <div className="rf-node-content">
-        {showToolbar ? (
-          <NodeToolbar isVisible={true} position={Position.Top} style={{ background: "white" }}>
+        {showGear ? (
+          <NodeToolbar isVisible={showToolbar} position={Position.Top} style={{ background: "white" }}>
             {data.editor}
           </NodeToolbar>
         ) : null}
@@ -137,6 +139,8 @@ function FlowInner({
   onPaneClick,
   defaultEdgeOptions,
   nodeTypes,
+  nodeEditors,
+  edgeEditors,
   editable,
   enableConnect,
   enableDelete,
@@ -201,11 +205,13 @@ function FlowInner({
   useEffect(() => {
     const nodesSig = signature(pyNodes);
     const viewsSig = signature((views || []).map((view) => view?.props?.id ?? null));
-    if (nodesSig === lastHydrated.current.nodesSig && viewsSig === lastHydrated.current.viewsRef) {
+    const editorsSig = signature((nodeEditors || []).map((editor) => editor?.props?.id ?? null));
+    if (nodesSig === lastHydrated.current.nodesSig && viewsSig === lastHydrated.current.viewsRef && editorsSig === lastHydrated.current.editorsRef) {
       return;
     }
     lastHydrated.current.nodesSig = nodesSig;
     lastHydrated.current.viewsRef = viewsSig;
+    lastHydrated.current.editorsRef = editorsSig;
 
     setNodes((curr) => {
       const nextById = new Map(hydratedNodes.map((n) => [n.id, n]));
@@ -221,15 +227,17 @@ function FlowInner({
       });
       return merged;
     });
-  }, [hydratedNodes, pyNodes, setNodes, views]);
+  }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors]);
 
   useEffect(() => {
     const edgesSig = signature(hydratedEdges);
-    if (edgesSig !== lastHydrated.current.edgesSig) {
+    const editorsSig = signature((edgeEditors || []).map((editor) => editor?.props?.id ?? null));
+    if (edgesSig !== lastHydrated.current.edgesSig || editorsSig !== lastHydrated.current.edgeEditorsSig) {
       lastHydrated.current.edgesSig = edgesSig;
+      lastHydrated.current.edgeEditorsSig = editorsSig;
       setEdges(hydratedEdges);
     }
-  }, [hydratedEdges, setEdges]);
+  }, [hydratedEdges, setEdges, edgeEditors]);
 
   useEffect(() => {
     if (viewport) {
@@ -446,6 +454,7 @@ export function render({ model, view }) {
       const viewIndex = data.view_idx;
       const baseView = views[viewIndex];
       const editorView = nodeEditors[idx];
+      console.log(editorView)
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
@@ -495,6 +504,8 @@ export function render({ model, view }) {
           viewportSetter={setViewport}
           defaultEdgeOptions={defaultEdgeOptions}
           nodeTypes={hydratedNodeTypes}
+          nodeEditors={nodeEditors}
+          edgeEditors={edgeEditors}
           editable={editable}
           enableConnect={enableConnect}
           enableDelete={enableDelete}
