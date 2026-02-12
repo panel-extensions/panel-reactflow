@@ -1366,18 +1366,15 @@ class ReactFlow(ReactComponent):
 
         children: dict[str, list[UIElement] | UIElement | None] = {}
         old_models: list[UIElement] = []
-        if views:
-            views, view_models = self._get_child_model(views, doc, root, parent, comm)
-            children["_views"] = views
-            old_models += view_models
-        if node_editors:
-            editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
-            children["_node_editor_views"] = editor_models
-            old_models += editor_old
-        if edge_editors:
-            edge_models, edge_old = self._get_child_model(edge_editors, doc, root, parent, comm)
-            children["_edge_editor_views"] = edge_models
-            old_models += edge_old
+        views, view_models = self._get_child_model(views, doc, root, parent, comm)
+        children["_views"] = views
+        old_models += view_models
+        editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
+        children["_node_editor_views"] = editor_models
+        old_models += editor_old
+        edge_models, edge_old = self._get_child_model(edge_editors, doc, root, parent, comm)
+        children["_edge_editor_views"] = edge_models
+        old_models += edge_old
         for name in ("top_panel", "bottom_panel", "left_panel", "right_panel"):
             panels = list(getattr(self, name, []) or [])
             if panels:
