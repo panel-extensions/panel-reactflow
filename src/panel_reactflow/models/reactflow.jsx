@@ -48,8 +48,6 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
       toggleToolbar((v) => !v);
     };
 
-    console.log(data)
-
     return (
       <div className="rf-node-content">
         {showGear ? (
@@ -454,7 +452,6 @@ export function render({ model, view }) {
       const viewIndex = data.view_idx;
       const baseView = views[viewIndex];
       const editorView = nodeEditors[idx];
-      console.log(editorView)
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
