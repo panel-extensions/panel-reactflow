@@ -7,8 +7,9 @@ arbitrary logic in response: update a status bar, log changes, sync to an
 external database, or trigger downstream computations.
 
 Events are registered with `flow.on(event_type, callback)`.  The callback
-receives a single dict containing the event payload.  You can also listen
-for **all** events at once by subscribing to `"*"`.
+receives the event payload as its first argument and may optionally accept
+the `ReactFlow` instance as a second argument.  You can also listen for
+**all** events at once by subscribing to `"*"`.
 
 ![Screenshot: a status bar updating in response to graph events](../assets/screenshots/react-to-events.png)
 
@@ -41,10 +42,13 @@ flow = ReactFlow(nodes=nodes, edges=edges, sizing_mode="stretch_both")
 
 log = pn.pane.Markdown("Waiting for events…")
 
-def on_node_moved(payload):
+def on_node_moved(payload, flow):
     node_id = payload["node_id"]
     pos = payload["position"]
-    log.object = f"**Moved** `{node_id}` → ({pos['x']:.0f}, {pos['y']:.0f})"
+    log.object = (
+        f"**Moved** `{node_id}` → ({pos['x']:.0f}, {pos['y']:.0f}) "
+        f"(nodes: {len(flow.nodes)})"
+    )
 
 flow.on("node_moved", on_node_moved)
 
@@ -62,9 +66,9 @@ debugging or building a generic activity log.
 history = []
 status = pn.pane.Markdown("")
 
-def on_any_event(payload):
+def on_any_event(payload, flow):
     history.append(payload.get("type", "unknown"))
-    status.object = f"**Events so far:** {len(history)}"
+    status.object = f"**Events so far:** {len(history)} (edges: {len(flow.edges)})"
 
 flow.on("*", on_any_event)
 ```
@@ -80,10 +84,12 @@ canvas background.  The payload includes lists of selected `nodes` and
 ```python
 details = pn.pane.JSON({}, depth=2)
 
-def on_selection(payload):
+def on_selection(payload, flow):
     details.object = {
         "selected_nodes": payload.get("nodes", []),
         "selected_edges": payload.get("edges", []),
+        "total_nodes": len(flow.nodes),
+        "total_edges": len(flow.edges),
     }
 
 flow.on("selection_changed", on_selection)

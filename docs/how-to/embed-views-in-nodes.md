@@ -50,13 +50,17 @@ flow = ReactFlow(nodes=nodes, edges=[], sizing_mode="stretch_both")
 
 ## Add a view when adding a node at runtime
 
-`add_node()` accepts an optional `view` keyword argument:
+Pass a `NodeSpec` with a `view` to `add_node()`:
 
 ```python
-flow.add_node(
-    {"id": "live", "label": "Live Feed", "position": {"x": 600, "y": 0}, "data": {}},
+from panel_reactflow import NodeSpec
+
+flow.add_node(NodeSpec(
+    id="live",
+    label="Live Feed",
+    position={"x": 600, "y": 0},
     view=pn.indicators.Number(value=42, name="Metric"),
-)
+))
 ```
 
 ---

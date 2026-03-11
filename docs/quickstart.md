@@ -14,6 +14,12 @@ pip install panel-reactflow
 
 ## Minimal app
 
+!!! note "Required Extension"
+    ReactFlow uses Panel's JSONEditor widget for editing node and edge data.
+    You must call `pn.extension("jsoneditor")` before creating ReactFlow instances
+    to ensure the extension loads correctly. This should be done early in your
+    application, typically right after your imports.
+
 ```python
 import panel as pn
 
