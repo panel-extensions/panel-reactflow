@@ -14,6 +14,7 @@ from uuid import uuid4
 import panel as pn
 import param
 from bokeh.embed.bundle import extension_dirs
+from bokeh.plotting import figure
 from panel.config import config
 from panel.custom import Children, ReactComponent
 from panel.io.resources import EXTENSION_CDN
@@ -35,6 +36,15 @@ CDN_DIST = f"{CDN_BASE}/panel-reactflow.bundle.js"
 
 extension_dirs["panel-reactflow"] = DIST_PATH
 EXTENSION_CDN[DIST_PATH] = CDN_BASE
+
+BK_FIGURE_CSS = """
+.bk-Canvas {
+  transform: scale(var(--rf-inverse-zoom));
+  transform-origin: top left;
+  width: calc(var(--rf-zoom) * 100%);
+  height: calc(var(--rf-zoom) * 100%);
+}
+"""
 
 
 def _ensure_jsonable(value: Any, path: str) -> None:
@@ -1196,6 +1206,7 @@ class ReactFlow(ReactComponent):
     _esm = Path(__file__).parent / "models" / "reactflow.jsx"
     _importmap = {"imports": {"@xyflow/react": "https://esm.sh/@xyflow/react@12.8.3"}}
     _stylesheets = [DIST_PATH / "panel-reactflow.bundle.css", DIST_PATH / "css" / "reactflow.css"]
+    _render_policy = "manual"
 
     def __init__(self, **params: Any):
         self._node_ids: list[str] = []
@@ -1367,6 +1378,7 @@ class ReactFlow(ReactComponent):
         children: dict[str, list[UIElement] | UIElement | None] = {}
         old_models: list[UIElement] = []
         views, view_models = self._get_child_model(views, doc, root, parent, comm)
+        self._patch_views(view_models)
         children["_views"] = views
         old_models += view_models
         editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
@@ -1384,6 +1396,12 @@ class ReactFlow(ReactComponent):
             else:
                 children[name] = []
         return children, old_models
+
+    def _patch_views(self, view_models: list[UIElement]) -> None:
+        for model in view_models:
+            for fig in model.select({"type": figure}):
+                if BK_FIGURE_CSS not in fig.stylesheets:
+                    fig.stylesheets = fig.stylesheets + [BK_FIGURE_CSS]
 
     def _process_param_change(self, params):
         params = super()._process_param_change(params)
