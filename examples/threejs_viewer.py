@@ -373,8 +373,8 @@ def add_controller(ctrl_type):
             "label": LABELS[ctrl_type],
             "position": {"x": 50, "y": y_pos},
             "data": {},
-        },
-        view=widget,
+            "view": widget
+        }
     )
     return node_id
 

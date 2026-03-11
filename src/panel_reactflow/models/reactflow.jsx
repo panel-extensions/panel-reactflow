@@ -1,14 +1,24 @@
 import React from "react";
-import { Background, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, addEdge, useEdgesState, useNodesState, useReactFlow } from "@xyflow/react";
+import { Background, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, addEdge, useEdgesState, useNodesState, useReactFlow, useStore } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-const { useCallback, useEffect, useMemo, useRef } = React;
+const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
 const BUILTIN_NODE_TYPES = {
   panel: { label: "Panel" },
   default: { label: "Default" },
   minimal: { label: "Minimal", minimal: true },
 };
+
+const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale";
+
+const figureStylesheet = `
+.bk-Canvas {
+  transform: scale(var(--rf-inverse-zoom));
+  transform-origin: top left;
+  width: calc(var(--rf-zoom) * 100%);
+  height: calc(var(--rf-zoom) * 100%);
+}`.trim();
 
 function renderHandles(direction, handles) {
   // Explicitly empty array → no handles
@@ -34,6 +44,7 @@ function renderHandles(direction, handles) {
 function makeNodeComponent(typeName, typeSpec, editorMode) {
   return function NodeComponent({ id, data }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
+    const zoom = useStore((s) => s.transform?.[2] ?? 1);
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
     const showGear = editorMode === "toolbar" && hasEditor;
@@ -42,6 +53,84 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
     const showView = data?.view && !spec.minimal;
 
     const displayLabel = data?._label ?? spec.label ?? typeName;
+    const initialZoomRef = useRef(Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+
+    const viewWrapperStyle = {
+      "--rf-inverse-zoom": 1 / initialZoomRef.current,
+      "--rf-zoom": initialZoomRef.current,
+    };
+
+    const injectFigureStylesheet = (figureModel) => {
+      const stylesheets = Array.isArray(figureModel.stylesheets) ? figureModel.stylesheets : [];
+      const alreadyInjected = stylesheets.some(
+        (entry) => typeof entry === "string" && entry.includes("scale(var(--rf-inverse-zoom))"),
+      );
+      if (alreadyInjected) {
+        return;
+      }
+      initialZoomRef.current = zoom;
+      figureModel.stylesheets = [...stylesheets, figureStylesheet];
+    };
+
+    const isFigureModel = (modelNode) => {
+      const typeName = String(modelNode?.type || modelNode?.name || modelNode?.constructor?.__name__ || "");
+      return typeName === "Figure" || typeName.endsWith(".Figure");
+    };
+
+    // Waits until get_child_view returns a non-null/undefined value or times out (maxTries * interval ms)
+    const resolveChildView = async (viewInstance, childModel, maxTries = 50, interval = 20) => {
+      let tries = 0;
+      while (tries < maxTries) {
+        try {
+          let result = await Promise.resolve(viewInstance._child_views.get(childModel));
+          if (result) {
+            return result;
+          }
+        } catch (error) {
+          // Ignore this error, try again
+        }
+        await new Promise(res => setTimeout(res, interval));
+        tries++;
+      }
+      return null;
+    };
+
+
+    const applyFigureStyles = async () => {
+      const views = [...Bokeh.index.find_by_id(data.view.key)]
+      if (!views.length) {
+        return;
+      }
+      const visited = new Set();
+
+      const walkSubView = async (subView) => {
+        const modelNode = subView?.model;
+        const modelId = String(modelNode?.id ?? "");
+        if (!modelId || visited.has(modelId)) {
+          return;
+        }
+        visited.add(modelId);
+
+        if (isFigureModel(modelNode)) {
+          injectFigureStylesheet(modelNode);
+          return
+        }
+
+        const childModels = Object.values(subView?.child_models || {}).filter(Boolean);
+        for (const childModel of childModels) {
+          const childSubView = await resolveChildView(subView, childModel);
+          if (childSubView) {
+            await walkSubView(childSubView);
+          }
+        }
+      };
+
+      for (const view of views) {
+        await walkSubView(view);
+      }
+    };
+
+    applyFigureStyles();
 
     const handleGearClick = (e) => {
       e.stopPropagation();
@@ -80,7 +169,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
         </div>
         {(showView || showInlineEditor) && (
           <div>
-            {data.view}
+            {showView ? <div className={viewWrapperClassName} style={viewWrapperStyle}>{data.view}</div> : null}
             {showInlineEditor ? data.editor : null}
           </div>
         )}
@@ -152,7 +241,7 @@ function FlowInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
-  const lastHydrated = useRef({ nodesSig: null, viewsRef: null, edgesSig: null });
+  const lastHydrated = useRef({ nodesSig: null, viewsRef: null, editorsRef: null, edgesSig: null, edgeEditorsSig: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport } = useReactFlow();
 
@@ -201,7 +290,14 @@ function FlowInner({
   }, [edges]);
 
   useEffect(() => {
-    const nodesSig = signature(pyNodes);
+    const readyByNodeId = new Map(
+      (hydratedNodes || []).map((node) => [node?.id, Boolean(node?.data?._viewReady)]),
+    );
+    const pyNodesWithReady = (pyNodes || []).map((node) => ({
+      ...node,
+      _viewReady: readyByNodeId.get(node?.id) ?? true,
+    }));
+    const nodesSig = signature(pyNodesWithReady);
     const viewsSig = signature((views || []).map((view) => view?.props?.id ?? null));
     const editorsSig = signature((nodeEditors || []).map((editor) => editor?.props?.id ?? null));
     if (nodesSig === lastHydrated.current.nodesSig && viewsSig === lastHydrated.current.viewsRef && editorsSig === lastHydrated.current.editorsRef) {
@@ -212,7 +308,6 @@ function FlowInner({
     lastHydrated.current.editorsRef = editorsSig;
 
     setNodes((curr) => {
-      const nextById = new Map(hydratedNodes.map((n) => [n.id, n]));
       const currById = new Map(curr.map((n) => [n.id, n]));
       const merged = hydratedNodes.map((n) => {
         const prev = currById.get(n.id);
@@ -400,6 +495,8 @@ function FlowInner({
 }
 
 export function render({ model, view }) {
+  const [readyViewMap, setReadyViewMap] = useState(() => new Map());
+  const readyCheckTimeoutsRef = useRef(new Map());
   const [pyNodes] = model.useState("nodes");
   const [pyEdges] = model.useState("edges");
   const [pyNodeTypes] = model.useState("node_types");
@@ -436,6 +533,70 @@ export function render({ model, view }) {
     }
   });
 
+  useEffect(() => {
+    const clearReadyCheckTimeouts = () => {
+      readyCheckTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
+      readyCheckTimeoutsRef.current.clear();
+    };
+
+    const setViewReadyState = (viewId, isReady) => {
+      setReadyViewMap((previousMap) => {
+        const previousReady = previousMap.get(viewId);
+        if (previousReady === isReady && previousMap.has(viewId)) {
+          return previousMap;
+        }
+        const nextMap = new Map(previousMap);
+        nextMap.set(viewId, isReady);
+        return nextMap;
+      });
+    };
+
+    const checkViewReadyState = (childView) => {
+      const viewId = childView?.id;
+      if (!viewId) {
+        return;
+      }
+
+      const isMounted = Boolean(view._mounted.get("_views")?.has(viewId));
+      const hasFinished = view.get_child_view(childView)?.has_finished() ?? false;//childView.has_finished();
+      const isReady = isMounted && hasFinished;
+
+      setViewReadyState(viewId, isReady);
+
+      if (hasFinished) {
+        const existingTimeoutId = readyCheckTimeoutsRef.current.get(viewId);
+        if (existingTimeoutId) {
+          clearTimeout(existingTimeoutId);
+          readyCheckTimeoutsRef.current.delete(viewId);
+        }
+        return;
+      }
+
+      const existingTimeoutId = readyCheckTimeoutsRef.current.get(viewId);
+      if (existingTimeoutId) {
+        clearTimeout(existingTimeoutId);
+      }
+      const timeoutId = setTimeout(() => {
+        readyCheckTimeoutsRef.current.delete(viewId);
+        checkViewReadyState(childView);
+      }, 25);
+      readyCheckTimeoutsRef.current.set(viewId, timeoutId);
+    };
+
+    const handleAfterLayout = () => {
+      const childViews = view?.model?.data?._views || [];
+      childViews.forEach((childView) => checkViewReadyState(childView));
+    };
+
+    model.on("lifecycle:after_layout", handleAfterLayout);
+    handleAfterLayout();
+
+    return () => {
+      model.off("lifecycle:after_layout", handleAfterLayout);
+      clearReadyCheckTimeouts();
+    };
+  }, [model, view]);
+
   const edgeEditorMap = {};
   const edgeHasEditorMap = {};
   (pyEdges || []).forEach((edge, idx) => {
@@ -451,6 +612,8 @@ export function render({ model, view }) {
       const data = node.data || {};
       const viewIndex = data.view_idx;
       const baseView = views[viewIndex];
+      const baseViewId = baseView?.key;
+      const isViewReady = baseViewId ? Boolean(readyViewMap.get(baseViewId)) : true;
       const editorView = nodeEditors[idx];
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
@@ -461,12 +624,13 @@ export function render({ model, view }) {
           ...data,
           view: baseView,
           editor: editorView,
+          _viewReady: isViewReady,
           _hasEditor: hasEditor,
           _label: node.label,
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes]);
+  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes, readyViewMap]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
