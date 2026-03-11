@@ -8,6 +8,7 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -2196,14 +2197,16 @@ class ReactFlow(ReactComponent):
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         for callback in self._event_handlers.get(event_type, []):
             if len(inspect.signature(callback).parameters) == 2:
-                callback(payload, self)
+                cb = partial(callback, payload, self)
             else:
-                callback(payload)
+                cb = partial(callback, payload)
+            pn.state.execute(cb)
         for callback in self._event_handlers.get("*", []):
             if len(inspect.signature(callback).parameters) == 2:
-                callback(payload, self)
+                cb = partial(callback, payload, self)
             else:
-                callback(payload)
+                cb = partial(callback, payload)
+            pn.state.execute(cb)
 
     def _update_selection_from_graph(self, *_: param.parameterized.Event) -> None:
         selection = {
