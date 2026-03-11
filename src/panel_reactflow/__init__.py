@@ -12,6 +12,7 @@ from .base import (
     SchemaEditor,
     SchemaSource,
 )
+from .pipeline import Pipeline
 
 __all__ = [
     "EdgeSpec",
@@ -20,6 +21,7 @@ __all__ = [
     "JsonEditor",
     "NodeSpec",
     "NodeType",
+    "Pipeline",
     "ReactFlow",
     "SchemaEditor",
     "SchemaSource",
