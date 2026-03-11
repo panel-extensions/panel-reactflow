@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
@@ -2117,8 +2119,10 @@ class ReactFlow(ReactComponent):
             - ``"sync"``: Full graph sync from frontend
             - ``"*"``: All events (wildcard)
         callback : callable
-            Function called when the event occurs. Receives a single argument:
-            the event payload dictionary containing event-specific data.
+            Function called when the event occurs. Receives the event payload
+            dictionary as the first argument. The callback may optionally
+            accept the ``ReactFlow`` instance as a second argument, e.g.
+            ``callback(payload, flow)``.
 
         Examples
         --------
@@ -2128,17 +2132,18 @@ class ReactFlow(ReactComponent):
         >>>
         >>> flow = ReactFlow()
         >>>
-        >>> def on_move(event):
-        ...     node_id = event["node_id"]
-        ...     position = event["position"]
+        >>> def on_move(payload, flow):
+        ...     node_id = payload["node_id"]
+        ...     position = payload["position"]
         ...     print(f"Node {node_id} moved to ({position['x']}, {position['y']})")
+        ...     print(f"Graph currently has {len(flow.nodes)} nodes")
         >>>
         >>> flow.on("node_moved", on_move)
 
         Track all graph changes:
 
-        >>> def on_any_event(event):
-        ...     event_type = event["type"]
+        >>> def on_any_event(payload):
+        ...     event_type = payload["type"]
         ...     print(f"Event: {event_type}")
         >>>
         >>> flow.on("*", on_any_event)
@@ -2191,9 +2196,17 @@ class ReactFlow(ReactComponent):
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         for callback in self._event_handlers.get(event_type, []):
-            callback(payload)
+            if len(inspect.signature(callback).parameters) == 2:
+                cb = partial(callback, payload, self)
+            else:
+                cb = partial(callback, payload)
+            pn.state.execute(cb)
         for callback in self._event_handlers.get("*", []):
-            callback(payload)
+            if len(inspect.signature(callback).parameters) == 2:
+                cb = partial(callback, payload, self)
+            else:
+                cb = partial(callback, payload)
+            pn.state.execute(cb)
 
     def _update_selection_from_graph(self, *_: param.parameterized.Event) -> None:
         selection = {
