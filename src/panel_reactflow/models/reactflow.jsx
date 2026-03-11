@@ -10,7 +10,7 @@ const BUILTIN_NODE_TYPES = {
   minimal: { label: "Minimal", minimal: true },
 };
 
-const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale";
+const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale nodrag nopan nowheel";
 
 const figureStylesheet = `
 .bk-Canvas {
