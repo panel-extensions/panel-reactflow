@@ -63,9 +63,3 @@ flow.servable()
 ```bash
 panel serve app.py --show
 ```
-
-## What you just used
-
-- `label` is a top-level node field (not part of `data`).
-- `node_types` describe structure and schema only.
-- The default editor auto-generates widgets from the JSON Schema.

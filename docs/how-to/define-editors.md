@@ -18,6 +18,65 @@ or falls back to a raw JSON editor.
 
 ---
 
+## Complete runnable example (node editor screenshot)
+
+This script is a minimal, working example for the screenshot above. Run it,
+then click the `Start` node to open the schema-driven editor in the side panel.
+
+```python
+import panel as pn
+
+from panel_reactflow import NodeType, ReactFlow
+
+pn.extension("jsoneditor")
+
+task_schema = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["idle", "running", "done"], "title": "Status"},
+        "priority": {"type": "integer", "title": "Priority"},
+        "notes": {"type": "string", "title": "Notes"},
+    },
+}
+
+nodes = [
+    {
+        "id": "start",
+        "type": "task",
+        "label": "Start",
+        "position": {"x": 0, "y": 0},
+        "data": {"status": "idle", "priority": 1, "notes": ""},
+    },
+    {
+        "id": "finish",
+        "type": "task",
+        "label": "Finish",
+        "position": {"x": 300, "y": 80},
+        "data": {"status": "done", "priority": 2, "notes": "All clear"},
+    },
+]
+
+edges = [{"id": "e1", "source": "start", "target": "finish"}]
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+    node_types={"task": NodeType(type="task", label="Task", schema=task_schema)},
+    editor_mode="side",
+    sizing_mode="stretch_both",
+)
+
+pn.Column(flow, sizing_mode="stretch_both").servable()
+```
+
+## How this code maps to the node-editor screenshot
+
+- `task_schema` defines fields rendered in the side-panel form.
+- `node_types={"task": ...}` binds that schema to both `task` nodes.
+- Clicking a node selects it and opens its editor because `editor_mode="side"`.
+
+---
+
 ## Editor signature
 
 Every editor — whether a simple function, a lambda, or a class — receives
@@ -105,6 +164,57 @@ Edge editors work identically.  Register them via `edge_editors` (keyed by
 edge type) or `default_edge_editor` for a blanket default.
 
 ![Screenshot: an edge editor open in the side panel](../assets/screenshots/define-editors-edge.png)
+
+### Complete runnable example (edge editor screenshot)
+
+This script reproduces the edge-editor screenshot. Run it, then click the
+`pipe` edge to open its schema-driven editor.
+
+```python
+import panel as pn
+
+from panel_reactflow import EdgeType, NodeType, ReactFlow
+
+pn.extension("jsoneditor")
+
+pipe_schema = {
+    "type": "object",
+    "properties": {
+        "throughput": {"type": "number", "title": "Throughput"},
+        "protocol": {
+            "type": "string",
+            "enum": ["tcp", "udp", "http"],
+            "title": "Protocol",
+        },
+    },
+}
+
+nodes = [
+    {"id": "src", "type": "device", "label": "Source", "position": {"x": 0, "y": 0}, "data": {}},
+    {"id": "sink", "type": "device", "label": "Sink", "position": {"x": 400, "y": 0}, "data": {}},
+]
+
+edges = [
+    {
+        "id": "e1",
+        "source": "src",
+        "target": "sink",
+        "type": "pipe",
+        "label": "pipe",
+        "data": {"throughput": 100.0, "protocol": "tcp"},
+    },
+]
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+    node_types={"device": NodeType(type="device", label="Device")},
+    edge_types={"pipe": EdgeType(type="pipe", label="Pipe", schema=pipe_schema)},
+    sizing_mode="stretch_both",
+)
+
+pn.Column(flow, sizing_mode="stretch_both").servable()
+```
 
 ### Schema-driven edge editor
 

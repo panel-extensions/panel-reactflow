@@ -15,6 +15,74 @@ thumbnail on an image-processing node.
 
 ---
 
+## Complete runnable example
+
+This script is a minimal, working example that produces the visualization
+shown above.
+
+```python
+import panel as pn
+
+from panel_reactflow import ReactFlow
+
+pn.extension("jsoneditor")
+
+nodes = [
+    {
+        "id": "source",
+        "type": "panel",
+        "label": "Data Source",
+        "position": {"x": 0, "y": 0},
+        "data": {},
+        "view": pn.pane.Markdown("**Status:** connected\n\nRows: 1,204 &bull; Updated 3s ago"),
+    },
+    {
+        "id": "metric",
+        "type": "panel",
+        "label": "KPI",
+        "position": {"x": 320, "y": 0},
+        "data": {},
+        "view": pn.indicators.Number(
+            value=87.3,
+            name="Accuracy",
+            format="{value}%",
+            colors=[(90, "orange"), (100, "green")],
+        ),
+    },
+    {
+        "id": "output",
+        "type": "panel",
+        "label": "Output",
+        "position": {"x": 160, "y": 180},
+        "data": {},
+        "view": pn.pane.HTML(
+            "<div style='padding:6px;font-size:12px;color:#475569;'>✅ Pipeline healthy</div>"
+        ),
+    },
+]
+
+edges = [
+    {"id": "e1", "source": "source", "target": "metric"},
+    {"id": "e2", "source": "metric", "target": "output"},
+]
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+    sizing_mode="stretch_both",
+)
+
+pn.Column(flow, sizing_mode="stretch_both").servable()
+```
+
+## How this code maps to the visualization
+
+- Each node has a different `view` (`Markdown`, `Number`, `HTML`).
+- Those views are rendered inline inside the three visible nodes.
+- `edges` creates the two visible connections between those nodes.
+
+---
+
 ## Add a view to a node
 
 Set the `view` key when defining a node.  The value can be any Panel
