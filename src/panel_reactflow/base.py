@@ -87,6 +87,30 @@ def _param_to_jsonschema(parameterized_cls: type) -> dict[str, Any]:
     return {"type": "object", "properties": properties}
 
 
+def _parameterized_data_param_names(parameterized_cls: type[param.Parameterized], base_cls: type[param.Parameterized]) -> list[str]:
+    """Return subclass-defined parameter names included in node/edge data.
+
+    Only parameters with explicitly non-negative precedence are included.
+    """
+    base_params = set(base_cls.param)
+    names: list[str] = []
+    for name in parameterized_cls.param:
+        if name in base_params or name.startswith("_"):
+            continue
+        precedence = parameterized_cls.param[name].precedence
+        if precedence is not None and precedence >= 0:
+            names.append(name)
+    return names
+
+
+def _parameterized_data_schema(parameterized_cls: type[param.Parameterized], base_cls: type[param.Parameterized]) -> dict[str, Any]:
+    """Build a JSON Schema for subclass-defined data parameters."""
+    names = _parameterized_data_param_names(parameterized_cls, base_cls)
+    schema = _param_to_jsonschema(parameterized_cls)
+    properties = schema.get("properties", {})
+    return {"type": "object", "properties": {name: properties[name] for name in names if name in properties}}
+
+
 def _pydantic_to_jsonschema(model_cls: type) -> dict[str, Any]:
     """Convert a Pydantic ``BaseModel`` class to a JSON Schema dict."""
     return model_cls.model_json_schema()
@@ -548,6 +572,101 @@ class NodeSpec:
         return cls(**payload)
 
 
+class Node(param.Parameterized):
+    """Base class for object-oriented nodes.
+
+    Subclass this class when you want node instances to keep Python-side state
+    and react to graph events directly. Node instances can be passed anywhere
+    a node dict/``NodeSpec`` is accepted.
+
+    Subclasses can customize:
+
+    - ``__panel__`` to render node content.
+    - ``editor`` to provide a node-specific editor.
+    - ``on_event`` (wildcard) and event-specific ``on_*`` hooks.
+    """
+
+    id = param.String(default="", doc="Unique node identifier.")
+    position = param.Dict(default={"x": 0.0, "y": 0.0}, doc="Node position.")
+    type = param.String(default="panel", doc="Node type.")
+    label = param.String(default=None, allow_None=True, doc="Display label.")
+    data = param.Dict(default={}, doc="Custom node data.")
+    selected = param.Boolean(default=False, doc="Selection state.")
+    draggable = param.Boolean(default=True, doc="Whether node is draggable.")
+    connectable = param.Boolean(default=True, doc="Whether node is connectable.")
+    deletable = param.Boolean(default=True, doc="Whether node is deletable.")
+    style = param.Dict(default=None, allow_None=True, doc="Optional node style.")
+    className = param.String(default=None, allow_None=True, doc="Optional CSS class.")
+
+    @classmethod
+    def _data_param_names(cls) -> list[str]:
+        return _parameterized_data_param_names(cls, Node)
+
+    @classmethod
+    def _data_schema(cls) -> dict[str, Any]:
+        return _parameterized_data_schema(cls, Node)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert this node instance to a ReactFlow-compatible dictionary."""
+        data = dict(self.data or {})
+        for name in self._data_param_names():
+            data[name] = getattr(self, name)
+        payload = {
+            "id": self.id,
+            "position": dict(self.position or {"x": 0.0, "y": 0.0}),
+            "type": self.type or "panel",
+            "label": self.label,
+            "data": data,
+            "selected": self.selected,
+            "draggable": self.draggable,
+            "connectable": self.connectable,
+            "deletable": self.deletable,
+        }
+        if self.style is not None:
+            payload["style"] = dict(self.style)
+        if self.className is not None:
+            payload["className"] = self.className
+        view = self.__panel__()
+        if view is not None:
+            payload["view"] = view
+        return payload
+
+    def __panel__(self) -> Any | None:
+        """Optional view rendered inside the node."""
+        return None
+
+    def editor(self, data, schema, *, id, type, on_patch):
+        """Optional per-node editor factory.
+
+        Return ``None`` to fall back to type/default editors.
+        """
+        return None
+
+    def on_event(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Wildcard event hook for node-related events."""
+
+    def on_add(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node is added."""
+
+    def on_delete(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node is deleted."""
+
+    def on_move(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node moves."""
+
+    def on_click(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node is clicked."""
+
+    def on_data_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node's data changes."""
+
+    def on_selection_changed(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node participates in a selection update."""
+
+    def on_sync(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when the graph receives a sync payload."""
+
+
 @dataclass
 class EdgeSpec:
     """Builder for edge dictionaries with validation and type safety.
@@ -703,6 +822,79 @@ class EdgeSpec:
             A new EdgeSpec instance.
         """
         return cls(**payload)
+
+
+class Edge(param.Parameterized):
+    """Base class for object-oriented edges."""
+
+    id = param.String(default="", doc="Unique edge identifier.")
+    source = param.String(default="", doc="Source node id.")
+    target = param.String(default="", doc="Target node id.")
+    label = param.String(default=None, allow_None=True, doc="Display label.")
+    type = param.String(default=None, allow_None=True, doc="Edge type.")
+    selected = param.Boolean(default=False, doc="Selection state.")
+    data = param.Dict(default={}, doc="Custom edge data.")
+    style = param.Dict(default=None, allow_None=True, doc="Optional edge style.")
+    markerEnd = param.Dict(default=None, allow_None=True, doc="Optional edge end marker.")
+    sourceHandle = param.String(default=None, allow_None=True, doc="Optional source handle id.")
+    targetHandle = param.String(default=None, allow_None=True, doc="Optional target handle id.")
+
+    @classmethod
+    def _data_param_names(cls) -> list[str]:
+        return _parameterized_data_param_names(cls, Edge)
+
+    @classmethod
+    def _data_schema(cls) -> dict[str, Any]:
+        return _parameterized_data_schema(cls, Edge)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert this edge instance to a ReactFlow-compatible dictionary."""
+        data = dict(self.data or {})
+        for name in self._data_param_names():
+            data[name] = getattr(self, name)
+        payload = {
+            "id": self.id,
+            "source": self.source,
+            "target": self.target,
+            "label": self.label,
+            "type": self.type,
+            "selected": self.selected,
+            "data": data,
+        }
+        if self.style is not None:
+            payload["style"] = dict(self.style)
+        if self.markerEnd is not None:
+            payload["markerEnd"] = dict(self.markerEnd)
+        if self.sourceHandle is not None:
+            payload["sourceHandle"] = self.sourceHandle
+        if self.targetHandle is not None:
+            payload["targetHandle"] = self.targetHandle
+        return payload
+
+    def editor(self, data, schema, *, id, type, on_patch):
+        """Optional per-edge editor factory.
+
+        Return ``None`` to fall back to type/default editors.
+        """
+        return None
+
+    def on_event(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Wildcard event hook for edge-related events."""
+
+    def on_add(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this edge is added."""
+
+    def on_delete(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this edge is deleted."""
+
+    def on_data_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this edge's data changes."""
+
+    def on_selection_changed(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this edge participates in a selection update."""
+
+    def on_sync(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when the graph receives a sync payload."""
 
 
 class Editor(Viewer):
@@ -975,14 +1167,16 @@ class ReactFlow(ReactComponent):
 
     Parameters
     ----------
-    nodes : list of dict, default []
-        List of node dictionaries defining the graph nodes. Each node should
-        have at minimum ``id``, ``position``, and ``type`` fields. Use
-        :class:`NodeSpec` for type-safe node creation.
-    edges : list of dict, default []
-        List of edge dictionaries defining connections between nodes. Each edge
-        should have ``id``, ``source``, and ``target`` fields. Use
-        :class:`EdgeSpec` for type-safe edge creation.
+    nodes : list of dict or Node, default []
+        List of node dictionaries or :class:`Node` instances defining the
+        graph nodes. Each node should have at minimum ``id``, ``position``,
+        and ``type`` fields. Use :class:`NodeSpec` or :class:`Node` for
+        structured node creation.
+    edges : list of dict or Edge, default []
+        List of edge dictionaries or :class:`Edge` instances defining
+        connections between nodes. Each edge should have ``id``, ``source``,
+        and ``target`` fields. Use :class:`EdgeSpec` or :class:`Edge` for
+        structured edge creation.
     node_types : dict, default {}
         Dictionary mapping type names to :class:`NodeType` definitions or dicts.
         Define custom node types with schemas, ports, and validation.
@@ -1134,7 +1328,9 @@ class ReactFlow(ReactComponent):
 
     See Also
     --------
+    Node : Base class for object-oriented nodes
     NodeSpec : Builder for node dictionaries
+    Edge : Base class for object-oriented edges
     EdgeSpec : Builder for edge dictionaries
     NodeType : Define custom node types with schemas
     EdgeType : Define custom edge types with schemas
@@ -1153,8 +1349,8 @@ class ReactFlow(ReactComponent):
     - Disabling ``show_minimap`` if not needed
     """
 
-    nodes = param.List(default=[], doc="Canonical list of node dictionaries.")
-    edges = param.List(default=[], doc="Canonical list of edge dictionaries.")
+    nodes = param.List(default=[], doc="Canonical list of node dictionaries or Node instances.")
+    edges = param.List(default=[], doc="Canonical list of edge dictionaries or Edge instances.")
     node_types = param.Dict(default={}, doc="Node type descriptors keyed by type name.")
     edge_types = param.Dict(default={}, doc="Edge type descriptors keyed by type name.")
 
@@ -1221,13 +1417,15 @@ class ReactFlow(ReactComponent):
             params["color_mode"] = "dark" if pn.config.theme == "dark" else "light"
         self._node_ids: list[str] = []
         self._edge_ids: list[str] = []
+        self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
+        self._edge_data_param_watchers: dict[str, tuple[Edge, list[Any]]] = {}
         # Normalize type specs before parent init so the frontend receives
         # JSON-serializable descriptors from the start.
         if "node_types" in params:
             params["node_types"] = _coerce_spec_map(params["node_types"])
         if "edge_types" in params:
             params["edge_types"] = _coerce_spec_map(params["edge_types"], edge=True)
-        # Normalize nodes and edges to ensure NodeSpec/EdgeSpec are converted to dicts
+        # Normalize nodes and edges to ensure NodeSpec/EdgeSpec are converted.
         if "nodes" in params:
             params["nodes"] = [ReactFlow._coerce_node(node) for node in params["nodes"]]
         if "edges" in params:
@@ -1236,6 +1434,7 @@ class ReactFlow(ReactComponent):
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self.param.watch(self._normalize_nodes, ["nodes"])
         self.param.watch(self._normalize_edges, ["edges"])
+        self.param.watch(self._update_instance_data_param_watchers, ["nodes", "edges"])
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
         self.param.watch(
@@ -1248,6 +1447,7 @@ class ReactFlow(ReactComponent):
         )
         self._update_node_editors()
         self._update_edge_editors()
+        self._update_instance_data_param_watchers()
 
     @classmethod
     def _esm_path(cls, compiled: bool | Literal["compiling"] = True) -> os.PathLike | None:
@@ -1273,16 +1473,28 @@ class ReactFlow(ReactComponent):
     def _get_node_schema(self, node_type: str) -> dict[str, Any] | None:
         """Return the normalized JSON Schema for *node_type*, or ``None``."""
         type_spec = self.node_types.get(node_type)
-        if type_spec is None:
-            return None
-        return type_spec.get("schema")
+        if type_spec is not None and type_spec.get("schema") is not None:
+            return type_spec.get("schema")
+        for node in self.nodes:
+            if isinstance(node, Node) and node.type == node_type:
+                schema = node._data_schema()
+                if schema.get("properties"):
+                    return schema
+                break
+        return None
 
     def _get_edge_schema(self, edge_type: str) -> dict[str, Any] | None:
         """Return the normalized JSON Schema for *edge_type*, or ``None``."""
         type_spec = self.edge_types.get(edge_type)
-        if type_spec is None:
-            return None
-        return type_spec.get("schema")
+        if type_spec is not None and type_spec.get("schema") is not None:
+            return type_spec.get("schema")
+        for edge in self.edges:
+            if isinstance(edge, Edge) and (edge.type or "") == edge_type:
+                schema = edge._data_schema()
+                if schema.get("properties"):
+                    return schema
+                break
+        return None
 
     def _create_editor(
         self,
@@ -1308,8 +1520,297 @@ class ReactFlow(ReactComponent):
 
         return factory(data, schema, id=item_id, type=item_type, on_patch=on_patch)
 
+    @staticmethod
+    def _node_is_instance(node: Any) -> bool:
+        return isinstance(node, Node)
+
+    @staticmethod
+    def _node_id(node: dict[str, Any] | Node) -> str | None:
+        return node.id if isinstance(node, Node) else node.get("id")
+
+    @staticmethod
+    def _node_type(node: dict[str, Any] | Node) -> str:
+        if isinstance(node, Node):
+            return node.type or "panel"
+        return node.get("type", "panel")
+
+    @staticmethod
+    def _node_data(node: dict[str, Any] | Node) -> dict[str, Any]:
+        if isinstance(node, Node):
+            return dict(node.data or {})
+        return dict(node.get("data", {}))
+
+    @staticmethod
+    def _node_view(node: dict[str, Any] | Node) -> Any | None:
+        if isinstance(node, Node):
+            return node.__panel__()
+        return node.get("view", None)
+
+    @staticmethod
+    def _node_set_position(node: dict[str, Any] | Node, position: dict[str, Any]) -> None:
+        if isinstance(node, Node):
+            node.position = dict(position)
+        else:
+            node["position"] = position
+
+    @staticmethod
+    def _node_set_selected(node: dict[str, Any] | Node, selected: bool) -> None:
+        if isinstance(node, Node):
+            node.selected = selected
+        else:
+            node["selected"] = selected
+
+    @staticmethod
+    def _node_set_data(node: dict[str, Any] | Node, data: dict[str, Any]) -> None:
+        if isinstance(node, Node):
+            node.data = dict(data)
+        else:
+            node["data"] = data
+
+    @staticmethod
+    def _node_payload(node: dict[str, Any] | NodeSpec | Node) -> dict[str, Any]:
+        if isinstance(node, Node):
+            return node.to_dict()
+        if isinstance(node, NodeSpec):
+            return node.to_dict()
+        return dict(node)
+
+    @staticmethod
+    def _edge_id(edge: dict[str, Any] | Edge) -> str | None:
+        return edge.id if isinstance(edge, Edge) else edge.get("id")
+
+    @staticmethod
+    def _edge_type(edge: dict[str, Any] | Edge) -> str:
+        if isinstance(edge, Edge):
+            return edge.type or ""
+        return edge.get("type", "")
+
+    @staticmethod
+    def _edge_data(edge: dict[str, Any] | Edge) -> dict[str, Any]:
+        if isinstance(edge, Edge):
+            return dict(edge.data or {})
+        return dict(edge.get("data", {}))
+
+    @staticmethod
+    def _edge_set_selected(edge: dict[str, Any] | Edge, selected: bool) -> None:
+        if isinstance(edge, Edge):
+            edge.selected = selected
+        else:
+            edge["selected"] = selected
+
+    @staticmethod
+    def _edge_set_data(edge: dict[str, Any] | Edge, data: dict[str, Any]) -> None:
+        if isinstance(edge, Edge):
+            edge.data = dict(data)
+        else:
+            edge["data"] = data
+
+    @staticmethod
+    def _edge_payload(edge: dict[str, Any] | EdgeSpec | Edge) -> dict[str, Any]:
+        if isinstance(edge, Edge):
+            return edge.to_dict()
+        if isinstance(edge, EdgeSpec):
+            return edge.to_dict()
+        return dict(edge)
+
+    def _get_node_instance(self, node_id: str) -> Node | None:
+        for node in self.nodes:
+            if isinstance(node, Node) and node.id == node_id:
+                return node
+        return None
+
+    def _get_edge_instance(self, edge_id: str) -> Edge | None:
+        for edge in self.edges:
+            if isinstance(edge, Edge) and edge.id == edge_id:
+                return edge
+        return None
+
+    @staticmethod
+    def _sync_node_data_params_from_data(node: Node) -> None:
+        for name in node._data_param_names():
+            if name in (node.data or {}):
+                setattr(node, name, node.data[name])
+
+    @staticmethod
+    def _sync_edge_data_params_from_data(edge: Edge) -> None:
+        for name in edge._data_param_names():
+            if name in (edge.data or {}):
+                setattr(edge, name, edge.data[name])
+
+    def _teardown_node_data_param_watcher(self, node_id: str) -> None:
+        record = self._node_data_param_watchers.pop(node_id, None)
+        if record is None:
+            return
+        node, watchers = record
+        for watcher in watchers:
+            try:
+                node.param.unwatch(watcher)
+            except Exception:
+                pass
+
+    def _teardown_edge_data_param_watcher(self, edge_id: str) -> None:
+        record = self._edge_data_param_watchers.pop(edge_id, None)
+        if record is None:
+            return
+        edge, watchers = record
+        for watcher in watchers:
+            try:
+                edge.param.unwatch(watcher)
+            except Exception:
+                pass
+
+    def _update_instance_data_param_watchers(self, *_: param.parameterized.Event) -> None:
+        self._update_node_data_param_watchers()
+        self._update_edge_data_param_watchers()
+
+    def _update_node_data_param_watchers(self) -> None:
+        current_nodes = {node.id: node for node in self.nodes if isinstance(node, Node) and node.id}
+        for node_id, (watched_node, _) in list(self._node_data_param_watchers.items()):
+            current = current_nodes.get(node_id)
+            if current is None or current is not watched_node:
+                self._teardown_node_data_param_watcher(node_id)
+        for node_id, node in current_nodes.items():
+            if node_id in self._node_data_param_watchers:
+                continue
+            watchers = []
+            for name in node._data_param_names():
+                watchers.append(
+                    node.param.watch(
+                        lambda event, _id=node_id, _name=name, _node=node: self._on_node_data_param_change(_id, _name, _node, event),
+                        name,
+                    )
+                )
+            self._node_data_param_watchers[node_id] = (node, watchers)
+
+    def _update_edge_data_param_watchers(self) -> None:
+        current_edges = {edge.id: edge for edge in self.edges if isinstance(edge, Edge) and edge.id}
+        for edge_id, (watched_edge, _) in list(self._edge_data_param_watchers.items()):
+            current = current_edges.get(edge_id)
+            if current is None or current is not watched_edge:
+                self._teardown_edge_data_param_watcher(edge_id)
+        for edge_id, edge in current_edges.items():
+            if edge_id in self._edge_data_param_watchers:
+                continue
+            watchers = []
+            for name in edge._data_param_names():
+                watchers.append(
+                    edge.param.watch(
+                        lambda event, _id=edge_id, _name=name, _edge=edge: self._on_edge_data_param_change(_id, _name, _edge, event),
+                        name,
+                    )
+                )
+            self._edge_data_param_watchers[edge_id] = (edge, watchers)
+
+    def _on_node_data_param_change(
+        self,
+        node_id: str,
+        param_name: str,
+        node: Node,
+        event: param.parameterized.Event,
+    ) -> None:
+        if self._get_node_instance(node_id) is not node:
+            return
+        if (node.data or {}).get(param_name) == event.new:
+            return
+        self.patch_node_data(node_id, {param_name: event.new})
+
+    def _on_edge_data_param_change(
+        self,
+        edge_id: str,
+        param_name: str,
+        edge: Edge,
+        event: param.parameterized.Event,
+    ) -> None:
+        if self._get_edge_instance(edge_id) is not edge:
+            return
+        if (edge.data or {}).get(param_name) == event.new:
+            return
+        self.patch_edge_data(edge_id, {param_name: event.new})
+
+    @staticmethod
+    def _invoke_node_callback(callback: Callable, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        if len(inspect.signature(callback).parameters) == 2:
+            cb = partial(callback, payload, flow)
+        else:
+            cb = partial(callback, payload)
+        pn.state.execute(cb)
+
+    def _invoke_node_hook(self, node: Node, hook_name: str, payload: dict[str, Any]) -> None:
+        hook = getattr(node, hook_name, None)
+        if callable(hook):
+            self._invoke_node_callback(hook, payload, self)
+
+    def _invoke_edge_hook(self, edge: Edge, hook_name: str, payload: dict[str, Any]) -> None:
+        hook = getattr(edge, hook_name, None)
+        if callable(hook):
+            self._invoke_node_callback(hook, payload, self)
+
+    def _dispatch_node_hooks(self, event_type: str, payload: dict[str, Any]) -> None:
+        node_ids: list[str] = []
+        if event_type == "node_added":
+            node_payload = payload.get("node", {})
+            if isinstance(node_payload, dict) and node_payload.get("id"):
+                node_ids = [node_payload["id"]]
+        elif event_type in ("node_moved", "node_clicked", "node_data_changed"):
+            node_id = payload.get("node_id")
+            if node_id:
+                node_ids = [node_id]
+        elif event_type == "selection_changed":
+            node_ids = list(payload.get("nodes") or [])
+        elif event_type == "sync":
+            node_ids = [node.id for node in self.nodes if isinstance(node, Node)]
+
+        hook_map = {
+            "node_added": "on_add",
+            "node_moved": "on_move",
+            "node_clicked": "on_click",
+            "node_data_changed": "on_data_change",
+            "selection_changed": "on_selection_changed",
+            "sync": "on_sync",
+        }
+        hook_name = hook_map.get(event_type)
+        for node_id in node_ids:
+            node = self._get_node_instance(node_id)
+            if node is None:
+                continue
+            if hook_name is not None:
+                self._invoke_node_hook(node, hook_name, payload)
+            self._invoke_node_hook(node, "on_event", payload)
+
+    def _dispatch_edge_hooks(self, event_type: str, payload: dict[str, Any]) -> None:
+        edge_ids: list[str] = []
+        if event_type == "edge_added":
+            edge_payload = payload.get("edge", {})
+            if isinstance(edge_payload, dict) and edge_payload.get("id"):
+                edge_ids = [edge_payload["id"]]
+        elif event_type in ("edge_deleted", "edge_data_changed"):
+            edge_id = payload.get("edge_id")
+            if edge_id:
+                edge_ids = [edge_id]
+        elif event_type == "selection_changed":
+            edge_ids = list(payload.get("edges") or [])
+        elif event_type == "sync":
+            edge_ids = [edge.id for edge in self.edges if isinstance(edge, Edge)]
+
+        hook_map = {
+            "edge_added": "on_add",
+            "edge_deleted": "on_delete",
+            "edge_data_changed": "on_data_change",
+            "selection_changed": "on_selection_changed",
+            "sync": "on_sync",
+        }
+        hook_name = hook_map.get(event_type)
+        for edge_id in edge_ids:
+            edge = self._get_edge_instance(edge_id)
+            if edge is None:
+                continue
+            if hook_name is not None:
+                self._invoke_edge_hook(edge, hook_name, payload)
+            self._invoke_edge_hook(edge, "on_event", payload)
+
     def _update_node_editors(self, *events: tuple[param.parameterized.Event]) -> None:
-        node_ids = [node["id"] for node in self.nodes]
+        node_ids = [self._node_id(node) for node in self.nodes]
+        node_ids = [node_id for node_id in node_ids if node_id is not None]
         config_changed = any(event.name in ("editor_mode", "node_editors", "default_node_editor") for event in events)
         if node_ids == self._node_ids and not config_changed:
             return
@@ -1317,28 +1818,38 @@ class ReactFlow(ReactComponent):
 
         editors = {}
         for node in self.nodes:
-            node_id = node.get("id")
+            node_id = self._node_id(node)
+            if node_id is None:
+                continue
             if node_id in self._node_editors and not config_changed:
                 editors[node_id] = self._node_editors[node_id]
                 continue
-            node_type = node.get("type", "panel")
-            editor_factory = self.node_editors.get(node_type) or self.default_node_editor or SchemaEditor
+            node_type = self._node_type(node)
+            editor_factory = None
+            if isinstance(node, Node) and type(node).editor is not Node.editor:
+                editor_factory = node.editor
+            if editor_factory is None:
+                editor_factory = self.node_editors.get(node_type) or self.default_node_editor or SchemaEditor
             schema = self._get_node_schema(node_type)
-            data = node.get("data", {})
-            editor = self._create_editor(
-                editor_factory,
-                node_id,
-                data,
-                schema,
-                node_type,
-                patch_fn=self.patch_node_data,
-            )
+            data = self._node_data(node)
+            if callable(editor_factory):
+                editor = self._create_editor(
+                    editor_factory,
+                    node_id,
+                    data,
+                    schema,
+                    node_type,
+                    patch_fn=self.patch_node_data,
+                )
+            else:
+                editor = editor_factory
             editors[node_id] = editor
         self._node_editors = editors
         self.param.trigger("_node_editor_views")
 
     def _update_edge_editors(self, *events: tuple[param.parameterized.Event]) -> None:
-        edge_ids = [edge["id"] for edge in self.edges]
+        edge_ids = [self._edge_id(edge) for edge in self.edges]
+        edge_ids = [edge_id for edge_id in edge_ids if edge_id is not None]
         config_changed = any(event.name in ("edge_editors", "default_edge_editor") for event in events)
         if edge_ids == self._edge_ids and not config_changed:
             return
@@ -1346,22 +1857,31 @@ class ReactFlow(ReactComponent):
 
         editors = {}
         for edge in self.edges:
-            edge_id = edge.get("id")
+            edge_id = self._edge_id(edge)
+            if edge_id is None:
+                continue
             if edge_id in self._edge_editors and not config_changed:
                 editors[edge_id] = self._edge_editors[edge_id]
                 continue
-            edge_type = edge.get("type", "")
-            editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor or SchemaEditor
+            edge_type = self._edge_type(edge)
+            editor_factory = None
+            if isinstance(edge, Edge) and type(edge).editor is not Edge.editor:
+                editor_factory = edge.editor
+            if editor_factory is None:
+                editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor or SchemaEditor
             schema = self._get_edge_schema(edge_type) if edge_type else None
-            data = edge.get("data", {})
-            editor = self._create_editor(
-                editor_factory,
-                edge_id,
-                data,
-                schema,
-                edge_type,
-                patch_fn=self.patch_edge_data,
-            )
+            data = self._edge_data(edge)
+            if callable(editor_factory):
+                editor = self._create_editor(
+                    editor_factory,
+                    edge_id,
+                    data,
+                    schema,
+                    edge_type,
+                    patch_fn=self.patch_edge_data,
+                )
+            else:
+                editor = editor_factory
             editors[edge_id] = editor
         self._edge_editors = editors
         self.param.trigger("_edge_editor_views")
@@ -1379,11 +1899,11 @@ class ReactFlow(ReactComponent):
         views = []
         node_editors = []
         for node in self.nodes:
-            view = node.get("view", None)
+            view = self._node_view(node)
             if view is not None:
                 views.append(self._resolve_editor_view(view))
-            node_editors.append(self._resolve_editor_view(self._node_editors.get(node.get("id"))))
-        edge_editors = [self._resolve_editor_view(self._edge_editors.get(edge.get("id"))) for edge in self.edges]
+            node_editors.append(self._resolve_editor_view(self._node_editors.get(self._node_id(node))))
+        edge_editors = [self._resolve_editor_view(self._edge_editors.get(self._edge_id(edge))) for edge in self.edges]
 
         children: dict[str, list[UIElement] | UIElement | None] = {}
         old_models: list[UIElement] = []
@@ -1419,7 +1939,7 @@ class ReactFlow(ReactComponent):
             nodes = []
             view_idx = 0
             for node in params["nodes"]:
-                node = dict(node)
+                node = self._node_payload(node)
                 view = node.pop("view", None)
                 data = dict(node.get("data", {}))
                 if view is not None:
@@ -1428,6 +1948,8 @@ class ReactFlow(ReactComponent):
                 node["data"] = data
                 nodes.append(node)
             params["nodes"] = nodes
+        if "edges" in params:
+            params["edges"] = [self._edge_payload(edge) for edge in params["edges"]]
         # node_types / edge_types are now JSON-serializable descriptors
         # and intentionally synced to the frontend.
         # Pop Python-only editor registries and internal state.
@@ -1441,7 +1963,7 @@ class ReactFlow(ReactComponent):
         params.pop("_edge_editors", None)
         return params
 
-    def add_node(self, node: dict[str, Any] | NodeSpec) -> None:
+    def add_node(self, node: dict[str, Any] | NodeSpec | Node) -> None:
         """Add a node to the graph.
 
         Adds a new node to the graph with optional validation. If a ``view``
@@ -1450,8 +1972,8 @@ class ReactFlow(ReactComponent):
 
         Parameters
         ----------
-        node : dict or NodeSpec
-            Node dictionary or :class:`NodeSpec` instance to add. The only
+        node : dict or NodeSpec or Node
+            Node dictionary, :class:`NodeSpec`, or :class:`Node` instance to add. The only
             required field is ``id``. Other fields have defaults:
 
             - ``id``: Unique node identifier (required)
@@ -1511,15 +2033,29 @@ class ReactFlow(ReactComponent):
         remove_node : Remove a node from the graph
         NodeSpec : Helper for constructing node dictionaries
         """
-        payload = self._coerce_node(node)
+        raw_node = self._coerce_node(node)
+        payload = self._node_payload(raw_node)
         payload.setdefault("type", "panel")
         payload.setdefault("data", {})
         payload.setdefault("position", {"x": 0.0, "y": 0.0})
+        payload.setdefault("selected", False)
+        payload.setdefault("draggable", True)
+        payload.setdefault("connectable", True)
+        payload.setdefault("deletable", True)
+        if isinstance(raw_node, Node):
+            raw_node.type = payload["type"]
+            raw_node.data = dict(payload["data"])
+            raw_node.position = dict(payload["position"])
+            raw_node.selected = payload["selected"]
+            raw_node.draggable = payload["draggable"]
+            raw_node.connectable = payload["connectable"]
+            raw_node.deletable = payload["deletable"]
+            self._sync_node_data_params_from_data(raw_node)
         self._validate_graph_payload(payload, kind="node")
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        self.nodes = self.nodes + [payload]
+        self.nodes = self.nodes + [raw_node if isinstance(raw_node, Node) else payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
     def _handle_msg(self, msg: dict[str, Any]) -> None:
@@ -1531,9 +2067,55 @@ class ReactFlow(ReactComponent):
                 nodes = msg.get("nodes")
                 edges = msg.get("edges")
                 if nodes is not None:
-                    self.nodes = nodes
+                    current_instances = {node.id: node for node in self.nodes if isinstance(node, Node)}
+                    synced_nodes: list[dict[str, Any] | Node] = []
+                    for payload in nodes:
+                        node_id = payload.get("id")
+                        if node_id in current_instances:
+                            node = current_instances[node_id]
+                            node.position = dict(payload.get("position", node.position))
+                            node.type = payload.get("type", node.type)
+                            node.label = payload.get("label", node.label)
+                            node.data = dict(payload.get("data", node.data))
+                            self._sync_node_data_params_from_data(node)
+                            node.selected = payload.get("selected", node.selected)
+                            node.draggable = payload.get("draggable", node.draggable)
+                            node.connectable = payload.get("connectable", node.connectable)
+                            node.deletable = payload.get("deletable", node.deletable)
+                            if "style" in payload:
+                                node.style = payload.get("style")
+                            if "className" in payload:
+                                node.className = payload.get("className")
+                            synced_nodes.append(node)
+                        else:
+                            synced_nodes.append(payload)
+                    self.nodes = synced_nodes
                 if edges is not None:
-                    self.edges = edges
+                    current_instances = {edge.id: edge for edge in self.edges if isinstance(edge, Edge)}
+                    synced_edges: list[dict[str, Any] | Edge] = []
+                    for payload in edges:
+                        edge_id = payload.get("id")
+                        if edge_id in current_instances:
+                            edge = current_instances[edge_id]
+                            edge.source = payload.get("source", edge.source)
+                            edge.target = payload.get("target", edge.target)
+                            edge.label = payload.get("label", edge.label)
+                            edge.type = payload.get("type", edge.type)
+                            edge.selected = payload.get("selected", edge.selected)
+                            edge.data = dict(payload.get("data", edge.data))
+                            self._sync_edge_data_params_from_data(edge)
+                            if "style" in payload:
+                                edge.style = payload.get("style")
+                            if "markerEnd" in payload:
+                                edge.markerEnd = payload.get("markerEnd")
+                            if "sourceHandle" in payload:
+                                edge.sourceHandle = payload.get("sourceHandle")
+                            if "targetHandle" in payload:
+                                edge.targetHandle = payload.get("targetHandle")
+                            synced_edges.append(edge)
+                        else:
+                            synced_edges.append(payload)
+                    self.edges = synced_edges
                 self._emit("sync", msg)
             case "node_moved":
                 node_id = msg.get("node_id")
@@ -1541,16 +2123,16 @@ class ReactFlow(ReactComponent):
                 if node_id is None or position is None:
                     return
                 for node in self.nodes:
-                    if node.get("id") == node_id:
-                        node["position"] = position
+                    if self._node_id(node) == node_id:
+                        self._node_set_position(node, position)
                 self._emit("node_moved", msg)
             case "selection_changed":
                 node_ids = msg.get("nodes") or []
                 edge_ids = msg.get("edges") or []
                 for node in self.nodes:
-                    node["selected"] = node.get("id") in node_ids
+                    self._node_set_selected(node, self._node_id(node) in node_ids)
                 for edge in self.edges:
-                    edge["selected"] = edge.get("id") in edge_ids
+                    self._edge_set_selected(edge, self._edge_id(edge) in edge_ids)
                 self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
                 self._emit("selection_changed", msg)
             case "edge_added":
@@ -1609,7 +2191,8 @@ class ReactFlow(ReactComponent):
         add_node : Add a node to the graph
         remove_edge : Remove an edge from the graph
         """
-        nodes = [node for node in self.nodes if node.get("id") != node_id]
+        removed_node = next((node for node in self.nodes if self._node_id(node) == node_id), None)
+        nodes = [node for node in self.nodes if self._node_id(node) != node_id]
         removed_edges = [edge for edge in self.edges if edge.get("source") == node_id or edge.get("target") == node_id]
         self.nodes = nodes
         if removed_edges:
@@ -1623,8 +2206,16 @@ class ReactFlow(ReactComponent):
                 "deleted_edges": [edge.get("id") for edge in removed_edges],
             },
         )
+        if isinstance(removed_node, Node):
+            payload = {
+                "type": "node_deleted",
+                "node_id": node_id,
+                "deleted_edges": [edge.get("id") for edge in removed_edges],
+            }
+            self._invoke_node_hook(removed_node, "on_delete", payload)
+            self._invoke_node_hook(removed_node, "on_event", payload)
 
-    def add_edge(self, edge: dict[str, Any] | EdgeSpec) -> None:
+    def add_edge(self, edge: dict[str, Any] | EdgeSpec | Edge) -> None:
         """Add an edge to the graph.
 
         Adds a new edge connecting two nodes with optional validation. If no
@@ -1633,8 +2224,8 @@ class ReactFlow(ReactComponent):
 
         Parameters
         ----------
-        edge : dict or EdgeSpec
-            Edge dictionary or :class:`EdgeSpec` instance to add. Required
+        edge : dict or EdgeSpec or Edge
+            Edge dictionary, :class:`EdgeSpec`, or :class:`Edge` instance to add. Required
             fields are ``source`` and ``target``. Other fields have defaults:
 
             - ``source``: ID of the source node (required)
@@ -1694,16 +2285,21 @@ class ReactFlow(ReactComponent):
         remove_edge : Remove an edge from the graph
         EdgeSpec : Helper for constructing edge dictionaries
         """
-        payload = self._coerce_edge(edge)
+        raw_edge = self._coerce_edge(edge)
+        payload = self._edge_payload(raw_edge)
         payload.setdefault("data", {})
         if not payload.get("id"):
             payload["id"] = self._generate_edge_id(payload["source"], payload["target"])
+        if isinstance(raw_edge, Edge):
+            raw_edge.id = payload["id"]
+            raw_edge.data = dict(payload["data"])
+            self._sync_edge_data_params_from_data(raw_edge)
         self._validate_graph_payload(payload, kind="edge")
         if self.validate_on_add:
             edge_type = payload.get("type")
             schema = self._get_edge_schema(edge_type) if edge_type else None
             _validate_data(payload.get("data", {}), schema)
-        self.edges = self.edges + [payload]
+        self.edges = self.edges + [raw_edge if isinstance(raw_edge, Edge) else payload]
         self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
     def remove_edge(self, edge_id: str) -> None:
@@ -1727,10 +2323,15 @@ class ReactFlow(ReactComponent):
         add_edge : Add an edge to the graph
         remove_node : Remove a node from the graph
         """
-        removed = [edge for edge in self.edges if edge.get("id") == edge_id]
-        self.edges = [edge for edge in self.edges if edge.get("id") != edge_id]
+        removed_edge = next((edge for edge in self.edges if self._edge_id(edge) == edge_id), None)
+        removed = [edge for edge in self.edges if self._edge_id(edge) == edge_id]
+        self.edges = [edge for edge in self.edges if self._edge_id(edge) != edge_id]
         if removed:
             self._emit("edge_deleted", {"type": "edge_deleted", "edge_id": edge_id})
+        if isinstance(removed_edge, Edge):
+            payload = {"type": "edge_deleted", "edge_id": edge_id}
+            self._invoke_edge_hook(removed_edge, "on_delete", payload)
+            self._invoke_edge_hook(removed_edge, "on_event", payload)
 
     def patch_node_data(self, node_id: str, patch: dict[str, Any]) -> None:
         """Update specific properties in a node's data dictionary.
@@ -1786,13 +2387,15 @@ class ReactFlow(ReactComponent):
         add_node : Add a new node to the graph
         """
         for node in self.nodes:
-            if node.get("id") == node_id:
-                data = dict(node.get("data", {}))
+            if self._node_id(node) == node_id:
+                data = self._node_data(node)
                 data.update(patch)
                 if self.validate_on_patch:
-                    schema = self._get_node_schema(node.get("type", "panel"))
+                    schema = self._get_node_schema(self._node_type(node))
                     _validate_data(data, schema)
-                node["data"] = data
+                self._node_set_data(node, data)
+                if isinstance(node, Node):
+                    self._sync_node_data_params_from_data(node)
                 break
         self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
         self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
@@ -1845,14 +2448,16 @@ class ReactFlow(ReactComponent):
         add_edge : Add a new edge to the graph
         """
         for edge in self.edges:
-            if edge.get("id") == edge_id:
-                data = dict(edge.get("data", {}))
+            if self._edge_id(edge) == edge_id:
+                data = self._edge_data(edge)
                 data.update(patch)
                 if self.validate_on_patch:
-                    edge_type = edge.get("type")
+                    edge_type = self._edge_type(edge)
                     schema = self._get_edge_schema(edge_type) if edge_type else None
                     _validate_data(data, schema)
-                edge["data"] = data
+                self._edge_set_data(edge, data)
+                if isinstance(edge, Edge):
+                    self._sync_edge_data_params_from_data(edge)
                 break
         self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
         self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
@@ -1944,25 +2549,27 @@ class ReactFlow(ReactComponent):
 
         graph = nx.MultiDiGraph() if multigraph else nx.DiGraph()
         for node in self.nodes:
-            data = dict(node.get("data", {}))
-            data.update({"position": node.get("position"), "type": node.get("type")})
-            if node.get("label") is not None:
-                data["label"] = node.get("label")
-            graph.add_node(node["id"], **data)
+            payload = self._node_payload(node)
+            data = dict(payload.get("data", {}))
+            data.update({"position": payload.get("position"), "type": payload.get("type")})
+            if payload.get("label") is not None:
+                data["label"] = payload.get("label")
+            graph.add_node(payload["id"], **data)
         for edge in self.edges:
-            data = dict(edge.get("data", {}))
-            if edge.get("label") is not None:
-                data["label"] = edge["label"]
-            if edge.get("type") is not None:
-                data["type"] = edge["type"]
-            if edge.get("sourceHandle") is not None:
-                data["sourceHandle"] = edge["sourceHandle"]
-            if edge.get("targetHandle") is not None:
-                data["targetHandle"] = edge["targetHandle"]
+            payload = self._edge_payload(edge)
+            data = dict(payload.get("data", {}))
+            if payload.get("label") is not None:
+                data["label"] = payload["label"]
+            if payload.get("type") is not None:
+                data["type"] = payload["type"]
+            if payload.get("sourceHandle") is not None:
+                data["sourceHandle"] = payload["sourceHandle"]
+            if payload.get("targetHandle") is not None:
+                data["targetHandle"] = payload["targetHandle"]
             if multigraph:
-                graph.add_edge(edge["source"], edge["target"], key=edge.get("id"), **data)
+                graph.add_edge(payload["source"], payload["target"], key=payload.get("id"), **data)
             else:
-                graph.add_edge(edge["source"], edge["target"], **data)
+                graph.add_edge(payload["source"], payload["target"], **data)
         return graph
 
     @classmethod
@@ -2215,11 +2822,29 @@ class ReactFlow(ReactComponent):
             else:
                 cb = partial(callback, payload)
             pn.state.execute(cb)
+        self._dispatch_node_hooks(event_type, payload)
+        self._dispatch_edge_hooks(event_type, payload)
 
     def _update_selection_from_graph(self, *_: param.parameterized.Event) -> None:
+        selected_node_ids: list[str] = []
+        for node in self.nodes:
+            node_id = self._node_id(node)
+            if node_id is None:
+                continue
+            is_selected = node.selected if isinstance(node, Node) else node.get("selected")
+            if is_selected:
+                selected_node_ids.append(node_id)
+        selected_edge_ids: list[str] = []
+        for edge in self.edges:
+            edge_id = self._edge_id(edge)
+            if edge_id is None:
+                continue
+            is_selected = edge.selected if isinstance(edge, Edge) else edge.get("selected")
+            if is_selected:
+                selected_edge_ids.append(edge_id)
         selection = {
-            "nodes": [node["id"] for node in self.nodes if node.get("selected")],
-            "edges": [edge["id"] for edge in self.edges if edge.get("selected")],
+            "nodes": selected_node_ids,
+            "edges": selected_edge_ids,
         }
         if selection != self.selection:
             self.selection = selection
@@ -2254,11 +2879,19 @@ class ReactFlow(ReactComponent):
         return f"{existing}-{uuid4().hex[:8]}"
 
     @staticmethod
-    def _coerce_node(node: dict[str, Any] | NodeSpec) -> dict[str, Any]:
+    def _coerce_node(node: dict[str, Any] | NodeSpec | Node):
+        if isinstance(node, Node):
+            return node
+        if isinstance(node, NodeSpec):
+            return node.to_dict()
         return node.to_dict() if hasattr(node, "to_dict") else node
 
     @staticmethod
-    def _coerce_edge(edge: dict[str, Any] | EdgeSpec) -> dict[str, Any]:
+    def _coerce_edge(edge: dict[str, Any] | EdgeSpec | Edge):
+        if isinstance(edge, Edge):
+            return edge
+        if isinstance(edge, EdgeSpec):
+            return edge.to_dict()
         return edge.to_dict() if hasattr(edge, "to_dict") else edge
 
     def _validate_graph_payload(self, payload: dict[str, Any], *, kind: str) -> None:
