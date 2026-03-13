@@ -1,5 +1,34 @@
 # Release Notes
 
+## Version 0.3.0
+
+This release focuses on core graph-model capabilities, callback ergonomics,
+rendering/styling improvements, and major documentation expansion.
+
+### Highlights
+
+- **Parameterized `Node`/`Edge` instances as first-class graph elements** —
+  `ReactFlow` now supports instance-based graph authoring with richer Python
+  object workflows, including improved serialization/sync behavior and expanded
+  API/core test coverage.
+- **Event callback improvements** — `.on(...)` callbacks can now accept the
+  `ReactFlow` instance as a second argument and support async callbacks, making
+  app-level event handling significantly more flexible.
+- **Rendering fixes for embedded views** — improved scaling and interaction
+  behavior when rendering figures inside nodes, including better handling of
+  drag/pan/scroll conflicts within embedded content.
+- **Editor rendering robustness** — fixed node and edge editor rendering paths
+  so editors can render reliably even when no node `view` is defined.
+- **Color mode and default node styling support** — added color-mode-aware
+  styling capabilities and refined baseline node CSS for better defaults out of
+  the box.
+- **Expanded how-to documentation** — substantial updates to guides for
+  declaring types, defining nodes/edges, editors, embedding views, reacting to
+  events, and styling, with refreshed screenshots across the docs.
+- **Examples overhaul in docs** — added an examples gallery with grid cards and
+  dedicated pages/screenshots for each example app, plus docs navigation
+  updates for easier discovery.
+
 ## Version 0.2.0
 
 This release focuses on stronger typed graph specs, better node-view handling,
