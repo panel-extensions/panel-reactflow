@@ -13,6 +13,58 @@ and update data after the graph is live.
 
 ---
 
+## Complete runnable example
+
+This script is a minimal, working example that produces the visualization
+shown above.
+
+```python
+import panel as pn
+
+from panel_reactflow import ReactFlow
+
+pn.extension("jsoneditor")
+
+nodes = [
+    {
+        "id": "n1",
+        "type": "panel",
+        "label": "Start",
+        "position": {"x": 0, "y": 0},
+        "data": {"status": "idle"},
+        "view": pn.pane.Markdown("Optional node body"),
+    },
+    {
+        "id": "n2",
+        "type": "panel",
+        "label": "End",
+        "position": {"x": 300, "y": 80},
+        "data": {"status": "done"},
+    },
+]
+
+edges = [
+    {"id": "e1", "source": "n1", "target": "n2", "label": "next"},
+]
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+    sizing_mode="stretch_both",
+)
+
+pn.Column(flow, sizing_mode="stretch_both").servable()
+```
+
+## How this code maps to the visualization
+
+- `nodes` defines the two boxes (`Start`, `End`) and where they appear.
+- `edges` defines the single connection labeled `next`.
+- `view` on `n1` adds inline content inside that node.
+- `ReactFlow(nodes=..., edges=...)` renders the graph from those lists.
+
+---
+
 ## Define nodes
 
 A node dict requires `id`, `position`, and `data`.  The display label is a

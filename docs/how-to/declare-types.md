@@ -1,24 +1,142 @@
 # Declare Node & Edge Types
 
-Node and edge types are lightweight descriptors that tell Panel-ReactFlow
-**what kind of data a node or edge carries**.  A type defines a name, an
-optional display label, optional input/output ports (for nodes), and an
-optional JSON Schema for its `data` payload.
+Node and edge types are lightweight descriptors that define **what data each
+kind of node/edge carries**. A type can provide:
 
-Types are separate from editors.  A type says "a *task* node has a
-*status* string and a *priority* integer"; an editor says "render a
-dropdown and a number input for those fields."  This separation lets you
-reuse the same type with different editors, or rely on the auto-generated
-form.
+- a type name (`type`)
+- a display label (`label`)
+- node handles (`inputs` / `outputs`)
+- a schema for the `data` payload (`schema`)
+
+Types are separate from editors. A type defines structure; an editor defines
+the UI used to edit it.
 
 ![Screenshot: multiple node types with different schemas](../assets/screenshots/declare-types.png)
 
 ---
 
-## Node types
+## Complete runnable example
 
-Use `NodeType` to describe a node type.  Provide `inputs` and `outputs` to
-control the handles (ports) shown on each side of the node.
+This script is a minimal, working example that produces the visualization
+shown above.
+
+```python
+import param
+import panel as pn
+
+from panel_reactflow import EdgeType, NodeType, ReactFlow
+
+pn.extension("jsoneditor")
+
+
+class Job(param.Parameterized):
+    status = param.Selector(objects=["idle", "running", "done"])
+    retries = param.Integer(default=0)
+
+
+decision_schema = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "string", "title": "Question"},
+        "outcome": {
+            "type": "string",
+            "enum": ["yes", "no", "maybe"],
+            "title": "Outcome",
+        },
+    },
+}
+
+node_types = {
+    "job": NodeType(type="job", label="Job", schema=Job, inputs=["in"], outputs=["out"]),
+    "decision": NodeType(
+        type="decision",
+        label="Decision",
+        schema=decision_schema,
+        inputs=["in"],
+        outputs=["yes", "no"],
+    ),
+}
+
+edge_types = {
+    "flow": EdgeType(
+        type="flow",
+        label="Flow",
+        schema={
+            "type": "object",
+            "properties": {"weight": {"type": "number", "title": "Weight"}},
+        },
+    ),
+}
+
+nodes = [
+    {
+        "id": "j1",
+        "type": "job",
+        "label": "Fetch Data",
+        "position": {"x": 0, "y": 0},
+        "data": {"status": "idle", "retries": 0},
+    },
+    {
+        "id": "d1",
+        "type": "decision",
+        "label": "Valid?",
+        "position": {"x": 300, "y": 250},
+        "data": {"question": "Is data valid?", "outcome": "yes"},
+    },
+    {
+        "id": "j2",
+        "type": "job",
+        "label": "Process",
+        "position": {"x": 600, "y": 400},
+        "data": {"status": "running", "retries": 1},
+    },
+]
+
+edges = [
+    {"id": "e1", "source": "j1", "target": "d1", "type": "flow", "data": {"weight": 1.0}},
+    {"id": "e2", "source": "d1", "target": "j2", "type": "flow", "data": {"weight": 0.8}},
+]
+
+TASK_NODE_CSS = """
+.react-flow__node-job {
+    background-color: white;
+    border-radius: 8px;
+    border: 1.5px solid #7c3aed;
+}
+
+.react-flow__node-decision {
+    background-color: white;
+    border-radius: 8px;
+    border: 1.5px solid green;
+}
+"""
+
+flow = ReactFlow(
+    nodes=nodes,
+    edges=edges,
+    node_types=node_types,
+    edge_types=edge_types,
+    editor_mode="node",
+    sizing_mode="stretch_both",
+    stylesheets=[TASK_NODE_CSS]
+)
+
+pn.Column(flow, sizing_mode="stretch_both").servable()
+```
+
+## How this code maps to the visualization
+
+- `node_types["job"]` and `node_types["decision"]` define the two node kinds you see.
+- `inputs` and `outputs` define the left/right handles rendered on each node.
+- `edge_types["flow"]` defines the edge payload schema used by both connections.
+- `nodes` controls labels (`Fetch Data`, `Valid?`, `Process`) and positions.
+- `editor_mode="side"` makes selection open the schema-driven editor in the right panel.
+
+---
+
+## Node type snippet
+
+Use `NodeType` to define node handles and payload schema.
 
 ```python
 from panel_reactflow import NodeType
@@ -42,12 +160,9 @@ node_types = {
 }
 ```
 
----
+## Edge type snippet
 
-## Edge types
-
-Use `EdgeType` to describe an edge type.  Edges with a schema get the same
-auto-generated editor support as nodes.
+Use `EdgeType` for edge payload schema and label.
 
 ```python
 from panel_reactflow import EdgeType
@@ -71,8 +186,7 @@ edge_types = {
 
 ## Schema sources
 
-The `schema` field accepts multiple formats.  All are normalized to
-JSON Schema before being sent to the frontend or used by editors.
+The `schema` field accepts multiple inputs and normalizes them to JSON Schema.
 
 | Source | Example |
 |--------|---------|
@@ -108,9 +222,9 @@ node_types = {"config": NodeType(type="config", label="Config", schema=Config)}
 
 ---
 
-## Register on ReactFlow
+## Register on `ReactFlow`
 
-Pass types as dictionaries keyed by type name.
+Pass `node_types` and `edge_types` as dictionaries keyed by type name:
 
 ```python
 flow = ReactFlow(
@@ -121,5 +235,5 @@ flow = ReactFlow(
 )
 ```
 
-Types without a schema still work — the node or edge simply has no
-schema-driven validation or auto-generated form.
+Types without a schema still work; they just do not get schema-driven
+validation or auto-generated forms.

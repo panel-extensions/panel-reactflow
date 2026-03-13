@@ -621,10 +621,9 @@ export function render({ model, view }) {
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
-      console.log(node)
       return {
         ...node,
-        className: (node.type === "panel" || model.stylesheets) ? "" : "react-flow__node-default",
+        className: (node.type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default",
         data: {
           ...data,
           view: baseView,
