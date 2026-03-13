@@ -20,7 +20,17 @@ nav = [
     {"Style Nodes & Edges" = "how-to/style-nodes-edges.md"},
     {"React to Events" = "how-to/react-to-events.md"}
   ]},
-  {"Examples" = "examples.md"},
+  {"Examples" = [
+    {"Gallery" = "examples/index.md"},
+    {"Advanced" = "examples/advanced.md"},
+    {"Custom Editor" = "examples/custom-editor.md"},
+    {"Edge Editors" = "examples/edge-editors.md"},
+    {"Node/Edge Instances" = "examples/node-edge-instances.md"},
+    {"Schema Types" = "examples/schema-types.md"},
+    {"Simple" = "examples/simple.md"},
+    {"ThreeJS Viewer" = "examples/threejs-viewer.md"},
+    {"ThreeJS Viewer (Instances)" = "examples/threejs-viewer-instances.md"}
+  ]},
   {"Reference" = "reference/panel_reactflow.md"},
   {"Releases" = "releases.md"}
 ]

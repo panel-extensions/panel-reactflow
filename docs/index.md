@@ -66,6 +66,10 @@ flow.servable()
 - [Style Nodes & Edges](how-to/style-nodes-edges.md)
 - [React to Events](how-to/react-to-events.md)
 
+## Examples
+
+- [Examples gallery](examples/index.md)
+
 ## Reference
 
 - [API reference](reference/panel_reactflow.md)
