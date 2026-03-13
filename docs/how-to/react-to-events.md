@@ -23,10 +23,10 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `node_deleted`       | A node is removed. | `node_id` |
 | `node_moved`         | A node is dragged to a new position. | `node_id`, `position` |
 | `node_clicked`       | A node is clicked (single click). | `node_id` |
-| `node_data_changed`  | `patch_node_data()` is called. | `node_id`, `patch` |
+| `node_data_changed`  | Node data is patched (via API, editor patch, or parameter-driven sync). | `node_id`, `patch` |
 | `edge_added`         | An edge is created (UI connect or API). | `edge` |
 | `edge_deleted`       | An edge is removed. | `edge_id` |
-| `edge_data_changed`  | `patch_edge_data()` is called. | `edge_id`, `patch` |
+| `edge_data_changed`  | Edge data is patched (via API, editor patch, or parameter-driven sync). | `edge_id`, `patch` |
 | `selection_changed`  | The active selection changes. | `nodes`, `edges` |
 | `sync`               | A batch sync from the frontend. | *(varies)* |
 
@@ -54,6 +54,58 @@ flow.on("node_moved", on_node_moved)
 
 pn.Column(log, flow).servable()
 ```
+
+---
+
+## Handle events on `Node` classes
+
+If you define nodes as `Node` subclasses, you can implement hooks directly on
+the node instance:
+
+```python
+from panel_reactflow import Node, ReactFlow
+
+
+class TaskNode(Node):
+    def on_event(self, payload, flow):
+        print("any node event:", payload["type"])
+
+    def on_delete(self, payload, flow):
+        print("deleted:", self.id)
+
+
+flow = ReactFlow(nodes=[TaskNode(id="t1", position={"x": 0, "y": 0}, data={})])
+```
+
+Common hooks include `on_event` (wildcard), `on_add`, `on_move`, `on_click`,
+`on_data_change`, and `on_delete`.
+
+When a `Node` subclass parameter with `precedence >= 0` changes, it
+automatically patches node data and will trigger `on_data_change`.
+
+---
+
+## Handle events on `Edge` classes
+
+`Edge` subclasses can handle edge lifecycle and patch events directly:
+
+```python
+from panel_reactflow import Edge, ReactFlow
+
+
+class WeightedEdge(Edge):
+    def on_data_change(self, payload, flow):
+        print("edge patch:", payload["patch"])
+
+    def on_delete(self, payload, flow):
+        print("edge deleted:", self.id)
+```
+
+Common edge hooks include `on_event`, `on_add`, `on_data_change`,
+`on_selection_changed`, and `on_delete`.
+
+Likewise, changing an `Edge` subclass data parameter (`precedence >= 0`)
+triggers `on_data_change` through the same data patch pipeline.
 
 ---
 

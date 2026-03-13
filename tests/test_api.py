@@ -8,7 +8,7 @@ import panel as pn
 import param
 import pytest
 
-from panel_reactflow import EdgeSpec, EdgeType, NodeSpec, NodeType, ReactFlow, SchemaSource
+from panel_reactflow import Edge, EdgeSpec, EdgeType, Node, NodeSpec, NodeType, ReactFlow, SchemaSource
 from panel_reactflow.base import (
     Editor,
     JsonEditor,
@@ -74,12 +74,323 @@ def test_reactflow_add_node_with_nodespec_view() -> None:
     assert flow.nodes[0]["view"] is view
 
 
+class _CountingNode(Node):
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.events = []
+
+    def on_event(self, payload, flow):
+        self.events.append(("event", payload["type"]))
+
+    def on_move(self, payload, flow):
+        self.events.append(("move", payload["position"]))
+
+    def on_delete(self, payload, flow):
+        self.events.append(("delete", payload["node_id"]))
+
+
+class _ParameterizedNode(Node):
+    threshold = param.Number(default=0.5, precedence=0)
+    hidden = param.String(default="secret", precedence=-1)
+
+
+def test_reactflow_accepts_node_instance() -> None:
+    flow = ReactFlow()
+    node = Node(id="n1", position={"x": 0, "y": 0}, label="Node object", data={"status": "idle"})
+    flow.add_node(node)
+    assert flow.nodes[0] is node
+    assert flow.nodes[0].data["status"] == "idle"
+
+
+def test_patch_node_data_updates_node_instance() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0}, data={"value": 1})
+    flow = ReactFlow(nodes=[node])
+    flow.patch_node_data("n1", {"value": 42, "name": "patched"})
+    assert node.data["value"] == 42
+    assert node.data["name"] == "patched"
+
+
+def test_sync_updates_node_instance_fields() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0}, data={"value": 1}, selected=False)
+    flow = ReactFlow(nodes=[node])
+    flow._handle_msg(
+        {
+            "type": "sync",
+            "nodes": [
+                {
+                    "id": "n1",
+                    "type": "panel",
+                    "position": {"x": 10, "y": 20},
+                    "data": {"value": 3},
+                    "selected": True,
+                    "draggable": False,
+                    "connectable": False,
+                    "deletable": False,
+                }
+            ],
+        }
+    )
+    assert flow.nodes[0] is node
+    assert node.position == {"x": 10, "y": 20}
+    assert node.data == {"value": 3}
+    assert node.selected is True
+    assert node.draggable is False
+    assert node.connectable is False
+    assert node.deletable is False
+
+
+def test_node_hooks_receive_events() -> None:
+    node = _CountingNode(id="n1", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    flow._handle_msg({"type": "node_moved", "node_id": "n1", "position": {"x": 5, "y": 9}})
+    flow.remove_node("n1")
+    assert ("move", {"x": 5, "y": 9}) in node.events
+    assert ("event", "node_moved") in node.events
+    assert ("delete", "n1") in node.events
+    assert ("event", "node_deleted") in node.events
+
+
+def test_node_can_provide_custom_editor() -> None:
+    class _NodeWithEditor(Node):
+        def editor(self, data, schema, *, id, type, on_patch):
+            return pn.pane.Markdown(f"Editor for {id}")
+
+    node = _NodeWithEditor(id="n1", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    editor = flow._node_editors["n1"]
+    assert hasattr(editor, "object")
+    assert "n1" in editor.object
+
+
+def test_node_subclass_params_with_non_negative_precedence_in_data_and_schema() -> None:
+    node = _ParameterizedNode(id="n1", type="custom", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    payload = node.to_dict()
+    assert payload["data"]["threshold"] == 0.5
+    assert "hidden" not in payload["data"]
+    schema = flow._get_node_schema("custom")
+    assert schema is not None
+    assert "threshold" in schema["properties"]
+    assert "hidden" not in schema["properties"]
+
+
+def test_patch_node_data_updates_parameterized_node_params() -> None:
+    node = _ParameterizedNode(id="n1", type="custom", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    flow.patch_node_data("n1", {"threshold": 0.9, "hidden": "still-hidden"})
+    assert node.threshold == 0.9
+    assert node.hidden == "secret"
+    assert node.data["threshold"] == 0.9
+    assert node.data["hidden"] == "still-hidden"
+
+
+def test_parameterized_node_param_change_auto_patches_data() -> None:
+    node = _ParameterizedNode(id="n1", type="custom", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    events = []
+    flow.on("node_data_changed", events.append)
+    node.threshold = 0.77
+    assert node.data["threshold"] == 0.77
+    assert events[-1]["patch"] == {"threshold": 0.77}
+
+
+def test_parameterized_node_watchers_clean_up_on_delete() -> None:
+    node = _ParameterizedNode(id="n1", type="custom", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    assert "n1" in flow._node_data_param_watchers
+    flow.remove_node("n1")
+    assert "n1" not in flow._node_data_param_watchers
+    events = []
+    flow.on("node_data_changed", events.append)
+    node.threshold = 0.31
+    assert events == []
+
+
 def test_edge_spec_roundtrip() -> None:
     edge = EdgeSpec(id="e1", source="n1", target="n2", data={"weight": 0.5})
     payload = edge.to_dict()
     assert payload["source"] == "n1"
     assert payload["data"]["weight"] == 0.5
     assert EdgeSpec.from_dict(payload).to_dict() == payload
+
+
+class _CountingEdge(Edge):
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.events = []
+
+    def on_event(self, payload, flow):
+        self.events.append(("event", payload["type"]))
+
+    def on_delete(self, payload, flow):
+        self.events.append(("delete", payload["edge_id"]))
+
+
+class _ParameterizedEdge(Edge):
+    confidence = param.Number(default=0.8, precedence=0)
+    internal = param.String(default="ignore", precedence=-1)
+
+
+def test_reactflow_accepts_edge_instance() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    edge = Edge(id="e1", source="n1", target="n2", data={"weight": 1})
+    flow.add_edge(edge)
+    assert flow.edges[0] is edge
+    assert flow.edges[0].data["weight"] == 1
+
+
+def test_patch_edge_data_updates_edge_instance() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", data={"weight": 1})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    flow.patch_edge_data("e1", {"weight": 3, "label": "hi"})
+    assert edge.data["weight"] == 3
+    assert edge.data["label"] == "hi"
+
+
+def test_sync_updates_edge_instance_fields() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", data={"weight": 1}, selected=False)
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    flow._handle_msg(
+        {
+            "type": "sync",
+            "edges": [
+                {
+                    "id": "e1",
+                    "source": "n1",
+                    "target": "n2",
+                    "label": "patched",
+                    "type": "flow",
+                    "selected": True,
+                    "data": {"weight": 7},
+                    "sourceHandle": "out",
+                    "targetHandle": "in",
+                }
+            ],
+        }
+    )
+    assert flow.edges[0] is edge
+    assert edge.label == "patched"
+    assert edge.type == "flow"
+    assert edge.selected is True
+    assert edge.data == {"weight": 7}
+    assert edge.sourceHandle == "out"
+    assert edge.targetHandle == "in"
+
+
+def test_edge_hooks_receive_events() -> None:
+    edge = _CountingEdge(id="e1", source="n1", target="n2", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    flow.patch_edge_data("e1", {"weight": 2})
+    flow.remove_edge("e1")
+    assert ("event", "edge_data_changed") in edge.events
+    assert ("delete", "e1") in edge.events
+    assert ("event", "edge_deleted") in edge.events
+
+
+def test_edge_can_provide_custom_editor() -> None:
+    class _EdgeWithEditor(Edge):
+        def editor(self, data, schema, *, id, type, on_patch):
+            return pn.pane.Markdown(f"Edge editor for {id}")
+
+    edge = _EdgeWithEditor(id="e1", source="n1", target="n2", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    editor = flow._edge_editors["e1"]
+    assert hasattr(editor, "object")
+    assert "e1" in editor.object
+
+
+def test_edge_subclass_params_with_non_negative_precedence_in_data_and_schema() -> None:
+    edge = _ParameterizedEdge(id="e1", source="n1", target="n2", type="weighted", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    payload = edge.to_dict()
+    assert payload["data"]["confidence"] == 0.8
+    assert "internal" not in payload["data"]
+    schema = flow._get_edge_schema("weighted")
+    assert schema is not None
+    assert "confidence" in schema["properties"]
+    assert "internal" not in schema["properties"]
+
+
+def test_patch_edge_data_updates_parameterized_edge_params() -> None:
+    edge = _ParameterizedEdge(id="e1", source="n1", target="n2", type="weighted", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    flow.patch_edge_data("e1", {"confidence": 0.25, "internal": "keep-data-only"})
+    assert edge.confidence == 0.25
+    assert edge.internal == "ignore"
+    assert edge.data["confidence"] == 0.25
+    assert edge.data["internal"] == "keep-data-only"
+
+
+def test_parameterized_edge_param_change_auto_patches_data() -> None:
+    edge = _ParameterizedEdge(id="e1", source="n1", target="n2", type="weighted", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    events = []
+    flow.on("edge_data_changed", events.append)
+    edge.confidence = 0.41
+    assert edge.data["confidence"] == 0.41
+    assert events[-1]["patch"] == {"confidence": 0.41}
+
+
+def test_parameterized_edge_watchers_clean_up_on_delete() -> None:
+    edge = _ParameterizedEdge(id="e1", source="n1", target="n2", type="weighted", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[edge],
+    )
+    assert "e1" in flow._edge_data_param_watchers
+    flow.remove_edge("e1")
+    assert "e1" not in flow._edge_data_param_watchers
+    events = []
+    flow.on("edge_data_changed", events.append)
+    edge.confidence = 0.2
+    assert events == []
 
 
 def test_edge_spec_with_handles() -> None:

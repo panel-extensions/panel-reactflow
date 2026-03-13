@@ -3,7 +3,7 @@
 from panel.pane import Markdown
 from panel.viewable import Viewer
 
-from panel_reactflow import ReactFlow
+from panel_reactflow import Edge, Node, ReactFlow
 
 
 def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
@@ -79,3 +79,42 @@ def test_reactflow_add_node_dynamically_creates_views(document, comm):
 
     assert len(model.data._views) == 1
     assert len(model.data._node_editor_views) == 1
+
+
+def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) -> None:
+    class ViewNode(Node):
+        def __panel__(self):
+            return Markdown("Node view content")
+
+        def editor(self, data, schema, *, id, type, on_patch):
+            return Markdown(f"Node editor {id}")
+
+    class EditorEdge(Edge):
+        def editor(self, data, schema, *, id, type, on_patch):
+            return Markdown(f"Edge editor {id}")
+
+    flow = ReactFlow(
+        nodes=[
+            ViewNode(id="n1", position={"x": 0, "y": 0}, data={}),
+            {"id": "n2", "position": {"x": 150, "y": 0}, "data": {}},
+        ],
+        edges=[EditorEdge(id="e1", source="n1", target="n2", data={})],
+    )
+
+    model = flow.get_root(document, comm=comm)
+    assert model.children == [
+        "_views",
+        "_node_editor_views",
+        "_edge_editor_views",
+        "top_panel",
+        "bottom_panel",
+        "left_panel",
+        "right_panel",
+    ]
+    assert len(model.data._views) == 1
+    assert len(model.data._node_editor_views) == 2
+    assert len(model.data._edge_editor_views) == 1
+
+    by_id = {node["id"]: node for node in model.data.nodes}
+    assert by_id["n1"]["data"]["view_idx"] == 0
+    assert by_id["n2"]["data"].get("view_idx") is None

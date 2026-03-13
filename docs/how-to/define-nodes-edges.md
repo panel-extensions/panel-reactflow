@@ -2,9 +2,9 @@
 
 Every graph in Panel-ReactFlow is built from two lists: **nodes** and
 **edges**.  Nodes represent entities on the canvas; edges represent
-connections between them.  Both are plain Python dictionaries, so you can
-construct them from any data source — a database, a config file, or user
-input at runtime.
+connections between them.  Nodes can be plain dictionaries, `NodeSpec`
+objects, or `Node` instances, so you can choose between lightweight payloads
+and object-oriented node classes.
 
 This guide covers how to create nodes and edges, use the helper dataclasses,
 and update data after the graph is live.
@@ -104,6 +104,40 @@ nodes = [
 
 ---
 
+## Define nodes as classes
+
+Use `Node` when you want per-node Python state, event hooks, and optional
+custom view/editor methods.
+
+```python
+import panel as pn
+from panel_reactflow import Node, ReactFlow
+
+
+class JobNode(Node):
+    def __init__(self, **params):
+        super().__init__(type="job", data={"status": "idle"}, **params)
+
+    def __panel__(self):
+        return pn.pane.Markdown(f"**{self.label}**: {self.data.get('status')}")
+
+    def on_move(self, payload, flow):
+        print(f"{self.id} moved to {payload['position']}")
+
+
+nodes = [
+    JobNode(id="j1", label="Fetch", position={"x": 0, "y": 0}),
+    JobNode(id="j2", label="Process", position={"x": 260, "y": 60}),
+]
+
+flow = ReactFlow(nodes=nodes)
+```
+
+`Node` instances stay as Python objects in `flow.nodes`; they are serialized
+to dicts only when syncing to the frontend.
+
+---
+
 ## Define edges
 
 Edges link two nodes by their `id`.  Use the top-level `label` for the
@@ -125,6 +159,79 @@ edges = [
 | `data`         | no       | Arbitrary dict of payload data. |
 | `sourceHandle` | no       | Specific output handle on the source node. |
 | `targetHandle` | no       | Specific input handle on the target node. |
+
+---
+
+## Define edges as classes
+
+Use `Edge` when you want object-oriented edge state and edge-specific hooks or
+editor logic.
+
+```python
+from panel_reactflow import Edge, ReactFlow
+
+
+class FlowEdge(Edge):
+    def __init__(self, **params):
+        super().__init__(type="flow", data={"weight": 1.0}, **params)
+
+    def on_data_change(self, payload, flow):
+        print(f"{self.id} updated:", payload["patch"])
+
+
+flow = ReactFlow(
+    nodes=[
+        {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+        {"id": "n2", "position": {"x": 260, "y": 60}, "data": {}},
+    ],
+    edges=[FlowEdge(id="e1", source="n1", target="n2")],
+)
+```
+
+`Edge` instances stay as Python objects in `flow.edges`; they are serialized
+to dicts only when syncing to the frontend.
+
+---
+
+## Data <-> parameter sync on `Node` and `Edge`
+
+For class-based nodes/edges, Panel-ReactFlow supports two-way synchronization
+between `data` and declared parameters.
+
+### Which parameters are included?
+
+Only subclass parameters with **explicit non-negative precedence**
+(`precedence >= 0`) are treated as data fields.
+
+```python
+import param
+from panel_reactflow import Node
+
+
+class TaskNode(Node):
+    status = param.Selector(default="idle", objects=["idle", "running", "done"], precedence=0)
+    retries = param.Integer(default=0, precedence=0)
+    _internal_state = param.String(default="x", precedence=-1)
+```
+
+In this example:
+
+- `status` and `retries` are included in `data`
+- `_internal_state` is not included
+
+### Sync behavior
+
+- **Parameter -> data**: updating `node.status` or `edge.weight` triggers an
+  automatic data patch to the graph and frontend.
+- **Data -> parameter**: incoming graph patches/sync updates write values back
+  onto matching parameters.
+- **Schema generation**: if no explicit type schema is provided, these
+  included parameters are used to generate a JSON schema for editors.
+
+### Editor implication
+
+If your editor widgets are bound with `from_param(...)`, you usually do not
+need manual `on_patch` watchers for those data parameters.
 
 ---
 
