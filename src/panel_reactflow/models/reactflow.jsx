@@ -97,7 +97,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
 
 
     const applyFigureStyles = async () => {
-      const views = [...Bokeh.index.find_by_id(data.view.key)]
+      const views = [...Bokeh.index.find_by_id(data.view?.key)]
       if (!views.length) {
         return;
       }
@@ -228,6 +228,7 @@ function FlowInner({
   nodeTypes,
   nodeEditors,
   edgeEditors,
+  colorMode,
   editable,
   enableConnect,
   enableDelete,
@@ -471,6 +472,7 @@ function FlowInner({
       edges={edges}
       nodeTypes={nodeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
+      colorMode={colorMode}
       onNodesChange={handleNodesChange}
       onEdgesChange={onEdgesChange}
       onSelectionChange={onSelectionChange}
@@ -503,6 +505,7 @@ export function render({ model, view }) {
   const [defaultEdgeOptions] = model.useState("default_edge_options");
   const [selection, setSelection] = model.useState("selection");
   const [syncMode] = model.useState("sync_mode");
+  const [colorMode] = model.useState("color_mode");
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
@@ -618,8 +621,10 @@ export function render({ model, view }) {
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
+      console.log(node)
       return {
         ...node,
+        className: (node.type === "panel" || model.stylesheets) ? "" : "react-flow__node-default",
         data: {
           ...data,
           view: baseView,
@@ -664,6 +669,7 @@ export function render({ model, view }) {
           views={views}
           viewportSetter={setViewport}
           defaultEdgeOptions={defaultEdgeOptions}
+          colorMode={colorMode}
           nodeTypes={hydratedNodeTypes}
           nodeEditors={nodeEditors}
           edgeEditors={edgeEditors}

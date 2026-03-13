@@ -1163,6 +1163,12 @@ class ReactFlow(ReactComponent):
     default_node_editor = param.Parameter(default=None, doc="Default node editor factory.", precedence=-1)
     default_edge_editor = param.Parameter(default=None, doc="Default edge editor factory.", precedence=-1)
 
+    color_mode = param.ObjectSelector(default=None, objects=["light", "dark"], doc="Color mode for the graph.")
+
+    allow_edge_loops = param.Boolean(default=False, doc="Allow to have edge loops in the graph (can lead to update infinite loops).")
+
+    display_side_bar = param.Boolean(default=True, doc="Display the side bar to drag and drop new nodes.")
+
     debounce_ms = param.Integer(default=150, bounds=(0, None), doc="Debounce delay in milliseconds when sync_mode='debounce'.")
 
     default_edge_options = param.Dict(default={}, doc="Default React Flow edge options.")
@@ -1211,6 +1217,8 @@ class ReactFlow(ReactComponent):
     _render_policy = "manual"
 
     def __init__(self, **params: Any):
+        if "color_mode" not in params:
+            params["color_mode"] = "dark" if pn.config.theme == "dark" else "light"
         self._node_ids: list[str] = []
         self._edge_ids: list[str] = []
         # Normalize type specs before parent init so the frontend receives

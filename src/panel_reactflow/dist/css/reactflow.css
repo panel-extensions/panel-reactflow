@@ -3,12 +3,16 @@
 .react-flow__node-minimal {
     padding: 0;
     border-radius: 6px;
-    border: 1px solid var(--xy-node-border, #d0d7de);
-    background-color: var(--xy-node-background-color, #ffffff);
-    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
-    color: var(--xy-node-color, #101828);
+    border: 1px solid var(--xy-node-border, var(--panel-border-color));
+    background-color: var(--xy-node-background-color, var(--panel-background-color));
+    box-shadow: 0 1px 2px var(--panel-shadow-color);
+    color: var(--xy-node-color, var(--panel-on-background-color));
     font-size: 13px;
     min-width: 140px;
+}
+.react-flow__node-default {
+    text-align: left;
+    width: unset;
 }
 .react-flow__node-panel.selectable:hover,
 .react-flow__node-default.selectable:hover,
@@ -18,7 +22,7 @@
 .react-flow__node-panel.selected,
 .react-flow__node-default.selected,
 .react-flow__node-minimal.selected {
-    border-color: var(--xy-node-border-selected, #2684ff);
+    border-color: var(--xy-node-border-selected, var(--panel-primary-color));
     box-shadow: 0 0 0 1px rgba(38, 132, 255, 0.35);
 }
 
@@ -30,7 +34,9 @@
 }
 
 .rf-node-toolbar-button {
-    float: right;
+    position: absolute;
+    right: 0.5em;
+    top: 0.5em;
     border: none;
     background: transparent;
     font-size: 17px;
@@ -38,13 +44,12 @@
     cursor: pointer;
     z-index: 2;
     padding: 0;
-    margin: 0 0 0 6px;
     transition: color 0.1s;
 }
 
 .rf-node-toolbar-button--open {
     color: #3477db;
-    filter: drop-shadow(0 0 1px #3477db) brightness(1.15);
+    filter: drop-shadow(0 0 1px var(--panel-primary-color)) brightness(1.15);
 }
 
 .rf-node-toolbar-button--closed {
