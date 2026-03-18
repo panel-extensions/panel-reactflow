@@ -597,6 +597,7 @@ class Node(param.Parameterized):
     deletable = param.Boolean(default=True, doc="Whether node is deletable.")
     style = param.Dict(default=None, allow_None=True, doc="Optional node style.")
     className = param.String(default=None, allow_None=True, doc="Optional CSS class.")
+    flow = param.Parameter(default=None, allow_None=True, precedence=-1, doc="Parent ReactFlow instance.")
 
     @classmethod
     def _data_param_names(cls) -> list[str]:
@@ -838,6 +839,7 @@ class Edge(param.Parameterized):
     markerEnd = param.Dict(default=None, allow_None=True, doc="Optional edge end marker.")
     sourceHandle = param.String(default=None, allow_None=True, doc="Optional source handle id.")
     targetHandle = param.String(default=None, allow_None=True, doc="Optional target handle id.")
+    flow = param.Parameter(default=None, allow_None=True, precedence=-1, doc="Parent ReactFlow instance.")
 
     @classmethod
     def _data_param_names(cls) -> list[str]:
@@ -1417,6 +1419,8 @@ class ReactFlow(ReactComponent):
             params["color_mode"] = "dark" if pn.config.theme == "dark" else "light"
         self._node_ids: list[str] = []
         self._edge_ids: list[str] = []
+        self._attached_node_instances: dict[int, Node] = {}
+        self._attached_edge_instances: dict[int, Edge] = {}
         self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
         self._edge_data_param_watchers: dict[str, tuple[Edge, list[Any]]] = {}
         # Normalize type specs before parent init so the frontend receives
@@ -1434,6 +1438,7 @@ class ReactFlow(ReactComponent):
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self.param.watch(self._normalize_nodes, ["nodes"])
         self.param.watch(self._normalize_edges, ["edges"])
+        self.param.watch(self._sync_instance_flow_refs, ["nodes", "edges"])
         self.param.watch(self._update_instance_data_param_watchers, ["nodes", "edges"])
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
@@ -1447,6 +1452,7 @@ class ReactFlow(ReactComponent):
         )
         self._update_node_editors()
         self._update_edge_editors()
+        self._sync_instance_flow_refs()
         self._update_instance_data_param_watchers()
 
     @classmethod
@@ -1662,6 +1668,25 @@ class ReactFlow(ReactComponent):
     def _update_instance_data_param_watchers(self, *_: param.parameterized.Event) -> None:
         self._update_node_data_param_watchers()
         self._update_edge_data_param_watchers()
+
+    def _sync_instance_flow_refs(self, *_: param.parameterized.Event) -> None:
+        current_nodes = {id(node): node for node in self.nodes if isinstance(node, Node)}
+        for node_ref, old_node in list(self._attached_node_instances.items()):
+            if node_ref not in current_nodes:
+                old_node.flow = None
+        for node in current_nodes.values():
+            if node.flow is not self:
+                node.flow = self
+        self._attached_node_instances = current_nodes
+
+        current_edges = {id(edge): edge for edge in self.edges if isinstance(edge, Edge)}
+        for edge_ref, old_edge in list(self._attached_edge_instances.items()):
+            if edge_ref not in current_edges:
+                old_edge.flow = None
+        for edge in current_edges.values():
+            if edge.flow is not self:
+                edge.flow = self
+        self._attached_edge_instances = current_edges
 
     def _update_node_data_param_watchers(self) -> None:
         current_nodes = {node.id: node for node in self.nodes if isinstance(node, Node) and node.id}
@@ -2050,6 +2075,7 @@ class ReactFlow(ReactComponent):
             raw_node.draggable = payload["draggable"]
             raw_node.connectable = payload["connectable"]
             raw_node.deletable = payload["deletable"]
+            raw_node.flow = self
             self._sync_node_data_params_from_data(raw_node)
         self._validate_graph_payload(payload, kind="node")
         if self.validate_on_add:
@@ -2207,6 +2233,7 @@ class ReactFlow(ReactComponent):
             },
         )
         if isinstance(removed_node, Node):
+            removed_node.flow = None
             payload = {
                 "type": "node_deleted",
                 "node_id": node_id,
@@ -2293,6 +2320,7 @@ class ReactFlow(ReactComponent):
         if isinstance(raw_edge, Edge):
             raw_edge.id = payload["id"]
             raw_edge.data = dict(payload["data"])
+            raw_edge.flow = self
             self._sync_edge_data_params_from_data(raw_edge)
         self._validate_graph_payload(payload, kind="edge")
         if self.validate_on_add:
@@ -2329,6 +2357,7 @@ class ReactFlow(ReactComponent):
         if removed:
             self._emit("edge_deleted", {"type": "edge_deleted", "edge_id": edge_id})
         if isinstance(removed_edge, Edge):
+            removed_edge.flow = None
             payload = {"type": "edge_deleted", "edge_id": edge_id}
             self._invoke_edge_hook(removed_edge, "on_delete", payload)
             self._invoke_edge_hook(removed_edge, "on_event", payload)
