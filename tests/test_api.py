@@ -99,6 +99,7 @@ def test_reactflow_accepts_node_instance() -> None:
     node = Node(id="n1", position={"x": 0, "y": 0}, label="Node object", data={"status": "idle"})
     flow.add_node(node)
     assert flow.nodes[0] is node
+    assert node.flow is flow
     assert flow.nodes[0].data["status"] == "idle"
 
 
@@ -148,6 +149,7 @@ def test_node_hooks_receive_events() -> None:
     assert ("event", "node_moved") in node.events
     assert ("delete", "n1") in node.events
     assert ("event", "node_deleted") in node.events
+    assert node.flow is None
 
 
 def test_node_can_provide_custom_editor() -> None:
@@ -200,10 +202,20 @@ def test_parameterized_node_watchers_clean_up_on_delete() -> None:
     assert "n1" in flow._node_data_param_watchers
     flow.remove_node("n1")
     assert "n1" not in flow._node_data_param_watchers
+    assert node.flow is None
     events = []
     flow.on("node_data_changed", events.append)
     node.threshold = 0.31
     assert events == []
+
+
+def test_node_flow_ref_updates_on_nodes_assignment() -> None:
+    flow = ReactFlow()
+    node = Node(id="n1", position={"x": 0, "y": 0}, data={})
+    flow.nodes = [node]
+    assert node.flow is flow
+    flow.nodes = []
+    assert node.flow is None
 
 
 def test_edge_spec_roundtrip() -> None:
@@ -238,6 +250,7 @@ def test_reactflow_accepts_edge_instance() -> None:
     edge = Edge(id="e1", source="n1", target="n2", data={"weight": 1})
     flow.add_edge(edge)
     assert flow.edges[0] is edge
+    assert edge.flow is flow
     assert flow.edges[0].data["weight"] == 1
 
 
@@ -305,6 +318,7 @@ def test_edge_hooks_receive_events() -> None:
     assert ("event", "edge_data_changed") in edge.events
     assert ("delete", "e1") in edge.events
     assert ("event", "edge_deleted") in edge.events
+    assert edge.flow is None
 
 
 def test_edge_can_provide_custom_editor() -> None:
@@ -387,10 +401,25 @@ def test_parameterized_edge_watchers_clean_up_on_delete() -> None:
     assert "e1" in flow._edge_data_param_watchers
     flow.remove_edge("e1")
     assert "e1" not in flow._edge_data_param_watchers
+    assert edge.flow is None
     events = []
     flow.on("edge_data_changed", events.append)
     edge.confidence = 0.2
     assert events == []
+
+
+def test_edge_flow_ref_updates_on_edges_assignment() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", data={})
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ]
+    )
+    flow.edges = [edge]
+    assert edge.flow is flow
+    flow.edges = []
+    assert edge.flow is None
 
 
 def test_edge_spec_with_handles() -> None:
