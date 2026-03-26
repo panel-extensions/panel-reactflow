@@ -2166,21 +2166,18 @@ class ReactFlow(ReactComponent):
                 if edge is None:
                     return
                 self.add_edge(edge)
-                self._emit("edge_added", msg)
             case "node_deleted":
                 node_ids = msg.get("node_ids") or []
                 if msg.get("node_id"):
                     node_ids = list(set(node_ids) | {msg.get("node_id")})
                 for node_id in node_ids:
                     self.remove_node(node_id)
-                self._emit("node_deleted", msg)
             case "edge_deleted":
                 edge_ids = msg.get("edge_ids") or []
                 if msg.get("edge_id"):
                     edge_ids = list(set(edge_ids) | {msg.get("edge_id")})
                 for edge_id in edge_ids:
                     self.remove_edge(edge_id)
-                self._emit("edge_deleted", msg)
             case "node_clicked":
                 node_id = msg.get("node_id")
                 if node_id is None:
