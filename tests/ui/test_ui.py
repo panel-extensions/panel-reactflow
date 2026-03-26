@@ -2,10 +2,12 @@
 
 import panel as pn
 import panel.models.jsoneditor  # noqa
+import param
 import pytest
+from panel.custom import Child, ReactComponent
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import EdgeSpec, JsonEditor, NodeSpec, NodeType, ReactFlow
+from panel_reactflow import EdgeSpec, JsonEditor, Node, NodeSpec, NodeType, ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -77,6 +79,24 @@ def _edge_label_locator(page, label):
 
 def _pane_locator(page):
     return page.locator(".react-flow__pane")
+
+
+class ReactChild(ReactComponent):
+    child = Child()
+    render_count = param.Integer(default=0)
+
+    _esm = """
+    export function render({ model }) {
+      model.render_count += 1
+      return <button>{model.get_child('child')}</button>
+    }"""
+
+
+class CountingViewNode(Node):
+    view_component = param.Parameter(default=None, precedence=-1)
+
+    def __panel__(self):
+        return self.view_component
 
 
 def test_render_nodes_edges_labels_views_and_panels(page):
@@ -304,3 +324,32 @@ def test_editor_renders_in_side_mode(page):
 
     _node_locator(page, "Start").click()
     expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
+
+
+def test_delete_node_does_not_rerender_surviving_node_views(page):
+    view_a = ReactChild(child=pn.pane.Markdown("View A"))
+    view_b = ReactChild(child=pn.pane.Markdown("View B"))
+    view_c = ReactChild(child=pn.pane.Markdown("View C"))
+    flow = ReactFlow(
+        nodes=[
+            CountingViewNode(id="n1", position={"x": 0, "y": 0}, label="Node A", view_component=view_a),
+            CountingViewNode(id="n2", position={"x": 260, "y": 60}, label="Node B", view_component=view_b),
+            CountingViewNode(id="n3", position={"x": 520, "y": 120}, label="Node C", view_component=view_c),
+        ],
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    wait_until(lambda: view_a.render_count > 0 and view_b.render_count > 0 and view_c.render_count > 0, timeout=8000)
+    b_count_before = view_b.render_count
+    c_count_before = view_c.render_count
+
+    _node_locator(page, "Node A").click(force=True)
+    page.keyboard.press("Backspace")
+    wait_until(lambda: all(node.id != "n1" for node in flow.nodes), timeout=8000)
+
+    # Let any queued rerenders settle; surviving nodes should not rerender.
+    page.wait_for_timeout(300)
+    assert view_b.render_count == b_count_before
+    assert view_c.render_count == c_count_before

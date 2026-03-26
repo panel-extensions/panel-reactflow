@@ -1407,6 +1407,7 @@ class ReactFlow(ReactComponent):
     _edge_editors = param.Dict(default={}, doc="Per-edge editors.", precedence=-1)
     _edge_editor_views = Children(default=[], doc="Edge editor views (one per edge, same order).")
     _views = Children(default=[], doc="Panel viewables rendered inside nodes via view_idx.")
+    _node_update_count = param.Integer(default=0, doc="Monotonic counter for normalized node updates.")
 
     _bundle = DIST_PATH / "panel-reactflow.bundle.js"
     _esm = Path(__file__).parent / "models" / "reactflow.jsx"
@@ -1423,6 +1424,7 @@ class ReactFlow(ReactComponent):
         self._attached_edge_instances: dict[int, Edge] = {}
         self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
         self._edge_data_param_watchers: dict[str, tuple[Edge, list[Any]]] = {}
+        self._node_view_cache: dict[str, tuple[int, Any]] = {}
         # Normalize type specs before parent init so the frontend receives
         # JSON-serializable descriptors from the start.
         if "node_types" in params:
@@ -1450,6 +1452,7 @@ class ReactFlow(ReactComponent):
             self._update_edge_editors,
             ["edges", "selection", "edge_editors", "default_edge_editor"],
         )
+        self.param.watch(self._update_views, ["nodes"])
         self._sync_instance_flow_refs()
         self._update_node_editors()
         self._update_edge_editors()
@@ -1546,10 +1549,18 @@ class ReactFlow(ReactComponent):
             return dict(node.data or {})
         return dict(node.get("data", {}))
 
-    @staticmethod
-    def _node_view(node: dict[str, Any] | Node) -> Any | None:
+    def _node_view(self, node: dict[str, Any] | Node) -> Any | None:
         if isinstance(node, Node):
-            return node.__panel__()
+            node_id = self._node_id(node)
+            node_ref = id(node)
+            if node_id is not None:
+                cached = self._node_view_cache.get(node_id)
+                if cached is not None and cached[0] == node_ref:
+                    return cached[1]
+            view = node.__panel__()
+            if node_id is not None and view is not None:
+                self._node_view_cache[node_id] = (node_ref, view)
+            return view
         return node.get("view", None)
 
     @staticmethod
@@ -1957,6 +1968,18 @@ class ReactFlow(ReactComponent):
             for fig in model.select({"type": figure}):
                 if BK_FIGURE_CSS not in fig.stylesheets:
                     fig.stylesheets = fig.stylesheets + [BK_FIGURE_CSS]
+
+    def _update_views(self, *events: tuple[param.parameterized.Event]) -> None:
+        event = events[0] if events else None
+        nodes = event.new if event is not None else self.nodes
+        normalized = [self._coerce_node(node) for node in nodes]
+        node_ids = {self._node_id(node) for node in normalized}
+        self._node_view_cache = {node_id: cached for node_id, cached in self._node_view_cache.items() if node_id in node_ids}
+        is_normalized = not any(n1 is not n2 for n1, n2 in zip(normalized, nodes, strict=False))
+        if not is_normalized:
+            return
+        self.param.trigger("_views")
+        self._node_update_count += 1
 
     def _process_param_change(self, params):
         params = super()._process_param_change(params)
