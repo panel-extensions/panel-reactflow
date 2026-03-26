@@ -1436,9 +1436,9 @@ class ReactFlow(ReactComponent):
             params["edges"] = [ReactFlow._coerce_edge(edge) for edge in params["edges"]]
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
+        self.param.watch(self._sync_instance_flow_refs, ["nodes", "edges"])
         self.param.watch(self._normalize_nodes, ["nodes"])
         self.param.watch(self._normalize_edges, ["edges"])
-        self.param.watch(self._sync_instance_flow_refs, ["nodes", "edges"])
         self.param.watch(self._update_instance_data_param_watchers, ["nodes", "edges"])
         self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
@@ -1450,9 +1450,9 @@ class ReactFlow(ReactComponent):
             self._update_edge_editors,
             ["edges", "selection", "edge_editors", "default_edge_editor"],
         )
+        self._sync_instance_flow_refs()
         self._update_node_editors()
         self._update_edge_editors()
-        self._sync_instance_flow_refs()
         self._update_instance_data_param_watchers()
 
     @classmethod
