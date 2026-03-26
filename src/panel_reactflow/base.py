@@ -1450,6 +1450,7 @@ class ReactFlow(ReactComponent):
             self._update_edge_editors,
             ["edges", "selection", "edge_editors", "default_edge_editor"],
         )
+        self.param.watch(self._update_views, ["nodes"])
         self._sync_instance_flow_refs()
         self._update_node_editors()
         self._update_edge_editors()
@@ -1958,6 +1959,9 @@ class ReactFlow(ReactComponent):
                 if BK_FIGURE_CSS not in fig.stylesheets:
                     fig.stylesheets = fig.stylesheets + [BK_FIGURE_CSS]
 
+    def _update_views(self, *events: tuple[param.parameterized.Event]) -> None:
+        self.param.trigger("_views")
+
     def _process_param_change(self, params):
         params = super()._process_param_change(params)
         if "nodes" in params:
@@ -2222,10 +2226,11 @@ class ReactFlow(ReactComponent):
             if (edge.source if isinstance(edge, Edge) else edge.get("source")) == node_id
             or (edge.target if isinstance(edge, Edge) else edge.get("target")) == node_id
         ]
-        self.nodes = nodes
-        if removed_edges:
-            remaining_edges = [edge for edge in self.edges if edge not in removed_edges]
-            self.edges = remaining_edges
+        with pn.io.hold():
+            self.nodes = nodes
+            if removed_edges:
+                remaining_edges = [edge for edge in self.edges if edge not in removed_edges]
+                self.edges = remaining_edges
         self._emit(
             "node_deleted",
             {
