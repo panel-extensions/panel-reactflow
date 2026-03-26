@@ -2219,7 +2219,12 @@ class ReactFlow(ReactComponent):
         """
         removed_node = next((node for node in self.nodes if self._node_id(node) == node_id), None)
         nodes = [node for node in self.nodes if self._node_id(node) != node_id]
-        removed_edges = [edge for edge in self.edges if edge.get("source") == node_id or edge.get("target") == node_id]
+        removed_edges = [
+            edge
+            for edge in self.edges
+            if (edge.source if isinstance(edge, Edge) else edge.get("source")) == node_id
+            or (edge.target if isinstance(edge, Edge) else edge.get("target")) == node_id
+        ]
         self.nodes = nodes
         if removed_edges:
             remaining_edges = [edge for edge in self.edges if edge not in removed_edges]
@@ -2229,7 +2234,7 @@ class ReactFlow(ReactComponent):
             {
                 "type": "node_deleted",
                 "node_id": node_id,
-                "deleted_edges": [edge.get("id") for edge in removed_edges],
+                "deleted_edges": [self._edge_id(edge) for edge in removed_edges],
             },
         )
         if isinstance(removed_node, Node):
@@ -2237,7 +2242,7 @@ class ReactFlow(ReactComponent):
             payload = {
                 "type": "node_deleted",
                 "node_id": node_id,
-                "deleted_edges": [edge.get("id") for edge in removed_edges],
+                "deleted_edges": [self._edge_id(edge) for edge in removed_edges],
             }
             self._invoke_node_hook(removed_node, "on_delete", payload)
             self._invoke_node_hook(removed_node, "on_event", payload)

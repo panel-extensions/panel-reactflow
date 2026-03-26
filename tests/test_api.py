@@ -847,3 +847,22 @@ def test_mixed_edgespec_and_dict() -> None:
     assert isinstance(flow.edges[1], dict)
     assert flow.edges[0]["id"] == "e1"
     assert flow.edges[1]["id"] == "e2"
+
+
+def test_remove_node_with_edge_instances() -> None:
+    nodes = [
+        Node(id="a", position={"x": 0, "y": 0}, label="Node A"),
+        Node(id="b", position={"x": 250, "y": 0}, label="Node B"),
+        Node(id="c", position={"x": 125, "y": 150}, label="Node C"),
+    ]
+    edges = [
+        Edge(id="e1", source="a", target="c"),
+        Edge(id="e2", source="b", target="c"),
+    ]
+    flow = ReactFlow(nodes=nodes, edges=edges)
+
+    flow.remove_node("a")
+    assert len(flow.nodes) == 2
+    assert all(n.id != "a" for n in flow.nodes)
+    assert len(flow.edges) == 1
+    assert flow.edges[0].id == "e2"
