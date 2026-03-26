@@ -94,6 +94,13 @@ class _ParameterizedNode(Node):
     hidden = param.String(default="secret", precedence=-1)
 
 
+class _PanelNode(Node):
+    text = param.String(default="", precedence=0)
+
+    def __panel__(self):
+        return pn.pane.Markdown(self.text)
+
+
 def test_reactflow_accepts_node_instance() -> None:
     flow = ReactFlow()
     node = Node(id="n1", position={"x": 0, "y": 0}, label="Node object", data={"status": "idle"})
@@ -216,6 +223,34 @@ def test_node_flow_ref_updates_on_nodes_assignment() -> None:
     assert node.flow is flow
     flow.nodes = []
     assert node.flow is None
+
+
+def test_views_triggered_on_nodes_reassignment_with_panel_nodes() -> None:
+    flow = ReactFlow(nodes=[_PanelNode(id="n1", position={"x": 0, "y": 0}, text="one")])
+    updates = []
+    watcher = flow.param.watch(lambda event: updates.append(event.name), "_views")
+    try:
+        flow.nodes = [_PanelNode(id="n2", position={"x": 20, "y": 10}, text="two")]
+    finally:
+        flow.param.unwatch(watcher)
+    assert "_views" in updates
+
+
+def test_views_triggered_on_remove_node_with_panel_nodes() -> None:
+    flow = ReactFlow(
+        nodes=[
+            _PanelNode(id="n1", position={"x": 0, "y": 0}, text="one"),
+            _PanelNode(id="n2", position={"x": 20, "y": 10}, text="two"),
+        ],
+        edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}],
+    )
+    updates = []
+    watcher = flow.param.watch(lambda event: updates.append(event.name), "_views")
+    try:
+        flow.remove_node("n1")
+    finally:
+        flow.param.unwatch(watcher)
+    assert "_views" in updates
 
 
 def test_edge_spec_roundtrip() -> None:

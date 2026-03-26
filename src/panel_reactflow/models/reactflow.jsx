@@ -217,6 +217,7 @@ function FlowInner({
   model,
   hydratedNodes,
   pyNodes,
+  nodeUpdateCount,
   hydratedEdges,
   selectionSetter,
   currentSelection,
@@ -242,7 +243,9 @@ function FlowInner({
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
-  const lastHydrated = useRef({ nodesSig: null, viewsRef: null, editorsRef: null, edgesSig: null, edgeEditorsSig: null });
+  const hydrationFrameRef = useRef(null);
+  const edgeHydrationFrameRef = useRef(null);
+  const lastHydrated = useRef({ nodeRevision: null, edgesSig: null, edgeEditorsSig: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport } = useReactFlow();
 
@@ -291,37 +294,59 @@ function FlowInner({
   }, [edges]);
 
   useEffect(() => {
-    const readyByNodeId = new Map(
-      (hydratedNodes || []).map((node) => [node?.id, Boolean(node?.data?._viewReady)]),
-    );
-    const pyNodesWithReady = (pyNodes || []).map((node) => ({
-      ...node,
-      _viewReady: readyByNodeId.get(node?.id) ?? true,
-    }));
-    const nodesSig = signature(pyNodesWithReady);
-    const viewsSig = signature((views || []).map((view) => view?.props?.id ?? null));
-    const editorsSig = signature((nodeEditors || []).map((editor) => editor?.props?.id ?? null));
-    if (nodesSig === lastHydrated.current.nodesSig && viewsSig === lastHydrated.current.viewsRef && editorsSig === lastHydrated.current.editorsRef) {
+    return () => {
+      if (hydrationFrameRef.current !== null) {
+        cancelAnimationFrame(hydrationFrameRef.current);
+        hydrationFrameRef.current = null;
+      }
+      if (edgeHydrationFrameRef.current !== null) {
+        cancelAnimationFrame(edgeHydrationFrameRef.current);
+        edgeHydrationFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (nodeUpdateCount === lastHydrated.current.nodeRevision) {
       return;
     }
-    lastHydrated.current.nodesSig = nodesSig;
-    lastHydrated.current.viewsRef = viewsSig;
-    lastHydrated.current.editorsRef = editorsSig;
+    const expectedViewCount = (pyNodes || []).reduce((maxIdx, node) => {
+      const idx = node?.data?.view_idx;
+      if (Number.isFinite(idx)) {
+        return Math.max(maxIdx, idx);
+      }
+      return maxIdx;
+    }, -1) + 1;
+    const expectedEditorCount = (pyNodes || []).length;
+    if ((views || []).length !== expectedViewCount || (nodeEditors || []).length !== expectedEditorCount) {
+      return;
+    }
 
-    setNodes((curr) => {
-      const currById = new Map(curr.map((n) => [n.id, n]));
-      const merged = hydratedNodes.map((n) => {
-        const prev = currById.get(n.id);
-        if (!prev) return n;
-        return {
-          ...n,
-          selected: prev.selected,
-          dragging: prev.dragging,
-        };
+    if (hydrationFrameRef.current !== null) {
+      cancelAnimationFrame(hydrationFrameRef.current);
+    }
+    hydrationFrameRef.current = requestAnimationFrame(() => {
+      setNodes((curr) => {
+        const currById = new Map(curr.map((n) => [n.id, n]));
+        const merged = hydratedNodes.map((n) => {
+          const prev = currById.get(n.id);
+          if (!prev) return n;
+          const next = {
+            ...n,
+            selected: prev.selected,
+            dragging: prev.dragging,
+          };
+          return areEqual(prev, next) ? prev : next;
+        });
+        if (merged.length === curr.length && merged.every((node, index) => node === curr[index])) {
+          return curr;
+        }
+        return merged;
       });
-      return merged;
+      lastHydrated.current.nodeRevision = nodeUpdateCount;
+      hydrationFrameRef.current = null;
     });
-  }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors]);
+  }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors, nodeUpdateCount]);
 
   useEffect(() => {
     const edgesSig = signature(hydratedEdges);
@@ -329,7 +354,13 @@ function FlowInner({
     if (edgesSig !== lastHydrated.current.edgesSig || editorsSig !== lastHydrated.current.edgeEditorsSig) {
       lastHydrated.current.edgesSig = edgesSig;
       lastHydrated.current.edgeEditorsSig = editorsSig;
-      setEdges(hydratedEdges);
+      if (edgeHydrationFrameRef.current !== null) {
+        cancelAnimationFrame(edgeHydrationFrameRef.current);
+      }
+      edgeHydrationFrameRef.current = requestAnimationFrame(() => {
+        setEdges((curr) => (areEqual(curr, hydratedEdges) ? curr : hydratedEdges));
+        edgeHydrationFrameRef.current = null;
+      });
     }
   }, [hydratedEdges, setEdges, edgeEditors]);
 
@@ -409,32 +440,6 @@ function FlowInner({
   const onNodesDelete = useCallback(
     (deletedNodes) => {
       const deletedIds = deletedNodes.map((node) => node.id);
-      const deletedViewIdx = deletedNodes
-        .map((node) => node?.data?.view_idx)
-        .filter((value) => Number.isFinite(value))
-        .sort((a, b) => a - b);
-      if (deletedViewIdx.length) {
-        const deletedSet = new Set(deletedIds);
-        setNodes((current) =>
-          current.map((node) => {
-            if (deletedSet.has(node.id)) {
-              return node;
-            }
-            const viewIdx = node?.data?.view_idx;
-            if (!Number.isFinite(viewIdx)) {
-              return node;
-            }
-            const shift = deletedViewIdx.filter((idx) => idx < viewIdx).length;
-            if (!shift) {
-              return node;
-            }
-            return {
-              ...node,
-              data: { ...node.data, view_idx: viewIdx - shift },
-            };
-          }),
-        );
-      }
       const deletedEdges = edgesRef.current.filter((edge) => deletedIds.includes(edge.source) || deletedIds.includes(edge.target));
       schedulePatch({
         type: "node_deleted",
@@ -443,7 +448,7 @@ function FlowInner({
         deleted_edges: deletedEdges.map((edge) => edge.id),
       });
     },
-    [schedulePatch, setNodes],
+    [schedulePatch],
   );
 
   const onEdgesDelete = useCallback(
@@ -500,6 +505,7 @@ export function render({ model, view }) {
   const [readyViewMap, setReadyViewMap] = useState(() => new Map());
   const readyCheckTimeoutsRef = useRef(new Map());
   const [pyNodes] = model.useState("nodes");
+  const [nodeUpdateCount] = model.useState("_node_update_count");
   const [pyEdges] = model.useState("edges");
   const [pyNodeTypes] = model.useState("node_types");
   const [defaultEdgeOptions] = model.useState("default_edge_options");
@@ -614,18 +620,19 @@ export function render({ model, view }) {
     return (pyNodes || []).map((node, idx) => {
       const data = node.data || {};
       const viewIndex = data.view_idx;
+      const { view_idx, ...dataWithoutViewIdx } = data;
       const baseView = views[viewIndex];
       const baseViewId = baseView?.key;
       const isViewReady = baseViewId ? Boolean(readyViewMap.get(baseViewId)) : true;
       const editorView = nodeEditors[idx];
       const typeSpec = allNodeTypes[node.type] || {};
-      const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
+      const realKeys = Object.keys(dataWithoutViewIdx);
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
       return {
         ...node,
         className: (node.type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default",
         data: {
-          ...data,
+          ...dataWithoutViewIdx,
           view: baseView,
           editor: editorView,
           _viewReady: isViewReady,
@@ -634,7 +641,7 @@ export function render({ model, view }) {
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes, readyViewMap]);
+  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
@@ -662,6 +669,7 @@ export function render({ model, view }) {
           model={model}
           hydratedNodes={hydratedNodes}
           pyNodes={pyNodes || []}
+          nodeUpdateCount={nodeUpdateCount}
           hydratedEdges={hydratedEdges}
           selectionSetter={setSelection}
           currentSelection={selection}
