@@ -1972,9 +1972,9 @@ class ReactFlow(ReactComponent):
     def _update_views(self, *events: tuple[param.parameterized.Event]) -> None:
         event = events[0] if events else None
         nodes = event.new if event is not None else self.nodes
-        node_ids = {self._node_id(node) for node in nodes}
-        self._node_view_cache = {node_id: cached for node_id, cached in self._node_view_cache.items() if node_id in node_ids}
         normalized = [self._coerce_node(node) for node in nodes]
+        node_ids = {self._node_id(node) for node in normalized}
+        self._node_view_cache = {node_id: cached for node_id, cached in self._node_view_cache.items() if node_id in node_ids}
         is_normalized = not any(n1 is not n2 for n1, n2 in zip(normalized, nodes, strict=False))
         if not is_normalized:
             return

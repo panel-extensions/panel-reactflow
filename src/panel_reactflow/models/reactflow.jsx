@@ -245,7 +245,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, edgesSig: null, edgeEditorsSig: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, edgeEditorsSig: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport } = useReactFlow();
 
@@ -307,18 +307,11 @@ function FlowInner({
   }, []);
 
   useEffect(() => {
-    if (nodeUpdateCount === lastHydrated.current.nodeRevision) {
-      return;
-    }
-    const expectedViewCount = (pyNodes || []).reduce((maxIdx, node) => {
-      const idx = node?.data?.view_idx;
-      if (Number.isFinite(idx)) {
-        return Math.max(maxIdx, idx);
-      }
-      return maxIdx;
-    }, -1) + 1;
-    const expectedEditorCount = (pyNodes || []).length;
-    if ((views || []).length !== expectedViewCount || (nodeEditors || []).length !== expectedEditorCount) {
+    const nodesSig = signature(hydratedNodes);
+    if (
+      nodeUpdateCount === lastHydrated.current.nodeRevision &&
+      nodesSig === lastHydrated.current.nodesSig
+    ) {
       return;
     }
 
@@ -344,6 +337,7 @@ function FlowInner({
         return merged;
       });
       lastHydrated.current.nodeRevision = nodeUpdateCount;
+      lastHydrated.current.nodesSig = nodesSig;
       hydrationFrameRef.current = null;
     });
   }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors, nodeUpdateCount]);
