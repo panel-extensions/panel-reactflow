@@ -256,6 +256,24 @@ class NodeType:
     outputs : list of str, optional
         List of output port names. If provided, these ports will be rendered
         on the node for outgoing connections.
+    input_connectable : bool, default True
+        Whether input handles are connectable. When False, users cannot create
+        connections to or from input handles.
+    input_connectable_start : bool, default True
+        Whether new edges can start from input handles. Set to False to prevent
+        dragging out from input handles while still allowing edges to terminate there.
+    input_connectable_end : bool, default True
+        Whether new edges can end at input handles. Set to False to prevent
+        edges from terminating at input handles while still allowing dragging from them.
+    output_connectable : bool, default True
+        Whether output handles are connectable. When False, users cannot create
+        connections to or from output handles.
+    output_connectable_start : bool, default True
+        Whether new edges can start from output handles. Set to False to prevent
+        dragging out from output handles while still allowing edges to terminate there.
+    output_connectable_end : bool, default True
+        Whether new edges can end at output handles. Set to False to prevent
+        edges from terminating at output handles while still allowing dragging from them.
     pane_policy : str, default "single"
         Display policy for Panel viewables inside nodes.
 
@@ -297,6 +315,17 @@ class NodeType:
     ...     outputs=["output"]
     ... )
 
+    Define a sink node that accepts connections but cannot be a source:
+
+    >>> sink_type = NodeType(
+    ...     type="sink",
+    ...     label="Data Sink",
+    ...     inputs=["in"],
+    ...     outputs=["status"],
+    ...     input_connectable_start=False,  # Cannot drag from input handles
+    ...     output_connectable_end=False,   # Cannot drag to output handles
+    ... )
+
     Use the node type in a ReactFlow graph:
 
     >>> from panel_reactflow import ReactFlow, NodeSpec
@@ -314,6 +343,12 @@ class NodeType:
     schema: Any = None
     inputs: list[str] | None = None
     outputs: list[str] | None = None
+    input_connectable: bool = True
+    input_connectable_start: bool = True
+    input_connectable_end: bool = True
+    output_connectable: bool = True
+    output_connectable_start: bool = True
+    output_connectable_end: bool = True
     pane_policy: str = "single"
 
     def to_dict(self) -> dict[str, Any]:
@@ -330,6 +365,12 @@ class NodeType:
             "schema": _normalize_schema(self.schema),
             "inputs": self.inputs,
             "outputs": self.outputs,
+            "inputConnectable": self.input_connectable,
+            "inputConnectableStart": self.input_connectable_start,
+            "inputConnectableEnd": self.input_connectable_end,
+            "outputConnectable": self.output_connectable,
+            "outputConnectableStart": self.output_connectable_start,
+            "outputConnectableEnd": self.output_connectable_end,
             "pane_policy": self.pane_policy,
         }
 
