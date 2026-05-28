@@ -68,7 +68,9 @@ def test_context_menu_closes_on_pane_click(page):
     menu = page.locator(".rf-context-menu")
     expect(menu).to_be_visible()
 
-    page.locator(".react-flow__pane").click(force=True)
+    pane = page.locator(".react-flow__pane")
+    box = pane.bounding_box()
+    page.mouse.click(box["x"] + box["width"] - 50, box["y"] + box["height"] - 50)
 
     expect(menu).not_to_be_visible()
     wait_until(lambda: flow._context_menu is None, timeout=8000)
