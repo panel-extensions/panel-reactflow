@@ -73,6 +73,8 @@ def test_reactflow_add_node_dynamically_creates_views(document, comm):
         "bottom_panel",
         "left_panel",
         "right_panel",
+        "_context_menu",
+        "_selected_editor",
     ]
 
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}, "view": Markdown("foo")})
@@ -110,10 +112,12 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
         "bottom_panel",
         "left_panel",
         "right_panel",
+        "_context_menu",
+        "_selected_editor",
     ]
     assert len(model.data._views) == 1
     assert len(model.data._node_editor_views) == 2
-    assert len(model.data._edge_editor_views) == 1
+    assert len(model.data._edge_editor_views) == 0
 
     by_id = {node["id"]: node for node in model.data.nodes}
     assert by_id["n1"]["data"]["view_idx"] == 0
