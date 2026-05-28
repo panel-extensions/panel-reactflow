@@ -18,7 +18,7 @@ import param
 from bokeh.embed.bundle import extension_dirs
 from bokeh.plotting import figure
 from panel.config import config
-from panel.custom import Children, ReactComponent
+from panel.custom import Child, Children, ReactComponent
 from panel.io.resources import EXTENSION_CDN
 from panel.io.state import state
 from panel.util import base_version, classproperty
@@ -681,6 +681,14 @@ class Node(param.Parameterized):
         """Optional per-node editor factory.
 
         Return ``None`` to fall back to type/default editors.
+        """
+        return None
+
+    def context_menu(self) -> Any | None:
+        """Return a Panel component to render as a context menu on right-click.
+
+        Override this method to provide a custom context menu for this node.
+        Return ``None`` to disable the context menu for this node.
         """
         return None
 
@@ -1457,6 +1465,9 @@ class ReactFlow(ReactComponent):
     _node_editor_views = Children(default=[], doc="Node editor views (one per node, same order).")
     _edge_editors = param.Dict(default={}, doc="Per-edge editors.", precedence=-1)
     _edge_editor_views = Children(default=[], doc="Edge editor views (one per edge, same order).")
+    _selected_editor = Child(doc="Active editor for the selected node/edge in side mode.")
+    _context_menu = Child(doc="Context menu component rendered on node right-click.")
+    _context_menu_position = param.Dict(default=None, allow_None=True, doc="Screen position for the context menu overlay.")
     _views = Children(default=[], doc="Panel viewables rendered inside nodes via view_idx.")
     _node_update_count = param.Integer(default=0, doc="Monotonic counter for normalized node updates.")
 
@@ -1502,16 +1513,21 @@ class ReactFlow(ReactComponent):
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
         self.param.watch(
             self._update_node_editors,
-            ["nodes", "editor_mode", "selection", "node_editors", "default_node_editor"],
+            ["nodes", "editor_mode", "node_editors", "default_node_editor"],
         )
         self.param.watch(
             self._update_edge_editors,
-            ["edges", "selection", "edge_editors", "default_edge_editor"],
+            ["edges", "edge_editors", "default_edge_editor"],
+        )
+        self.param.watch(
+            self._update_selected_editor,
+            ["selection", "editor_mode", "nodes", "edges"],
         )
         self.param.watch(self._update_views, ["nodes"])
         self._sync_instance_flow_refs()
         self._update_node_editors()
         self._update_edge_editors()
+        self._update_selected_editor()
         self._update_instance_data_param_watchers()
 
     @classmethod
@@ -1978,6 +1994,20 @@ class ReactFlow(ReactComponent):
         self._edge_editors = editors
         self.param.trigger("_edge_editor_views")
 
+    def _update_selected_editor(self, *events: tuple[param.parameterized.Event]) -> None:
+        selected_nodes = self.selection.get("nodes", [])
+        selected_edges = self.selection.get("edges", [])
+        editor = None
+        if selected_nodes and self.editor_mode == "side":
+            editor = self._node_editors.get(selected_nodes[0])
+        elif selected_edges and not selected_nodes:
+            editor = self._edge_editors.get(selected_edges[0])
+        if editor is not None:
+            view = self._resolve_editor_view(editor)
+        else:
+            view = None
+        self._selected_editor = view
+
     @staticmethod
     def _resolve_editor_view(editor: Any) -> Any:
         """Return a Panel viewable from an editor (class or plain object)."""
@@ -1989,13 +2019,10 @@ class ReactFlow(ReactComponent):
 
     def _get_children(self, data_model, doc, root, parent, comm) -> tuple[dict[str, list[UIElement] | UIElement | None], list[UIElement]]:
         views = []
-        node_editors = []
         for node in self.nodes:
             view = self._node_view(node)
             if view is not None:
                 views.append(self._resolve_editor_view(view))
-            node_editors.append(self._resolve_editor_view(self._node_editors.get(self._node_id(node))))
-        edge_editors = [self._resolve_editor_view(self._edge_editors.get(self._edge_id(edge))) for edge in self.edges]
 
         children: dict[str, list[UIElement] | UIElement | None] = {}
         old_models: list[UIElement] = []
@@ -2003,20 +2030,32 @@ class ReactFlow(ReactComponent):
         self._patch_views(view_models)
         children["_views"] = views
         old_models += view_models
-        editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
-        children["_node_editor_views"] = editor_models
-        old_models += editor_old
-        edge_models, edge_old = self._get_child_model(edge_editors, doc, root, parent, comm)
-        children["_edge_editor_views"] = edge_models
-        old_models += edge_old
-        for name in ("top_panel", "bottom_panel", "left_panel", "right_panel"):
-            panels = list(getattr(self, name, []) or [])
-            if panels:
-                panel_models, panel_old = self._get_child_model(panels, doc, root, parent, comm)
-                children[name] = panel_models
-                old_models += panel_old
+
+        if self.editor_mode == "side":
+            children["_node_editor_views"] = []
+            children["_edge_editor_views"] = []
+        else:
+            node_editors = [self._resolve_editor_view(self._node_editors.get(self._node_id(node))) for node in self.nodes]
+            editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
+            children["_node_editor_views"] = editor_models
+            old_models += editor_old
+            children["_edge_editor_views"] = []
+
+        for name in ("top_panel", "bottom_panel", "left_panel", "right_panel", "_context_menu", "_selected_editor"):
+            panels = getattr(self, name, None)
+            if panels is None:
+                children[name] = None
+            elif isinstance(panels, list):
+                if panels:
+                    panel_models, panel_old = self._get_child_model(panels, doc, root, parent, comm)
+                    children[name] = panel_models
+                    old_models += panel_old
+                else:
+                    children[name] = []
             else:
-                children[name] = []
+                panel_models, panel_old = self._get_child_model([panels], doc, root, parent, comm)
+                children[name] = panel_models[0] if panel_models else None
+                old_models += panel_old
         return children, old_models
 
     def _patch_views(self, view_models: list[UIElement]) -> None:
@@ -2239,6 +2278,7 @@ class ReactFlow(ReactComponent):
                 for edge in self.edges:
                     self._edge_set_selected(edge, self._edge_id(edge) in edge_ids)
                 self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
+                self._update_selected_editor()
                 self._emit("selection_changed", msg)
             case "edge_added":
                 edge = msg.get("edge")
@@ -2262,6 +2302,23 @@ class ReactFlow(ReactComponent):
                 if node_id is None:
                     return
                 self._emit("node_clicked", msg)
+            case "node_context_menu":
+                node_id = msg.get("node_id")
+                position = msg.get("position")
+                if node_id is None:
+                    return
+                node = next((n for n in self.nodes if self._node_id(n) == node_id), None)
+                if node is None or not isinstance(node, Node):
+                    return
+                menu = node.context_menu()
+                if menu is None:
+                    return
+                self._context_menu = menu
+                self._context_menu_position = position
+                self._emit("node_context_menu", msg)
+            case "close_context_menu":
+                self._context_menu = None
+                self._context_menu_position = None
             case _:
                 return
 

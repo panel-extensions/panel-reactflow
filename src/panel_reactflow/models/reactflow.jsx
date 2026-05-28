@@ -436,7 +436,6 @@ function FlowInner({
   nodeTypes,
   edgeTypes,
   nodeEditors,
-  edgeEditors,
   colorMode,
   editable,
   enableConnect,
@@ -453,7 +452,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, edgeEditorsSig: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport } = useReactFlow();
 
@@ -552,10 +551,8 @@ function FlowInner({
 
   useEffect(() => {
     const edgesSig = signature(hydratedEdges);
-    const editorsSig = signature((edgeEditors || []).map((editor) => editor?.props?.id ?? null));
-    if (edgesSig !== lastHydrated.current.edgesSig || editorsSig !== lastHydrated.current.edgeEditorsSig) {
+    if (edgesSig !== lastHydrated.current.edgesSig) {
       lastHydrated.current.edgesSig = edgesSig;
-      lastHydrated.current.edgeEditorsSig = editorsSig;
       if (edgeHydrationFrameRef.current !== null) {
         cancelAnimationFrame(edgeHydrationFrameRef.current);
       }
@@ -564,7 +561,7 @@ function FlowInner({
         edgeHydrationFrameRef.current = null;
       });
     }
-  }, [hydratedEdges, setEdges, edgeEditors]);
+  }, [hydratedEdges, setEdges]);
 
   useEffect(() => {
     if (viewport) {
@@ -664,6 +661,18 @@ function FlowInner({
     [schedulePatch],
   );
 
+  const onNodeContextMenu = useCallback(
+    (event, node) => {
+      event.preventDefault();
+      sendPatch({
+        type: "node_context_menu",
+        node_id: node.id,
+        position: { x: event.clientX, y: event.clientY },
+      });
+    },
+    [sendPatch],
+  );
+
   const onMoveEnd = useCallback(
     (_event, nextViewport) => {
       if (!areEqual(nextViewport, viewport)) {
@@ -689,6 +698,7 @@ function FlowInner({
       onConnect={onConnect}
       onMoveEnd={onMoveEnd}
       onNodeDoubleClick={onNodeDoubleClick}
+      onNodeContextMenu={onNodeContextMenu}
       onPaneClick={onPaneClick}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
@@ -723,9 +733,11 @@ export function render({ model, view }) {
   const [enableMultiselect] = model.useState("enable_multiselect");
   const [showMinimap] = model.useState("show_minimap");
   const [viewport, setViewport] = model.useState("viewport");
+  const [contextMenuPosition] = model.useState("_context_menu_position");
+  const contextMenu = model.get_child("_context_menu");
+  const selectedEditor = model.get_child("_selected_editor");
   const views = model.get_child("_views");
   const nodeEditors = model.get_child("_node_editor_views");
-  const edgeEditors = model.get_child("_edge_editor_views");
   const topPanels = model.get_child("top_panel");
   const bottomPanels = model.get_child("bottom_panel");
   const leftPanels = model.get_child("left_panel");
@@ -733,17 +745,6 @@ export function render({ model, view }) {
 
   const allNodeTypes = useMemo(() => ({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }), [pyNodeTypes]);
 
-  const nodeEditorMap = {};
-  const nodeHasEditorMap = {};
-  pyNodes.forEach((node, idx) => {
-    if (node && node.id !== undefined) {
-      nodeEditorMap[node.id] = nodeEditors[idx];
-      const data = node.data || {};
-      const typeSpec = allNodeTypes[node.type] || {};
-      const realKeys = Object.keys(data).filter((k) => k !== "view_idx");
-      nodeHasEditorMap[node.id] = realKeys.length > 0 || !!typeSpec.schema;
-    }
-  });
 
   useEffect(() => {
     const clearReadyCheckTimeouts = () => {
@@ -809,15 +810,6 @@ export function render({ model, view }) {
     };
   }, [model, view]);
 
-  const edgeEditorMap = {};
-  const edgeHasEditorMap = {};
-  (pyEdges || []).forEach((edge, idx) => {
-    if (edge && edge.id !== undefined) {
-      edgeEditorMap[edge.id] = edgeEditors[idx];
-      const data = edge.data || {};
-      edgeHasEditorMap[edge.id] = Object.keys(data).length > 0;
-    }
-  });
 
   const hydratedNodes = useMemo(() => {
     return (pyNodes || []).map((node, idx) => {
@@ -865,6 +857,35 @@ export function render({ model, view }) {
     return mapping;
   }, [editorMode, pyNodeTypes]);
 
+  const contextMenuRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!contextMenuPosition) return;
+    const handleClick = (event) => {
+      const el = contextMenuRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        ) {
+          return;
+        }
+      }
+      model.send_msg({ type: "close_context_menu" });
+    };
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", handleClick, true);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", handleClick, true);
+    };
+  }, [contextMenuPosition, model]);
+
   const hydratedEdgeTypes = useMemo(() => ({
     bezier: BezierEdge,
     straight: StraightEdge,
@@ -876,7 +897,7 @@ export function render({ model, view }) {
   }), []);
 
   return (
-    <div style={{ width: "100%", height: "100%" }}>
+    <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }}>
       <ReactFlowProvider>
         <FlowInner
           model={model}
@@ -893,7 +914,6 @@ export function render({ model, view }) {
           nodeTypes={hydratedNodeTypes}
           edgeTypes={hydratedEdgeTypes}
           nodeEditors={nodeEditors}
-          edgeEditors={edgeEditors}
           editable={editable}
           enableConnect={enableConnect}
           enableDelete={enableDelete}
@@ -914,10 +934,23 @@ export function render({ model, view }) {
         </Panel>
         <Panel key="right-panel" position="center-right">
           {rightPanels}
-          {selection.nodes.length && editorMode === "side" && nodeHasEditorMap[selection.nodes[0]] ? nodeEditorMap[selection.nodes[0]] : null}
-          {selection.edges.length && !selection.nodes.length && edgeHasEditorMap[selection.edges[0]] ? edgeEditorMap[selection.edges[0]] : null}
+          {selectedEditor}
         </Panel>
       </ReactFlowProvider>
+      {contextMenu && contextMenuPosition ? (
+        <div
+          ref={contextMenuRef}
+          className="rf-context-menu"
+          style={{
+            position: "absolute",
+            top: contextMenuPosition.y - (containerRef.current?.getBoundingClientRect().top ?? 0),
+            left: contextMenuPosition.x - (containerRef.current?.getBoundingClientRect().left ?? 0),
+            zIndex: 1000,
+          }}
+        >
+          {contextMenu}
+        </div>
+      ) : null}
     </div>
   );
 }
