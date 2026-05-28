@@ -155,10 +155,33 @@ edges = [
 | `source`       | yes      | ID of the source node. |
 | `target`       | yes      | ID of the target node. |
 | `label`        | no       | Text rendered on the edge. |
-| `type`         | no       | Edge type name (for styling / editors). |
+| `type`         | no       | Edge type (see built-in types below, or a custom type name). |
 | `data`         | no       | Arbitrary dict of payload data. |
 | `sourceHandle` | no       | Specific output handle on the source node. |
 | `targetHandle` | no       | Specific input handle on the target node. |
+
+### Built-in edge types
+
+| Type             | Description |
+|------------------|-------------|
+| `"bezier"`       | Smooth bezier curve (default). |
+| `"straight"`     | Straight line between nodes. |
+| `"step"`         | Orthogonal path with right angles. |
+| `"smoothstep"`   | Step path with rounded corners. |
+| `"smart_bezier"` | Bezier curve that automatically routes around nodes. |
+| `"smart_straight"`| Straight segments that automatically route around nodes. |
+| `"smart_step"`   | Step path that automatically routes around nodes. |
+
+Smart edge types use pathfinding to avoid overlapping with other nodes in
+the graph. They are useful when edges would otherwise pass through
+intermediate nodes.
+
+```python
+edges = [
+    {"id": "e1", "source": "n1", "target": "n2", "type": "smoothstep"},
+    {"id": "e2", "source": "n1", "target": "n3", "type": "smart_bezier"},
+]
+```
 
 ---
 

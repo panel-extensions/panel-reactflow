@@ -1,6 +1,7 @@
 import React from "react";
-import { Background, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, addEdge, useEdgesState, useNodesState, useReactFlow, useStore } from "@xyflow/react";
+import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useNodes, useNodesState, useReactFlow, useStore, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { getSmartEdge, svgDrawStraightLinePath, pathfindingAStarNoDiagonal } from "@tisoap/react-flow-smart-edge";
 
 const { useCallback, useEffect, useMemo, useRef, useState } = React;
 
@@ -203,6 +204,188 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
   };
 }
 
+function SmartBezierEdge(props) {
+  const {
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    style = {},
+    markerEnd,
+    label,
+  } = props;
+
+  const nodes = useNodes();
+
+  const getSmartEdgeResponse = getSmartEdge({
+    sourcePosition,
+    targetPosition,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    nodes,
+  });
+
+  if (getSmartEdgeResponse instanceof Error) {
+    const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+    return (
+      <>
+        <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+        {label && (
+          <text x={labelX} y={labelY} style={{ fontSize: 12, fill: "#000" }} textAnchor="middle" dy={-5}>
+            {label}
+          </text>
+        )}
+      </>
+    );
+  }
+
+  const { edgeCenterX, edgeCenterY, svgPathString } = getSmartEdgeResponse;
+
+  return (
+    <>
+      <BaseEdge path={svgPathString} markerEnd={markerEnd} style={style} />
+      {label && (
+        <text
+          x={edgeCenterX}
+          y={edgeCenterY}
+          style={{ fontSize: 12, fill: "#000" }}
+          textAnchor="middle"
+          dy={-5}
+        >
+          {label}
+        </text>
+      )}
+    </>
+  );
+}
+
+function SmartStraightEdge(props) {
+  const {
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    style = {},
+    markerEnd,
+    label,
+  } = props;
+
+  const nodes = useNodes();
+
+  const getSmartEdgeResponse = getSmartEdge({
+    sourcePosition,
+    targetPosition,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    nodes,
+    options: { drawEdge: svgDrawStraightLinePath },
+  });
+
+  if (getSmartEdgeResponse instanceof Error) {
+    const [path, labelX, labelY] = getStraightPath({ sourceX, sourceY, targetX, targetY });
+    return (
+      <>
+        <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+        {label && (
+          <text x={labelX} y={labelY} style={{ fontSize: 12, fill: "#000" }} textAnchor="middle" dy={-5}>
+            {label}
+          </text>
+        )}
+      </>
+    );
+  }
+
+  const { edgeCenterX, edgeCenterY, svgPathString } = getSmartEdgeResponse;
+
+  return (
+    <>
+      <BaseEdge path={svgPathString} markerEnd={markerEnd} style={style} />
+      {label && (
+        <text
+          x={edgeCenterX}
+          y={edgeCenterY}
+          style={{ fontSize: 12, fill: "#000" }}
+          textAnchor="middle"
+          dy={-5}
+        >
+          {label}
+        </text>
+      )}
+    </>
+  );
+}
+
+function SmartStepEdge(props) {
+  const {
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    style = {},
+    markerEnd,
+    label,
+  } = props;
+
+  const nodes = useNodes();
+
+  const getSmartEdgeResponse = getSmartEdge({
+    sourcePosition,
+    targetPosition,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    nodes,
+    options: { drawEdge: svgDrawStraightLinePath, generatePath: pathfindingAStarNoDiagonal },
+  });
+
+  if (getSmartEdgeResponse instanceof Error) {
+    const [path, labelX, labelY] = getSmoothStepPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+    return (
+      <>
+        <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+        {label && (
+          <text x={labelX} y={labelY} style={{ fontSize: 12, fill: "#000" }} textAnchor="middle" dy={-5}>
+            {label}
+          </text>
+        )}
+      </>
+    );
+  }
+
+  const { edgeCenterX, edgeCenterY, svgPathString } = getSmartEdgeResponse;
+
+  return (
+    <>
+      <BaseEdge path={svgPathString} markerEnd={markerEnd} style={style} />
+      {label && (
+        <text
+          x={edgeCenterX}
+          y={edgeCenterY}
+          style={{ fontSize: 12, fill: "#000" }}
+          textAnchor="middle"
+          dy={-5}
+        >
+          {label}
+        </text>
+      )}
+    </>
+  );
+}
+
 function useDebouncedSync(syncMode, debounceMs, syncFn) {
   const timeoutRef = useRef(null);
 
@@ -251,6 +434,7 @@ function FlowInner({
   onPaneClick,
   defaultEdgeOptions,
   nodeTypes,
+  edgeTypes,
   nodeEditors,
   colorMode,
   editable,
@@ -503,6 +687,7 @@ function FlowInner({
       nodes={nodes}
       edges={edges}
       nodeTypes={nodeTypes}
+      edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
       colorMode={colorMode}
       onNodesChange={handleNodesChange}
@@ -687,7 +872,15 @@ export function render({ model, view }) {
 
   const containerRef = useRef(null);
 
-  console.log(contextMenu, contextMenuPosition)
+  const hydratedEdgeTypes = useMemo(() => ({
+    bezier: BezierEdge,
+    straight: StraightEdge,
+    step: StepEdge,
+    smoothstep: SmoothStepEdge,
+    smart_bezier: SmartBezierEdge,
+    smart_straight: SmartStraightEdge,
+    smart_step: SmartStepEdge,
+  }), []);
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -705,6 +898,7 @@ export function render({ model, view }) {
           defaultEdgeOptions={defaultEdgeOptions}
           colorMode={colorMode}
           nodeTypes={hydratedNodeTypes}
+          edgeTypes={hydratedEdgeTypes}
           nodeEditors={nodeEditors}
           editable={editable}
           enableConnect={enableConnect}
