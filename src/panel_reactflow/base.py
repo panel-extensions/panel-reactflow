@@ -687,7 +687,17 @@ class EdgeSpec:
     label : str, optional
         Display label shown on the edge. If ``None``, no label is displayed.
     type : str, optional
-        Edge type identifier. Reference a custom type defined in
+        Edge type identifier. Built-in types are:
+
+        - ``'bezier'`` (default): Smooth bezier curve
+        - ``'straight'``: Straight line between nodes
+        - ``'step'``: Orthogonal step path (right angles)
+        - ``'smoothstep'``: Step path with rounded corners
+        - ``'smart_bezier'``: Bezier curve that routes around nodes
+        - ``'smart_straight'``: Straight segments that route around nodes
+        - ``'smart_step'``: Step path that routes around nodes
+
+        You can also reference a custom type defined in
         ``ReactFlow.edge_types`` for schema validation and custom rendering.
     selected : bool, default False
         Whether the edge is currently selected in the UI.
@@ -1411,7 +1421,12 @@ class ReactFlow(ReactComponent):
 
     _bundle = DIST_PATH / "panel-reactflow.bundle.js"
     _esm = Path(__file__).parent / "models" / "reactflow.jsx"
-    _importmap = {"imports": {"@xyflow/react": "https://esm.sh/@xyflow/react@12.8.3"}}
+    _importmap = {
+        "imports": {
+            "@xyflow/react": "https://esm.sh/@xyflow/react@12.8.3",
+            "@tisoap/react-flow-smart-edge": "https://esm.sh/@tisoap/react-flow-smart-edge@4.0.3",
+        }
+    }
     _stylesheets = [DIST_PATH / "panel-reactflow.bundle.css", DIST_PATH / "css" / "reactflow.css"]
     _render_policy = "manual"
 
