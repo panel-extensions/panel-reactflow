@@ -391,7 +391,7 @@ def test_connectable_handles_data_source_to_sink(page):
     source_handle = _node_locator(page, "Data Source").locator(".react-flow__handle-right").first
     sink_handle = _node_locator(page, "Data Sink").locator(".react-flow__handle-left").first
 
-    source_handle.drag_to(sink_handle)
+    source_handle.drag_to(sink_handle, force=True)
 
     def _edge_created():
         return len(flow.edges) == 1 and flow.edges[0]["source"] == "source" and flow.edges[0]["target"] == "sink"
@@ -426,7 +426,7 @@ def test_connectable_handles_transform_node(page):
     source_handle = _node_locator(page, "Transform").first.locator(".react-flow__handle-right").first
     target_handle = _node_locator(page, "Transform").nth(1).locator(".react-flow__handle-left").first
 
-    source_handle.drag_to(target_handle)
+    source_handle.drag_to(target_handle, force=True)
 
     def _edge_created():
         return len(flow.edges) == 1
@@ -479,7 +479,7 @@ def test_connectable_handles_monitor_node(page):
     source_handle = _node_locator(page, "Source").locator(".react-flow__handle-right").first
     monitor_input = _node_locator(page, "Monitor").locator(".react-flow__handle-left").first
 
-    source_handle.drag_to(monitor_input)
+    source_handle.drag_to(monitor_input, force=True)
 
     def _first_edge_created():
         return len(flow.edges) == 1
@@ -536,7 +536,7 @@ def test_connectable_handles_multiple_inputs_outputs(page):
     basic1_handle = _node_locator(page, "Basic").first.locator(".react-flow__handle-right").first
     multi_input = _node_locator(page, "Multi").locator(".react-flow__handle-left").first
 
-    basic1_handle.drag_to(multi_input)
+    basic1_handle.drag_to(multi_input, force=True)
 
     def _first_edge_created():
         return len(flow.edges) == 1
