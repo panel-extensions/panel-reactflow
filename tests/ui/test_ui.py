@@ -547,7 +547,7 @@ def test_connectable_handles_multiple_inputs_outputs(page):
     multi_output = _node_locator(page, "Multi").locator(".react-flow__handle-right").first
     basic2_handle = _node_locator(page, "Multi").locator(".react-flow__handle-left").first
 
-    multi_output.drag_to(basic2_handle)
+    multi_output.drag_to(basic2_handle, force=True)
 
     def _second_edge_created():
         return len(flow.edges) == 2
