@@ -353,3 +353,246 @@ def test_delete_node_does_not_rerender_surviving_node_views(page):
     page.wait_for_timeout(300)
     assert view_b.render_count == b_count_before
     assert view_c.render_count == c_count_before
+
+
+def test_connectable_handles_data_source_to_sink(page):
+    """Test connecting from a data source to a data sink."""
+    data_source = NodeType(
+        type="data_source",
+        label="Data Source",
+        outputs=["data"],
+        output_connectable_start=True,
+        output_connectable_end=False,
+    )
+
+    data_sink = NodeType(
+        type="data_sink",
+        label="Data Sink",
+        inputs=["data"],
+        input_connectable_start=False,
+        input_connectable_end=True,
+    )
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="data_source", position={"x": 100, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="sink", type="data_sink", position={"x": 400, "y": 150}, data={}).to_dict(),
+        ],
+        node_types={
+            "data_source": data_source,
+            "data_sink": data_sink,
+        },
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    # Connect from source output to sink input
+    source_handle = _node_locator(page, "Data Source").locator(".react-flow__handle-right").first
+    sink_handle = _node_locator(page, "Data Sink").locator(".react-flow__handle-left").first
+
+    source_handle.drag_to(sink_handle, force=True)
+
+    def _edge_created():
+        return len(flow.edges) == 1 and flow.edges[0]["source"] == "source" and flow.edges[0]["target"] == "sink"
+
+    wait_until(_edge_created, timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+
+def test_connectable_handles_transform_node(page):
+    """Test that a transform node with default connectable flags allows all connections."""
+    transform = NodeType(
+        type="transform",
+        label="Transform",
+        inputs=["in"],
+        outputs=["out"],
+    )
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="t1", type="transform", position={"x": 100, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="t2", type="transform", position={"x": 400, "y": 150}, data={}).to_dict(),
+        ],
+        node_types={
+            "transform": transform,
+        },
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    # Connect from first transform output to second transform input
+    source_handle = _node_locator(page, "Transform").first.locator(".react-flow__handle-right").first
+    target_handle = _node_locator(page, "Transform").nth(1).locator(".react-flow__handle-left").first
+
+    source_handle.drag_to(target_handle, force=True)
+
+    def _edge_created():
+        return len(flow.edges) == 1
+
+    wait_until(_edge_created, timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+
+def test_connectable_handles_monitor_node(page):
+    """Test monitor node with restricted input and output connectability."""
+    monitor = NodeType(
+        type="monitor",
+        label="Monitor",
+        inputs=["in"],
+        outputs=["status"],
+        input_connectable_start=False,
+        output_connectable_end=False,
+        output_connectable_start=True,
+    )
+
+    data_source = NodeType(
+        type="data_source",
+        label="Source",
+        outputs=["data"],
+    )
+
+    data_sink = NodeType(
+        type="data_sink",
+        label="Sink",
+        inputs=["data"],
+    )
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="data_source", position={"x": 50, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="monitor", type="monitor", position={"x": 300, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="sink", type="data_sink", position={"x": 550, "y": 150}, data={}).to_dict(),
+        ],
+        node_types={
+            "data_source": data_source,
+            "monitor": monitor,
+            "data_sink": data_sink,
+        },
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    # Connect source to monitor input (should work)
+    source_handle = _node_locator(page, "Source").locator(".react-flow__handle-right").first
+    monitor_input = _node_locator(page, "Monitor").locator(".react-flow__handle-left").first
+
+    source_handle.drag_to(monitor_input, force=True)
+
+    def _first_edge_created():
+        return len(flow.edges) == 1
+
+    wait_until(_first_edge_created, timeout=8000)
+
+    # Connect monitor output to sink input (should work)
+    monitor_output = _node_locator(page, "Monitor").locator(".react-flow__handle-right").first
+    sink_handle = _node_locator(page, "Sink").locator(".react-flow__handle-left").first
+
+    monitor_output.drag_to(sink_handle)
+
+    def _second_edge_created():
+        return len(flow.edges) == 2
+
+    wait_until(_second_edge_created, timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(2)
+
+
+def test_connectable_handles_multiple_inputs_outputs(page):
+    """Test node with multiple inputs and outputs respects connectable flags."""
+    multi_node = NodeType(
+        type="multi",
+        label="Multi",
+        inputs=["in1", "in2"],
+        outputs=["out1", "out2"],
+        input_connectable_start=False,
+        output_connectable_end=False,
+    )
+
+    basic_node = NodeType(
+        type="basic",
+        label="Basic",
+        inputs=["in"],
+        outputs=["out"],
+    )
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="basic1", type="basic", position={"x": 50, "y": 100}, data={}).to_dict(),
+            NodeSpec(id="multi", type="multi", position={"x": 300, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="basic2", type="basic", position={"x": 600, "y": 200}, data={}).to_dict(),
+        ],
+        node_types={
+            "multi": multi_node,
+            "basic": basic_node,
+        },
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    # Connect basic1 output to multi input
+    basic1_handle = _node_locator(page, "Basic").first.locator(".react-flow__handle-right").first
+    multi_input = _node_locator(page, "Multi").locator(".react-flow__handle-left").first
+
+    basic1_handle.drag_to(multi_input, force=True)
+
+    def _first_edge_created():
+        return len(flow.edges) == 1
+
+    wait_until(_first_edge_created, timeout=8000)
+
+    # Connect multi output to basic2 input
+    multi_output = _node_locator(page, "Multi").locator(".react-flow__handle-right").first
+    basic2_handle = _node_locator(page, "Multi").locator(".react-flow__handle-left").first
+
+    multi_output.drag_to(basic2_handle, force=True)
+
+    def _second_edge_created():
+        return len(flow.edges) == 2
+
+    wait_until(_second_edge_created, timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(2)
+
+
+def test_connectable_handles_programmatic_edge_with_restricted_handles(page):
+    """Test that programmatically added edges work even with restricted connectable flags."""
+    data_source = NodeType(
+        type="data_source",
+        label="Source",
+        outputs=["data"],
+        output_connectable_start=True,
+        output_connectable_end=False,
+    )
+
+    data_sink = NodeType(
+        type="data_sink",
+        label="Sink",
+        inputs=["data"],
+        input_connectable_start=False,
+        input_connectable_end=True,
+    )
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="data_source", position={"x": 100, "y": 150}, data={}).to_dict(),
+            NodeSpec(id="sink", type="data_sink", position={"x": 400, "y": 150}, data={}).to_dict(),
+        ],
+        edges=[EdgeSpec(id="e1", source="source", target="sink", sourceHandle="data", targetHandle="data").to_dict()],
+        node_types={
+            "data_source": data_source,
+            "data_sink": data_sink,
+        },
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    # Verify the programmatic edge is rendered
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+    # Verify Python state has the edge
+    assert len(flow.edges) == 1
+    assert flow.edges[0]["source"] == "source"
+    assert flow.edges[0]["target"] == "sink"

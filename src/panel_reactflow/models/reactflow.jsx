@@ -20,23 +20,39 @@ const figureStylesheet = `
   height: calc(var(--rf-zoom) * 100%);
 }`.trim();
 
-function renderHandles(direction, handles) {
+function renderHandles(direction, handles, opts = {}) {
+  const handleType = direction === "input" ? "target" : "source";
+  const position = direction === "input" ? Position.Left : Position.Right;
+
+  // Build handle props from opts, only including defined values
+  const handleProps = {};
+  if (opts.connectable !== undefined) {
+    handleProps.isConnectable = opts.connectable;
+  }
+  if (opts.connectableStart !== undefined) {
+    handleProps.isConnectableStart = opts.connectableStart;
+  }
+  if (opts.connectableEnd !== undefined) {
+    handleProps.isConnectableEnd = opts.connectableEnd;
+  }
+
   // Explicitly empty array → no handles
   if (Array.isArray(handles) && handles.length === 0) {
     return null;
   }
   // null/undefined → default handle
   if (!handles?.length) {
-    return <Handle type={direction === "input" ? "target" : "source"} position={direction === "input" ? Position.Left : Position.Right} />;
+    return <Handle type={handleType} position={position} {...handleProps} />;
   }
   const spacing = 100 / (handles.length + 1);
   return handles.map((handle, index) => (
     <Handle
       key={`${direction}-${handle}`}
       id={handle}
-      type={direction === "input" ? "target" : "source"}
-      position={direction === "input" ? Position.Left : Position.Right}
+      type={handleType}
+      position={position}
       style={{ top: `${(index + 1) * spacing}%` }}
+      {...handleProps}
     />
   ));
 }
@@ -163,7 +179,11 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
             />
           </button>
         )}
-        {renderHandles("input", spec.inputs)}
+        {renderHandles("input", spec.inputs, {
+          connectable: spec.inputConnectable,
+          connectableStart: spec.inputConnectableStart,
+          connectableEnd: spec.inputConnectableEnd,
+        })}
         <div className="rf-node-label" style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
           {displayLabel}
         </div>
@@ -173,7 +193,11 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
             {showInlineEditor ? data.editor : null}
           </div>
         )}
-        {renderHandles("output", spec.outputs)}
+        {renderHandles("output", spec.outputs, {
+          connectable: spec.outputConnectable,
+          connectableStart: spec.outputConnectableStart,
+          connectableEnd: spec.outputConnectableEnd,
+        })}
       </div>
     );
   };
