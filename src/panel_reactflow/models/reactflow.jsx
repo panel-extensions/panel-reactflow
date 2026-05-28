@@ -921,7 +921,7 @@ export function render({ model, view }) {
         </Panel>
         <Panel key="right-panel" position="center-right">
           {rightPanels}
-          {editorMode === "side" ? selectedEditor : null}
+          {selectedEditor}
         </Panel>
       </ReactFlowProvider>
       {contextMenu && contextMenuPosition ? (

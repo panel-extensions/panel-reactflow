@@ -1995,16 +1995,12 @@ class ReactFlow(ReactComponent):
         self.param.trigger("_edge_editor_views")
 
     def _update_selected_editor(self, *events: tuple[param.parameterized.Event]) -> None:
-        if self.editor_mode != "side":
-            if self._selected_editor is not None:
-                self._selected_editor = None
-            return
         selected_nodes = self.selection.get("nodes", [])
         selected_edges = self.selection.get("edges", [])
         editor = None
-        if selected_nodes:
+        if selected_nodes and self.editor_mode == "side":
             editor = self._node_editors.get(selected_nodes[0])
-        elif selected_edges:
+        elif selected_edges and not selected_nodes:
             editor = self._edge_editors.get(selected_edges[0])
         if editor is not None:
             view = self._resolve_editor_view(editor)
@@ -2282,6 +2278,7 @@ class ReactFlow(ReactComponent):
                 for edge in self.edges:
                     self._edge_set_selected(edge, self._edge_id(edge) in edge_ids)
                 self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
+                self._update_selected_editor()
                 self._emit("selection_changed", msg)
             case "edge_added":
                 edge = msg.get("edge")
