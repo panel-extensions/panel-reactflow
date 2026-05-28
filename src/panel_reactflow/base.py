@@ -1476,7 +1476,7 @@ class ReactFlow(ReactComponent):
     _importmap = {
         "imports": {
             "@xyflow/react": "https://esm.sh/@xyflow/react@12.8.3",
-            "@tisoap/react-flow-smart-edge": "https://esm.sh/@tisoap/react-flow-smart-edge@4.0.3",
+            "@tisoap/react-flow-smart-edge": "https://esm.sh/@tisoap/react-flow-smart-edge",
         }
     }
     _stylesheets = [DIST_PATH / "panel-reactflow.bundle.css", DIST_PATH / "css" / "reactflow.css"]
