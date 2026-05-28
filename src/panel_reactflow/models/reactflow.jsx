@@ -857,20 +857,34 @@ export function render({ model, view }) {
     return mapping;
   }, [editorMode, pyNodeTypes]);
 
-  const closeContextMenu = useCallback(() => {
-    if (contextMenuPosition) {
-      model.send_msg({ type: "close_context_menu" });
-    }
-  }, [model, contextMenuPosition]);
-
-  const handlePaneClick = useCallback(
-    (event) => {
-      closeContextMenu();
-    },
-    [closeContextMenu],
-  );
-
+  const contextMenuRef = useRef(null);
   const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!contextMenuPosition) return;
+    const handleClick = (event) => {
+      const el = contextMenuRef.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        ) {
+          return;
+        }
+      }
+      model.send_msg({ type: "close_context_menu" });
+    };
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", handleClick, true);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", handleClick, true);
+    };
+  }, [contextMenuPosition, model]);
 
   const hydratedEdgeTypes = useMemo(() => ({
     bezier: BezierEdge,
@@ -908,7 +922,6 @@ export function render({ model, view }) {
           syncMode={syncMode}
           debounceMs={debounceMs}
           viewport={viewport}
-          onPaneClick={handlePaneClick}
         />
         <Panel key="top-panel" position="top-center">
           {topPanels}
@@ -926,6 +939,7 @@ export function render({ model, view }) {
       </ReactFlowProvider>
       {contextMenu && contextMenuPosition ? (
         <div
+          ref={contextMenuRef}
           className="rf-context-menu"
           style={{
             position: "absolute",
