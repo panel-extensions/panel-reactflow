@@ -264,6 +264,30 @@ def test_delete_node_reindexes_views(page):
     expect(_node_locator(page, "Node B").filter(has_text="View B")).to_have_count(1)
 
 
+@pytest.mark.parametrize("key", ["Backspace", "Delete"])
+def test_deletes_node(page, key):
+    flow = _make_flow()
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    page.keyboard.press(key)
+
+    wait_until(lambda: all(node["id"] != "n1" for node in flow.nodes), timeout=8000)
+    expect(_node_locator(page, "Start")).to_have_count(0)
+
+
+@pytest.mark.parametrize("key", ["Backspace", "Delete"])
+def test_deletes_edge(page, key):
+    flow = _make_flow()
+    serve_component(page, flow)
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    page.keyboard.press(key)
+
+    wait_until(lambda: len(flow.edges) == 0, timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(0)
+
+
 def test_python_remove_node_reindexes_views(page):
     nodes = [
         NodeSpec(

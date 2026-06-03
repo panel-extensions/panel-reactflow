@@ -523,7 +523,7 @@ function FlowInner({
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
       elementsSelectable={editable}
-      deleteKeyCode={enableDelete ? "Backspace" : null}
+      deleteKeyCode={enableDelete ? ["Backspace", "Delete"] : null}
       multiSelectionKeyCode={enableMultiselect ? "Shift" : null}
       fitView
     >
