@@ -46,16 +46,21 @@ function renderHandles(direction, handles, opts = {}) {
     return <Handle type={handleType} position={position} {...handleProps} />;
   }
   const spacing = 100 / (handles.length + 1);
-  return handles.map((handle, index) => (
-    <Handle
-      key={`${direction}-${handle}`}
-      id={handle}
-      type={handleType}
-      position={position}
-      style={{ top: `${(index + 1) * spacing}%` }}
-      {...handleProps}
-    />
-  ));
+  return handles.map((handle, index) => {
+    const id = typeof handle === "string" ? handle : handle.id;
+    const label = typeof handle === "object" ? handle.label : undefined;
+    return (
+      <Handle
+        key={`${direction}-${id}`}
+        id={id}
+        type={handleType}
+        position={position}
+        style={{ top: `${(index + 1) * spacing}%` }}
+        {...(label ? {"data-tooltip": label, "data-tooltip-pos": direction === "input" ? "left" : "right"} : {})}
+        {...handleProps}
+      />
+    );
+  });
 }
 
 function makeNodeComponent(typeName, typeSpec, editorMode) {
