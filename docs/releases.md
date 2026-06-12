@@ -1,5 +1,51 @@
 # Release Notes
 
+## Version 0.4.0
+
+This release adds new interaction features, edge routing options, and
+handle customization capabilities.
+
+### Highlights
+
+- **Right-click context menu** — nodes and the canvas now support a
+  configurable context menu triggered on right-click, enabling custom
+  actions like delete, duplicate, or copy without toolbar buttons
+  ([#65](https://github.com/panel-extensions/panel-reactflow/pull/65)).
+- **Smart edge routing** — new smart edge types (`smartBezier`,
+  `smartStep`, `smartStraight`) that automatically route around nodes
+  instead of passing through them
+  ([#64](https://github.com/panel-extensions/panel-reactflow/pull/64)).
+- **Handle connectivity controls** — per-type flags
+  (`input_connectable`, `input_connectable_start`,
+  `input_connectable_end`, and their `output_*` counterparts) let you
+  restrict which handles users can drag edges from or to
+  ([#63](https://github.com/panel-extensions/panel-reactflow/pull/63)).
+- **Handle tooltips** — handles can now carry a `label` that appears as
+  an instant tooltip on hover, making port purpose discoverable without
+  cluttering the canvas. Pass `{"id": "port_name", "label": "Description"}`
+  in your `inputs`/`outputs` lists
+  ([#67](https://github.com/panel-extensions/panel-reactflow/pull/67)).
+- **`Node.flow` and `Edge.flow` back-references** — instance-based nodes
+  and edges now hold a `.flow` reference to their parent `ReactFlow`,
+  simplifying imperative graph manipulation from callbacks
+  ([#56](https://github.com/panel-extensions/panel-reactflow/pull/56)).
+- **Delete key support** — selected nodes and edges can now be removed
+  with the Delete key, matching standard graph-editor UX expectations.
+- **Bundle cache-busting** — the frontend bundle URL now includes a
+  content hash, preventing stale cached bundles after upgrades
+  ([#68](https://github.com/panel-extensions/panel-reactflow/pull/68)).
+
+### Bug fixes
+
+- Fixed stale node views not updating and deletion causing flicker
+  ([#60](https://github.com/panel-extensions/panel-reactflow/pull/60)).
+- Fixed `flow` attribute initialization on component creation
+  ([#59](https://github.com/panel-extensions/panel-reactflow/pull/59)).
+- Edge/node add/remove events are now emitted exactly once
+  ([#58](https://github.com/panel-extensions/panel-reactflow/pull/58)).
+- Fixed removing a node when edges are defined as `Edge` instances
+  ([#57](https://github.com/panel-extensions/panel-reactflow/pull/57)).
+
 ## Version 0.3.0
 
 This release focuses on core graph-model capabilities, callback ergonomics,
