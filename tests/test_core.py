@@ -68,7 +68,6 @@ def test_reactflow_add_node_dynamically_creates_views(document, comm):
     assert model.children == [
         "_views",
         "_node_editor_views",
-        "_edge_editor_views",
         "top_panel",
         "bottom_panel",
         "left_panel",
@@ -107,7 +106,6 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
     assert model.children == [
         "_views",
         "_node_editor_views",
-        "_edge_editor_views",
         "top_panel",
         "bottom_panel",
         "left_panel",
@@ -117,7 +115,6 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
     ]
     assert len(model.data._views) == 1
     assert len(model.data._node_editor_views) == 2
-    assert len(model.data._edge_editor_views) == 0
 
     by_id = {node["id"]: node for node in model.data.nodes}
     assert by_id["n1"]["data"]["view_idx"] == 0

@@ -250,12 +250,14 @@ class NodeType:
         - A :class:`SchemaSource` wrapper for explicit schema types
 
         The schema is normalized to JSON Schema format internally.
-    inputs : list of str, optional
-        List of input port names. If provided, these ports will be rendered
-        on the node for incoming connections.
-    outputs : list of str, optional
-        List of output port names. If provided, these ports will be rendered
-        on the node for outgoing connections.
+    inputs : list of str or dict, optional
+        List of input port definitions. Each entry can be a plain string
+        (the handle ID) or a dict with ``"id"`` and optional ``"label"``
+        keys. When a label is provided it renders as a tooltip on hover.
+    outputs : list of str or dict, optional
+        List of output port definitions. Each entry can be a plain string
+        (the handle ID) or a dict with ``"id"`` and optional ``"label"``
+        keys. When a label is provided it renders as a tooltip on hover.
     input_connectable : bool, default True
         Whether input handles are connectable. When False, users cannot create
         connections to or from input handles.
@@ -341,8 +343,8 @@ class NodeType:
     type: str
     label: str | None = None
     schema: Any = None
-    inputs: list[str] | None = None
-    outputs: list[str] | None = None
+    inputs: list[str | dict[str, str]] | None = None
+    outputs: list[str | dict[str, str]] | None = None
     input_connectable: bool = True
     input_connectable_start: bool = True
     input_connectable_end: bool = True
@@ -1464,7 +1466,6 @@ class ReactFlow(ReactComponent):
     _node_editors = param.Dict(default={}, doc="Per-node editors.", precedence=-1)
     _node_editor_views = Children(default=[], doc="Node editor views (one per node, same order).")
     _edge_editors = param.Dict(default={}, doc="Per-edge editors.", precedence=-1)
-    _edge_editor_views = Children(default=[], doc="Edge editor views (one per edge, same order).")
     _selected_editor = Child(doc="Active editor for the selected node/edge in side mode.")
     _context_menu = Child(doc="Context menu component rendered on node right-click.")
     _context_menu_position = param.Dict(default=None, allow_None=True, doc="Screen position for the context menu overlay.")
@@ -1992,7 +1993,6 @@ class ReactFlow(ReactComponent):
                 editor = editor_factory
             editors[edge_id] = editor
         self._edge_editors = editors
-        self.param.trigger("_edge_editor_views")
 
     def _update_selected_editor(self, *events: tuple[param.parameterized.Event]) -> None:
         selected_nodes = self.selection.get("nodes", [])
@@ -2033,13 +2033,11 @@ class ReactFlow(ReactComponent):
 
         if self.editor_mode == "side":
             children["_node_editor_views"] = []
-            children["_edge_editor_views"] = []
         else:
             node_editors = [self._resolve_editor_view(self._node_editors.get(self._node_id(node))) for node in self.nodes]
             editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
             children["_node_editor_views"] = editor_models
             old_models += editor_old
-            children["_edge_editor_views"] = []
 
         for name in ("top_panel", "bottom_panel", "left_panel", "right_panel", "_context_menu", "_selected_editor"):
             panels = getattr(self, name, None)

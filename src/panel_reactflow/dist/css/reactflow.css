@@ -80,6 +80,33 @@
     transform: none;
 }
 
+.react-flow__handle[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    font-size: 11px;
+    line-height: 1.3;
+    padding: 4px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s;
+    z-index: 10;
+}
+.react-flow__handle[data-tooltip-pos="left"]::after {
+    right: calc(100% + 6px);
+}
+.react-flow__handle[data-tooltip-pos="right"]::after {
+    left: calc(100% + 6px);
+}
+.react-flow__handle[data-tooltip]:hover::after {
+    opacity: 1;
+}
+
 .rf-context-menu {
     background: var(--xy-node-background-color, var(--panel-background-color));
     border: 1px solid var(--panel-border-color);
