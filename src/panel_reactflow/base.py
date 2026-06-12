@@ -1542,8 +1542,10 @@ class ReactFlow(ReactComponent):
             # Generate relative path to handle apps served on subpaths
             esm = ("" if state.rel_path else "./") + cls._component_resource_path(esm_path, compiled)
             if config.autoreload:
-                modified = hashlib.sha256(str(esm_path.stat().st_mtime).encode("utf-8")).hexdigest()
-                esm += f"?{modified}"
+                esm_hash = hashlib.sha256(str(esm_path.stat().st_mtime).encode("utf-8")).hexdigest()
+            else:
+                esm_hash = hashlib.md5(__version__.encode("utf-8")).hexdigest()
+            esm += f"?{esm_hash}"
         else:
             esm = esm_path.read_text(encoding="utf-8")
         return esm
