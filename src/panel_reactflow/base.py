@@ -1279,6 +1279,10 @@ class ReactFlow(ReactComponent):
         Allow users to delete selected nodes or edges using keyboard shortcuts.
     enable_multiselect : bool, default True
         Allow selecting multiple nodes/edges with modifier keys (Shift/Ctrl).
+    max_zoom : float, default 2
+        Maximum zoom level the viewport can be zoomed in to.
+    min_zoom : float, default 0.5
+        Minimum zoom level the viewport can be zoomed out to.
     selection : dict, default {"nodes": [], "edges": []}
         Current selection state with lists of selected node and edge IDs.
         Read-only; updated automatically when selection changes.
@@ -1445,6 +1449,10 @@ class ReactFlow(ReactComponent):
     enable_delete = param.Boolean(default=True, doc="Allow deleting selected nodes or edges.")
 
     enable_multiselect = param.Boolean(default=True, doc="Allow multiselect with modifier key.")
+
+    max_zoom = param.Number(default=2, bounds=(0, None), inclusive_bounds=(False, True), doc="Maximum zoom level of the viewport.")
+
+    min_zoom = param.Number(default=0.5, bounds=(0, None), inclusive_bounds=(False, True), doc="Minimum zoom level of the viewport.")
 
     selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
 

@@ -266,6 +266,8 @@ function FlowInner({
   enableConnect,
   enableDelete,
   enableMultiselect,
+  maxZoom,
+  minZoom,
   showMinimap,
   syncMode,
   debounceMs,
@@ -530,6 +532,8 @@ function FlowInner({
       elementsSelectable={editable}
       deleteKeyCode={enableDelete ? ["Backspace", "Delete"] : null}
       multiSelectionKeyCode={enableMultiselect ? "Shift" : null}
+      minZoom={minZoom}
+      maxZoom={maxZoom}
       fitView
     >
       <Controls />
@@ -556,6 +560,8 @@ export function render({ model, view }) {
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");
   const [enableMultiselect] = model.useState("enable_multiselect");
+  const [maxZoom] = model.useState("max_zoom");
+  const [minZoom] = model.useState("min_zoom");
   const [showMinimap] = model.useState("show_minimap");
   const [viewport, setViewport] = model.useState("viewport");
   const [contextMenuPosition] = model.useState("_context_menu_position");
@@ -743,6 +749,8 @@ export function render({ model, view }) {
           enableConnect={enableConnect}
           enableDelete={enableDelete}
           enableMultiselect={enableMultiselect}
+          maxZoom={maxZoom}
+          minZoom={minZoom}
           showMinimap={showMinimap}
           syncMode={syncMode}
           debounceMs={debounceMs}
