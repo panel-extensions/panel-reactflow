@@ -1,5 +1,16 @@
 # Release Notes
 
+## Version 0.4.1
+
+A small enhancement release adding viewport zoom controls.
+
+### Enhancements
+
+- **Zoom limits** — new `min_zoom` (default `0.5`) and `max_zoom`
+  (default `2`) parameters constrain how far the canvas can be zoomed
+  out and in, and can be updated at runtime
+  ([#69](https://github.com/panel-extensions/panel-reactflow/pull/69)).
+
 ## Version 0.4.0
 
 This release adds new interaction features, edge routing options, and
