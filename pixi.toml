@@ -5,8 +5,8 @@ platforms = ["osx-arm64", "osx-64", "linux-64", "win-64"]
 
 [tasks]
 postinstall = "pip install --no-build-isolation --no-deps --disable-pip-version-check -e ."
-compile = { cmd = "panel compile panel_splitjs", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
-compile-dev = { cmd = "panel compile panel_splitjs --build-dir build --watch", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+compile = { cmd = "panel compile panel_reactflow", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
+compile-dev = { cmd = "panel compile panel_reactflow --build-dir build --watch", env = { PYTHONPATH = "./src:$PYTHONPATH" } }
 pre-commit-install = "pre-commit install"
 pre-commit-run = "pre-commit run -a"
 
