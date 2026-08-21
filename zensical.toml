@@ -18,7 +18,8 @@ nav = [
     {"Define Editors" = "how-to/define-editors.md"},
     {"Embed Views in Nodes" = "how-to/embed-views-in-nodes.md"},
     {"Style Nodes & Edges" = "how-to/style-nodes-edges.md"},
-    {"React to Events" = "how-to/react-to-events.md"}
+    {"React to Events" = "how-to/react-to-events.md"},
+    {"Recover from Rendering Errors" = "how-to/recover-from-errors.md"}
   ]},
   {"Examples" = [
     {"Gallery" = "examples/index.md"},

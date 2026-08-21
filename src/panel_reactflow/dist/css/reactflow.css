@@ -115,3 +115,119 @@
     padding: 4px;
     min-width: 120px;
 }
+
+/* Error recovery overlay and safe mode banner */
+.rf-recovery {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: var(--panel-background-color, #fff);
+    z-index: 900;
+}
+
+.rf-recovery-card {
+    max-width: 520px;
+    width: 100%;
+    background: var(--xy-node-background-color, var(--panel-background-color, #fff));
+    color: var(--panel-on-background-color, #222);
+    border: 1px solid var(--panel-border-color, #ddd);
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    padding: 20px 22px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.rf-recovery-title {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.rf-recovery-body {
+    opacity: 0.85;
+}
+
+.rf-recovery-error {
+    margin: 12px 0 0;
+    padding: 8px 10px;
+    max-height: 140px;
+    overflow: auto;
+    background: rgba(127, 127, 127, 0.12);
+    border-radius: 4px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rf-recovery-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.rf-recovery-meta {
+    margin-top: 10px;
+    font-size: 11.5px;
+    opacity: 0.65;
+}
+
+.rf-recovery-button {
+    border: 1px solid var(--panel-border-color, #ccc);
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.rf-recovery-button:hover {
+    background: rgba(127, 127, 127, 0.12);
+}
+
+.rf-recovery-button--primary {
+    border-color: var(--panel-primary-color, #3477db);
+    color: var(--panel-primary-color, #3477db);
+    font-weight: 600;
+}
+
+.rf-recovery-button--small {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.rf-safe-mode-banner {
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(640px, calc(100% - 24px));
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 7px 12px;
+    border: 1px solid rgba(203, 137, 22, 0.55);
+    border-radius: 6px;
+    background: rgba(250, 204, 108, 0.18);
+    backdrop-filter: blur(2px);
+    color: var(--panel-on-background-color, #222);
+    font-size: 12px;
+    z-index: 950;
+}
+
+.rf-safe-mode-issues {
+    flex-basis: 100%;
+    max-height: 160px;
+    overflow: auto;
+    margin: 4px 0 0;
+    padding-left: 20px;
+    font-size: 11.5px;
+    opacity: 0.85;
+}
