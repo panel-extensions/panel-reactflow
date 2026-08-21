@@ -30,6 +30,7 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `edge_data_changed`  | Edge data is patched (via API, editor patch, or parameter-driven sync). | `edge_id`, `patch` |
 | `selection_changed`  | The active selection changes. | `nodes`, `edges` |
 | `sync`               | A batch sync from the frontend. | *(varies)* |
+| `client_error`       | The graph view hit a rendering error in the browser. See [Recover from Rendering Errors](recover-from-errors.md). | `source`, `message`, `stack`, `component_stack`, `attempt`, `mode` |
 
 ---
 

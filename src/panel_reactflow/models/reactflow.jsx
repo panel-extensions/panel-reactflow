@@ -13,6 +13,15 @@ const BUILTIN_NODE_TYPES = {
 
 const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale nodrag nopan nowheel";
 
+// Recovery: attempt 1 remounts the flow as-is, attempt 2 remounts it in safe
+// mode with an invalid graph elements dropped from the view. Beyond that we
+// stop retrying and hand control to the user.
+const SAFE_MODE_ATTEMPT = 2;
+const MAX_RECOVERY_ATTEMPTS = 2;
+const RETRY_DELAY_MS = 100;
+// How long a remounted flow must survive before its retry budget is refilled.
+const HEALTHY_RESET_MS = 5000;
+
 const figureStylesheet = `
 .bk-Canvas {
   transform: scale(var(--rf-inverse-zoom));
@@ -245,8 +254,203 @@ function signature(value) {
   }
 }
 
+/**
+ * Drop or repair graph elements that React Flow cannot render, so a structurally
+ * broken graph degrades to a partial view instead of an unmounted canvas.
+ *
+ * This only filters what is handed to React Flow. Nothing is sent back to
+ * Python, so the authoritative graph is left untouched and anything dropped here
+ * reappears once the underlying problem is fixed.
+ *
+ * Every issue records whether the element was `repaired` and still rendered, or
+ * `dropped` from the view entirely.
+ */
+function sanitizeGraph(nodes, edges, nodeTypes, edgeTypes) {
+  const issues = [];
+  const drop = (kind, id, detail) => issues.push({ kind, id, detail, action: "dropped" });
+  const repair = (kind, id, detail) => issues.push({ kind, id, detail, action: "repaired" });
+
+  const safeNodes = [];
+  const nodeIds = new Set();
+  (nodes || []).forEach((node, index) => {
+    if (!node || typeof node !== "object") {
+      drop("invalid_node", `#${index}`, "Node is not an object");
+      return;
+    }
+    if (typeof node.id !== "string" || !node.id) {
+      drop("missing_node_id", `#${index}`, "Node has no usable id");
+      return;
+    }
+    if (nodeIds.has(node.id)) {
+      drop("duplicate_node_id", node.id, "Duplicate node id");
+      return;
+    }
+    let safeNode = node;
+    const { x, y } = safeNode.position || {};
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      repair("invalid_position", node.id, "Position is not finite, reset to the origin");
+      safeNode = { ...safeNode, position: { x: 0, y: 0 } };
+    }
+    if (safeNode.type && !nodeTypes?.[safeNode.type]) {
+      repair("unknown_node_type", node.id, `Unknown node type "${safeNode.type}", rendered as "default"`);
+      safeNode = { ...safeNode, type: "default" };
+    }
+    nodeIds.add(node.id);
+    safeNodes.push(safeNode);
+  });
+
+  const safeEdges = [];
+  const edgeIds = new Set();
+  (edges || []).forEach((edge, index) => {
+    if (!edge || typeof edge !== "object") {
+      drop("invalid_edge", `#${index}`, "Edge is not an object");
+      return;
+    }
+    if (typeof edge.id !== "string" || !edge.id) {
+      drop("missing_edge_id", `#${index}`, "Edge has no usable id");
+      return;
+    }
+    if (edgeIds.has(edge.id)) {
+      drop("duplicate_edge_id", edge.id, "Duplicate edge id");
+      return;
+    }
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) {
+      drop("dangling_edge", edge.id, `Connects a missing node (${edge.source} -> ${edge.target})`);
+      return;
+    }
+    let safeEdge = edge;
+    if (safeEdge.type && !edgeTypes?.[safeEdge.type]) {
+      repair("unknown_edge_type", edge.id, `Unknown edge type "${safeEdge.type}", rendered as default`);
+      const { type, ...rest } = safeEdge;
+      safeEdge = rest;
+    }
+    edgeIds.add(edge.id);
+    safeEdges.push(safeEdge);
+  });
+
+  return { nodes: safeNodes, edges: safeEdges, issues };
+}
+
+function summarizeIssues(issues) {
+  const repaired = issues.filter((issue) => issue.action === "repaired").length;
+  const dropped = issues.length - repaired;
+  const parts = [];
+  if (repaired) {
+    parts.push(`repaired ${repaired} element${repaired === 1 ? "" : "s"}`);
+  }
+  if (dropped) {
+    parts.push(`hid ${dropped} element${dropped === 1 ? "" : "s"} that could not be rendered`);
+  }
+  return `Safe mode: ${parts.join(" and ")}.`;
+}
+
+function describeError(error, info) {
+  return {
+    name: error?.name || "Error",
+    message: String(error?.message ?? error ?? "Unknown error"),
+    stack: error?.stack || null,
+    component_stack: info?.componentStack || null,
+  };
+}
+
+class FlowErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error, info) {
+    this.props.onError?.(error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return this.props.fallback?.(this.state.error) ?? null;
+    }
+    return this.props.children;
+  }
+}
+
+function RecoveryOverlay({ status, error, attempt, mode, onRetry, onReload, onCopy, copied }) {
+  if (status === "recovering") {
+    return (
+      <div className="rf-recovery rf-recovery--retrying">
+        <div className="rf-recovery-card">
+          <div className="rf-recovery-title">Recovering the graph view…</div>
+          <div className="rf-recovery-body">
+            {mode === "safe"
+              ? "Retrying in safe mode, which hides graph elements that cannot be rendered."
+              : "Rebuilding the canvas from the state held on the server."}
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="rf-recovery rf-recovery--failed">
+      <div className="rf-recovery-card">
+        <div className="rf-recovery-title">The graph view stopped rendering</div>
+        <div className="rf-recovery-body">
+          Your graph is still held on the server and has not been modified. Reloading the page
+          will restore it.
+        </div>
+        <pre className="rf-recovery-error">{describeError(error).message}</pre>
+        <div className="rf-recovery-actions">
+          <button type="button" className="rf-recovery-button rf-recovery-button--primary" onClick={onRetry}>
+            Try again
+          </button>
+          <button type="button" className="rf-recovery-button" onClick={onReload}>
+            Reload page
+          </button>
+          <button type="button" className="rf-recovery-button" onClick={onCopy}>
+            {copied ? "Copied" : "Copy details"}
+          </button>
+        </div>
+        <div className="rf-recovery-meta">
+          {attempt} recovery {attempt === 1 ? "attempt" : "attempts"} failed. The error has been
+          reported to the server log.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SafeModeBanner({ issues, onDismiss }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!issues.length) {
+    return null;
+  }
+  return (
+    <div className="rf-safe-mode-banner">
+      <span className="rf-safe-mode-text">
+        {summarizeIssues(issues)} Nothing was deleted on the server.
+      </span>
+      <button type="button" className="rf-recovery-button rf-recovery-button--small" onClick={() => setExpanded((value) => !value)}>
+        {expanded ? "Hide" : "Details"}
+      </button>
+      <button type="button" className="rf-recovery-button rf-recovery-button--small" onClick={onDismiss}>
+        Dismiss
+      </button>
+      {expanded ? (
+        <ul className="rf-safe-mode-issues">
+          {issues.map((issue) => (
+            <li key={`${issue.kind}:${issue.id}`}>
+              <code>{issue.id}</code> {issue.detail}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function FlowInner({
   model,
+  reportError,
   hydratedNodes,
   pyNodes,
   nodeUpdateCount,
@@ -509,6 +713,47 @@ function FlowInner({
     [viewport, viewportSetter],
   );
 
+  // An exception in an interaction handler leaves the canvas showing a change
+  // that never reached Python. Report those instead of letting them vanish into
+  // the browser console.
+  const handlers = useMemo(() => {
+    const wrap = (name, fn) =>
+      typeof fn === "function"
+        ? (...args) => {
+            try {
+              return fn(...args);
+            } catch (error) {
+              reportError(error, null, { source: "handler", handler: name });
+              return undefined;
+            }
+          }
+        : undefined;
+    return {
+      onNodesChange: wrap("onNodesChange", handleNodesChange),
+      onEdgesChange: wrap("onEdgesChange", onEdgesChange),
+      onSelectionChange: wrap("onSelectionChange", onSelectionChange),
+      onNodesDelete: wrap("onNodesDelete", onNodesDelete),
+      onEdgesDelete: wrap("onEdgesDelete", onEdgesDelete),
+      onConnect: wrap("onConnect", onConnect),
+      onMoveEnd: wrap("onMoveEnd", onMoveEnd),
+      onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
+      onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
+      onPaneClick: wrap("onPaneClick", onPaneClick),
+    };
+  }, [
+    handleNodesChange,
+    onConnect,
+    onEdgesChange,
+    onEdgesDelete,
+    onMoveEnd,
+    onNodeContextMenu,
+    onNodeDoubleClick,
+    onNodesDelete,
+    onPaneClick,
+    onSelectionChange,
+    reportError,
+  ]);
+
   return (
     <ReactFlow
       nodes={nodes}
@@ -517,16 +762,7 @@ function FlowInner({
       edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
       colorMode={colorMode}
-      onNodesChange={handleNodesChange}
-      onEdgesChange={onEdgesChange}
-      onSelectionChange={onSelectionChange}
-      onNodesDelete={onNodesDelete}
-      onEdgesDelete={onEdgesDelete}
-      onConnect={onConnect}
-      onMoveEnd={onMoveEnd}
-      onNodeDoubleClick={onNodeDoubleClick}
-      onNodeContextMenu={onNodeContextMenu}
-      onPaneClick={onPaneClick}
+      {...handlers}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
       elementsSelectable={editable}
@@ -557,6 +793,7 @@ export function render({ model, view }) {
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
+  const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");
   const [enableMultiselect] = model.useState("enable_multiselect");
@@ -575,6 +812,93 @@ export function render({ model, view }) {
   const rightPanels = model.get_child("right_panel");
 
   const allNodeTypes = useMemo(() => ({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }), [pyNodeTypes]);
+
+  // Recovery state machine. `recoveryRef` mirrors the attempt counter so the
+  // error handler, which runs during a commit, can decide what to do without
+  // reading stale state.
+  const recoveryRef = useRef({ attempt: 0, mode: "normal" });
+  const [recovery, setRecovery] = useState({ status: "ok", error: null, info: null, attempt: 0, mode: "normal" });
+  const [mountKey, setMountKey] = useState(0);
+  const [copied, setCopied] = useState(false);
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+  const reportedIssuesRef = useRef(null);
+
+  const reportError = useCallback(
+    (error, info, context = {}) => {
+      const detail = describeError(error, info);
+      console.error("[panel-reactflow]", error);
+      try {
+        model.send_msg({ type: "client_error", source: "render", ...context, ...detail });
+      } catch (sendError) {
+        console.error("[panel-reactflow] failed to report error to the server", sendError);
+      }
+      return detail;
+    },
+    [model],
+  );
+
+  const handleRenderError = useCallback(
+    (error, info) => {
+      const attempt = recoveryRef.current.attempt + 1;
+      const mode = attempt >= SAFE_MODE_ATTEMPT ? "safe" : recoveryRef.current.mode;
+      const autoRetry = errorRecovery === "auto" && attempt <= MAX_RECOVERY_ATTEMPTS;
+      recoveryRef.current = { attempt, mode };
+      reportError(error, info, { source: "render", attempt, mode, auto_retry: autoRetry });
+      setRecovery({ status: autoRetry ? "recovering" : "failed", error, info, attempt, mode });
+    },
+    [errorRecovery, reportError],
+  );
+
+  const retry = useCallback(() => {
+    setRecovery((prev) => ({ ...prev, status: "ok", error: null, info: null }));
+    setMountKey((key) => key + 1);
+  }, []);
+
+  useEffect(() => {
+    if (recovery.status !== "recovering") {
+      return undefined;
+    }
+    const timeout = setTimeout(retry, RETRY_DELAY_MS);
+    return () => clearTimeout(timeout);
+  }, [recovery.attempt, recovery.status, retry]);
+
+  // Refill the retry budget once a remounted flow has stayed alive, so a later
+  // unrelated failure is not immediately treated as unrecoverable.
+  useEffect(() => {
+    if (recovery.status !== "ok" || recovery.attempt === 0) {
+      return undefined;
+    }
+    const timeout = setTimeout(() => {
+      recoveryRef.current = { ...recoveryRef.current, attempt: 0 };
+      setRecovery((prev) => (prev.status === "ok" ? { ...prev, attempt: 0 } : prev));
+    }, HEALTHY_RESET_MS);
+    return () => clearTimeout(timeout);
+  }, [mountKey, recovery.attempt, recovery.status]);
+
+  const copyDetails = useCallback(() => {
+    const payload = JSON.stringify(
+      {
+        ...describeError(recovery.error, recovery.info),
+        attempt: recovery.attempt,
+        mode: recovery.mode,
+        node_count: (pyNodes || []).length,
+        edge_count: (pyEdges || []).length,
+        user_agent: navigator.userAgent,
+      },
+      null,
+      2,
+    );
+    const done = () => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(payload).then(done, () => console.log(payload));
+    } else {
+      console.log(payload);
+      done();
+    }
+  }, [pyEdges, pyNodes, recovery]);
 
 
   useEffect(() => {
@@ -727,35 +1051,88 @@ export function render({ model, view }) {
     smart_step: SmartStepEdge,
   }), []);
 
+  const safeMode = recovery.mode === "safe";
+  const safeGraph = useMemo(
+    () => (safeMode ? sanitizeGraph(hydratedNodes, hydratedEdges, hydratedNodeTypes, hydratedEdgeTypes) : null),
+    [safeMode, hydratedNodes, hydratedEdges, hydratedNodeTypes, hydratedEdgeTypes],
+  );
+  const safeModeIssues = safeGraph?.issues ?? [];
+
+  useEffect(() => {
+    if (!safeMode || !safeModeIssues.length) {
+      return;
+    }
+    const sig = signature(safeModeIssues);
+    if (sig === reportedIssuesRef.current) {
+      return;
+    }
+    reportedIssuesRef.current = sig;
+    model.send_msg({
+      type: "client_error",
+      source: "safe_mode",
+      name: "SafeModeDegraded",
+      message: summarizeIssues(safeModeIssues),
+      issues: safeModeIssues,
+    });
+  }, [model, safeMode, safeModeIssues]);
+
+  const renderRecoveryOverlay = useCallback(
+    () => (
+      <RecoveryOverlay
+        status={recovery.status === "recovering" ? "recovering" : "failed"}
+        error={recovery.error}
+        attempt={recovery.attempt}
+        mode={recovery.mode}
+        onRetry={retry}
+        onReload={() => window.location.reload()}
+        onCopy={copyDetails}
+        copied={copied}
+      />
+    ),
+    [copied, copyDetails, recovery, retry],
+  );
+
+  const flow = (
+    <FlowInner
+      key={mountKey}
+      model={model}
+      reportError={reportError}
+      hydratedNodes={safeGraph ? safeGraph.nodes : hydratedNodes}
+      pyNodes={pyNodes || []}
+      nodeUpdateCount={nodeUpdateCount}
+      hydratedEdges={safeGraph ? safeGraph.edges : hydratedEdges}
+      selectionSetter={setSelection}
+      currentSelection={selection}
+      views={views}
+      viewportSetter={setViewport}
+      defaultEdgeOptions={defaultEdgeOptions}
+      colorMode={colorMode}
+      nodeTypes={hydratedNodeTypes}
+      edgeTypes={hydratedEdgeTypes}
+      nodeEditors={nodeEditors}
+      editable={editable}
+      enableConnect={enableConnect}
+      enableDelete={enableDelete}
+      enableMultiselect={enableMultiselect}
+      maxZoom={maxZoom}
+      minZoom={minZoom}
+      showMinimap={showMinimap}
+      syncMode={syncMode}
+      debounceMs={debounceMs}
+      viewport={viewport}
+    />
+  );
+
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }}>
       <ReactFlowProvider>
-        <FlowInner
-          model={model}
-          hydratedNodes={hydratedNodes}
-          pyNodes={pyNodes || []}
-          nodeUpdateCount={nodeUpdateCount}
-          hydratedEdges={hydratedEdges}
-          selectionSetter={setSelection}
-          currentSelection={selection}
-          views={views}
-          viewportSetter={setViewport}
-          defaultEdgeOptions={defaultEdgeOptions}
-          colorMode={colorMode}
-          nodeTypes={hydratedNodeTypes}
-          edgeTypes={hydratedEdgeTypes}
-          nodeEditors={nodeEditors}
-          editable={editable}
-          enableConnect={enableConnect}
-          enableDelete={enableDelete}
-          enableMultiselect={enableMultiselect}
-          maxZoom={maxZoom}
-          minZoom={minZoom}
-          showMinimap={showMinimap}
-          syncMode={syncMode}
-          debounceMs={debounceMs}
-          viewport={viewport}
-        />
+        {errorRecovery === "off" ? (
+          flow
+        ) : (
+          <FlowErrorBoundary key={mountKey} onError={handleRenderError} fallback={renderRecoveryOverlay}>
+            {flow}
+          </FlowErrorBoundary>
+        )}
         <Panel key="top-panel" position="top-center">
           {topPanels}
         </Panel>
@@ -770,6 +1147,9 @@ export function render({ model, view }) {
           {selectedEditor}
         </Panel>
       </ReactFlowProvider>
+      {safeMode && recovery.status === "ok" && !bannerDismissed ? (
+        <SafeModeBanner issues={safeModeIssues} onDismiss={() => setBannerDismissed(true)} />
+      ) : null}
       {contextMenu && contextMenuPosition ? (
         <div
           ref={contextMenuRef}

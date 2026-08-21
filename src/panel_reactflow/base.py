@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -29,6 +30,8 @@ from .__version import __version__  # noqa
 
 if TYPE_CHECKING:
     from bokeh.models import UIElement
+
+_LOGGER = logging.getLogger("panel.reactflow")
 
 IS_RELEASE = __version__ == base_version(__version__)
 BASE_PATH = Path(__file__).parent
@@ -1450,6 +1453,17 @@ class ReactFlow(ReactComponent):
 
     enable_multiselect = param.Boolean(default=True, doc="Allow multiselect with modifier key.")
 
+    error_recovery = param.ObjectSelector(
+        default="auto",
+        objects=["auto", "manual", "off"],
+        doc=(
+            "How to handle a rendering error in the graph view. 'auto' silently "
+            "remounts the canvas, then retries in safe mode, before showing a "
+            "recovery panel; 'manual' shows the recovery panel immediately; "
+            "'off' disables the error boundary so exceptions propagate."
+        ),
+    )
+
     max_zoom = param.Number(default=2, bounds=(0, None), inclusive_bounds=(False, True), doc="Maximum zoom level of the viewport.")
 
     min_zoom = param.Number(default=0.5, bounds=(0, None), inclusive_bounds=(False, True), doc="Minimum zoom level of the viewport.")
@@ -2327,8 +2341,38 @@ class ReactFlow(ReactComponent):
             case "close_context_menu":
                 self._context_menu = None
                 self._context_menu_position = None
+            case "client_error":
+                self._handle_client_error(msg)
             case _:
                 return
+
+    def _handle_client_error(self, msg: dict[str, Any]) -> None:
+        """Log a client-side error reported by the frontend and re-emit it.
+
+        Rendering errors in the graph view previously died in the browser
+        console, leaving the server with no record that the UI had broken. The
+        frontend now reports them here so they land in the application log and
+        can be handled via ``flow.on("client_error", ...)``.
+        """
+        source = msg.get("source", "unknown")
+        message = msg.get("message", "Unknown error")
+        if source == "safe_mode":
+            _LOGGER.warning(
+                "panel-reactflow %s Affected elements: %s",
+                message,
+                json.dumps(msg.get("issues", [])),
+            )
+        else:
+            _LOGGER.error(
+                "panel-reactflow client error (%s, attempt %s, mode %s): %s\n%s%s",
+                source,
+                msg.get("attempt", 0),
+                msg.get("mode", "normal"),
+                message,
+                msg.get("stack") or "",
+                msg.get("component_stack") or "",
+            )
+        self._emit("client_error", msg)
 
     def remove_node(self, node_id: str) -> None:
         """Remove a node and all connected edges from the graph.
@@ -2907,6 +2951,10 @@ class ReactFlow(ReactComponent):
             - ``"edge_data_changed"``: Edge data was modified
             - ``"selection_changed"``: Selection changed
             - ``"sync"``: Full graph sync from frontend
+            - ``"client_error"``: The graph view hit a rendering error in the
+              browser. The payload carries ``source``, ``message``, ``stack``,
+              ``component_stack``, ``attempt`` and ``mode``, or for
+              ``source="safe_mode"`` the list of hidden ``issues``.
             - ``"*"``: All events (wildcard)
         callback : callable
             Function called when the event occurs. Receives the event payload
