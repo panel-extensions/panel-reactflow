@@ -1,5 +1,23 @@
 # Release Notes
 
+## Unreleased
+
+### Bug fixes
+
+- **Progressive re-render when deleting multiple elements** — deleting a
+  multi-node selection removed the nodes one at a time, syncing an
+  intermediate graph to the browser per node so the nodes visibly
+  disappeared one by one. Updates triggered by a frontend message are now
+  held and combined into a single patch, and node/edge deletion assigns
+  `nodes` and `edges` once.
+
+### Enhancements
+
+- **`remove_nodes()` / `remove_edges()`** — new methods that remove
+  several elements in a single update, for use instead of looping over
+  `remove_node()` / `remove_edge()`. For any other batch of changes made
+  from Python, wrap them in `pn.io.hold()` to render them at once.
+
 ## Version 0.4.1
 
 A small enhancement release adding viewport zoom controls.

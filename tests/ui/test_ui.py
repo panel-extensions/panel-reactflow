@@ -711,3 +711,91 @@ def test_connectable_handles_programmatic_edge_with_restricted_handles(page):
     assert len(flow.edges) == 1
     assert flow.edges[0]["source"] == "source"
     assert flow.edges[0]["target"] == "sink"
+
+
+_NODE_COUNT_PROBE = """
+() => {
+  const container = document.querySelector('.react-flow__nodes');
+  window.__nodeCounts = [container.childElementCount];
+  window.__probeObserver = new MutationObserver(() => {
+    window.__nodeCounts.push(container.childElementCount);
+  });
+  window.__probeObserver.observe(container, {childList: true});
+}
+"""
+
+
+def _flow_document(flow):
+    """Return the Document the served flow is rendered into."""
+    ref = next(iter(flow._models))
+    return flow._models[ref][0].document
+
+
+def _plain_flow(count=6):
+    return ReactFlow(
+        nodes=[NodeSpec(id=f"n{i}", position={"x": 160 * i, "y": 0}, label=f"N{i}").to_dict() for i in range(count)],
+        edges=[EdgeSpec(id=f"e{i}", source=f"n{i}", target=f"n{i + 1}").to_dict() for i in range(count - 1)],
+        enable_multiselect=True,
+        width=1200,
+        height=600,
+    )
+
+
+def test_remove_nodes_does_not_render_intermediate_graphs(page):
+    """The browser must never see a partially-removed graph.
+
+    Removing nodes one at a time syncs each intermediate graph, which renders
+    as the nodes disappearing progressively instead of all at once.
+    """
+    flow = _plain_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__node")).to_have_count(6)
+
+    page.evaluate(_NODE_COUNT_PROBE)
+    flow.remove_nodes(["n1", "n2", "n3", "n4"])
+
+    expect(page.locator(".react-flow__node")).to_have_count(2)
+    page.wait_for_timeout(300)
+    counts = page.evaluate("window.__nodeCounts")
+    assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
+
+
+def test_hold_does_not_render_intermediate_graphs(page):
+    """``pn.io.hold`` batches a loop of single removals into one render."""
+    flow = _plain_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__node")).to_have_count(6)
+
+    page.evaluate(_NODE_COUNT_PROBE)
+    # In a served app callbacks already run with a current Document, so
+    # ``pn.io.hold()`` needs no argument; the test drives the flow from
+    # another thread and has to name the Document explicitly.
+    with pn.io.hold(_flow_document(flow)):
+        for node_id in ["n1", "n2", "n3", "n4"]:
+            flow.remove_node(node_id)
+
+    expect(page.locator(".react-flow__node")).to_have_count(2)
+    page.wait_for_timeout(300)
+    counts = page.evaluate("window.__nodeCounts")
+    assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
+
+
+def test_multi_select_delete_does_not_render_intermediate_graphs(page):
+    """Deleting a multi-node selection from the browser renders once."""
+    flow = _plain_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__node")).to_have_count(6)
+
+    _node_locator(page, "N1").click(force=True)
+    for label in ("N2", "N3", "N4"):
+        _node_locator(page, label).click(force=True, modifiers=["Shift"])
+    wait_until(lambda: len(flow.selection["nodes"]) == 4, timeout=8000)
+
+    page.evaluate(_NODE_COUNT_PROBE)
+    page.keyboard.press("Backspace")
+
+    wait_until(lambda: len(flow.nodes) == 2, timeout=8000)
+    expect(page.locator(".react-flow__node")).to_have_count(2)
+    page.wait_for_timeout(300)
+    counts = page.evaluate("window.__nodeCounts")
+    assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
