@@ -1339,14 +1339,14 @@ def _chain_flow(n: int = 5) -> ReactFlow:
     )
 
 
-def test_remove_nodes_syncs_once() -> None:
+def test_remove_node_batch_syncs_once() -> None:
     """Deleting several nodes must not sync an intermediate graph per node.
 
     Otherwise the browser renders the removal progressively, one node at a time.
     """
     flow = _chain_flow()
     messages = _count_sync_messages(flow, ["nodes", "edges"])
-    flow.remove_nodes(["n1", "n2", "n3"])
+    flow.remove_node(["n1", "n2", "n3"])
     assert len(messages) == 1
     assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
     assert flow.edges == []
@@ -1376,15 +1376,15 @@ def test_remove_node_syncs_nodes_and_edges_together() -> None:
     assert {name for name, _ in messages[0]} == {"nodes", "edges"}
 
 
-def test_remove_nodes_triggers_views_once() -> None:
+def test_remove_node_batch_triggers_views_once() -> None:
     flow = _chain_flow()
     triggers = []
     flow.param.watch(lambda e: triggers.append(e), ["_views"], onlychanged=False)
-    flow.remove_nodes(["n1", "n2", "n3"])
+    flow.remove_node(["n1", "n2", "n3"])
     assert len(triggers) == 1
 
 
-def test_remove_nodes_matches_sequential_events() -> None:
+def test_remove_node_batch_matches_sequential_events() -> None:
     """Batched removal must emit the same events as removing one at a time."""
     sequential: list[dict] = []
     flow = _chain_flow()
@@ -1395,50 +1395,50 @@ def test_remove_nodes_matches_sequential_events() -> None:
     batched: list[dict] = []
     flow = _chain_flow()
     flow.on("node_deleted", batched.append)
-    flow.remove_nodes(["n1", "n2", "n3"])
+    flow.remove_node(["n1", "n2", "n3"])
 
     assert batched == sequential
 
 
-def test_remove_nodes_emits_deletion_events_in_order() -> None:
+def test_remove_node_batch_emits_deletion_events_in_order() -> None:
     flow = _chain_flow()
     events: list[dict] = []
     flow.on("node_deleted", events.append)
-    flow.remove_nodes(["n3", "n1"])
+    flow.remove_node(["n3", "n1"])
     assert [e["node_id"] for e in events] == ["n3", "n1"]
 
 
-def test_remove_nodes_ignores_unknown_and_duplicate_ids() -> None:
+def test_remove_node_batch_ignores_unknown_and_duplicate_ids() -> None:
     flow = _chain_flow()
     messages = _count_sync_messages(flow, ["nodes", "edges"])
-    flow.remove_nodes(["n1", "n1", "nope"])
+    flow.remove_node(["n1", "n1", "nope"])
     assert len(messages) == 1
     assert [n["id"] for n in flow.nodes] == ["n0", "n2", "n3", "n4"]
 
     messages.clear()
-    flow.remove_nodes([])
-    flow.remove_nodes(["nope"])
+    flow.remove_node([])
+    flow.remove_node(["nope"])
     assert messages == []
 
 
-def test_remove_edges_ignores_unknown_ids() -> None:
+def test_remove_edge_batch_ignores_unknown_ids() -> None:
     flow = _chain_flow()
     messages = _count_sync_messages(flow, ["edges"])
-    flow.remove_edges(["e0", "e0", "nope"])
+    flow.remove_edge(["e0", "e0", "nope"])
     assert len(messages) == 1
     assert [e["id"] for e in flow.edges] == ["e1", "e2", "e3"]
 
     messages.clear()
-    flow.remove_edges(["nope"])
+    flow.remove_edge(["nope"])
     assert messages == []
 
 
-def test_remove_nodes_detaches_node_instances() -> None:
+def test_remove_node_batch_detaches_node_instances() -> None:
     nodes = [Node(id=f"n{i}", position={"x": 100 * i, "y": 0}) for i in range(3)]
     edges = [Edge(id="e0", source="n0", target="n1"), Edge(id="e1", source="n1", target="n2")]
     flow = ReactFlow(nodes=nodes, edges=edges)
     messages = _count_sync_messages(flow, ["nodes", "edges"])
-    flow.remove_nodes(["n0", "n1"])
+    flow.remove_node(["n0", "n1"])
     assert len(messages) == 1
     assert [n.id for n in flow.nodes] == ["n2"]
     assert flow.edges == []
@@ -1447,11 +1447,11 @@ def test_remove_nodes_detaches_node_instances() -> None:
     assert nodes[2].flow is flow
 
 
-def test_remove_edges_detaches_edge_instances() -> None:
+def test_remove_edge_batch_detaches_edge_instances() -> None:
     nodes = [Node(id=f"n{i}", position={"x": 100 * i, "y": 0}) for i in range(3)]
     edges = [Edge(id="e0", source="n0", target="n1"), Edge(id="e1", source="n1", target="n2")]
     flow = ReactFlow(nodes=nodes, edges=edges)
-    flow.remove_edges(["e0", "e1"])
+    flow.remove_edge(["e0", "e1"])
     assert flow.edges == []
     assert edges[0].flow is None
     assert edges[1].flow is None
@@ -1525,7 +1525,7 @@ def test_handle_msg_releases_hold_on_error(document) -> None:
         assert document.callbacks.hold_value is None
 
 
-def test_remove_nodes_removes_every_node_matching_an_id() -> None:
+def test_remove_node_batch_removes_every_node_matching_an_id() -> None:
     """A duplicated id must not leave a stale copy behind."""
     flow = ReactFlow(
         nodes=[
@@ -1538,12 +1538,12 @@ def test_remove_nodes_removes_every_node_matching_an_id() -> None:
             {"id": "e1", "source": "n2", "target": "n1", "data": {}},
         ],
     )
-    flow.remove_nodes(["n1"])
+    flow.remove_node(["n1"])
     assert [n["id"] for n in flow.nodes] == ["n2"]
     assert flow.edges == []
 
 
-def test_remove_edges_removes_every_edge_matching_an_id() -> None:
+def test_remove_edge_batch_removes_every_edge_matching_an_id() -> None:
     flow = ReactFlow(
         nodes=[
             {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
@@ -1555,5 +1555,43 @@ def test_remove_edges_removes_every_edge_matching_an_id() -> None:
             {"id": "e2", "source": "n1", "target": "n2", "data": {}},
         ],
     )
-    flow.remove_edges(["e1"])
+    flow.remove_edge(["e1"])
     assert [e["id"] for e in flow.edges] == ["e2"]
+
+
+def test_remove_node_accepts_varargs_and_sequences() -> None:
+    """Ids may be passed as separate arguments or as a single sequence."""
+    for remove in (
+        lambda f: f.remove_node("n1", "n2", "n3"),
+        lambda f: f.remove_node(["n1", "n2", "n3"]),
+        lambda f: f.remove_node("n1", ["n2", "n3"]),
+    ):
+        flow = _chain_flow()
+        messages = _count_sync_messages(flow, ["nodes", "edges"])
+        remove(flow)
+        assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
+        assert flow.edges == []
+        assert len(messages) == 1
+
+
+def test_remove_edge_accepts_varargs_and_sequences() -> None:
+    for remove in (
+        lambda f: f.remove_edge("e0", "e1"),
+        lambda f: f.remove_edge(["e0", "e1"]),
+        lambda f: f.remove_edge("e0", ["e1"]),
+    ):
+        flow = _chain_flow()
+        messages = _count_sync_messages(flow, ["nodes", "edges"])
+        remove(flow)
+        assert [e["id"] for e in flow.edges] == ["e2", "e3"]
+        assert len(messages) == 1
+
+
+def test_remove_node_without_arguments_is_a_noop() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node()
+    flow.remove_edge()
+    assert len(flow.nodes) == 5
+    assert len(flow.edges) == 4
+    assert messages == []

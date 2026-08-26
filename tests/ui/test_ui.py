@@ -741,7 +741,7 @@ def _plain_flow(count=6):
     )
 
 
-def test_remove_nodes_does_not_render_intermediate_graphs(page):
+def test_remove_node_batch_does_not_render_intermediate_graphs(page):
     """The browser must never see a partially-removed graph.
 
     Removing nodes one at a time syncs each intermediate graph, which renders
@@ -752,7 +752,7 @@ def test_remove_nodes_does_not_render_intermediate_graphs(page):
     expect(page.locator(".react-flow__node")).to_have_count(6)
 
     page.evaluate(_NODE_COUNT_PROBE)
-    flow.remove_nodes(["n1", "n2", "n3", "n4"])
+    flow.remove_node(["n1", "n2", "n3", "n4"])
 
     expect(page.locator(".react-flow__node")).to_have_count(2)
     page.wait_for_timeout(300)

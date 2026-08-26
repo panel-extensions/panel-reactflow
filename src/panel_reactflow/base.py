@@ -54,6 +54,17 @@ BK_FIGURE_CSS = """
 """
 
 
+def _flatten_ids(ids: Sequence[str | Sequence[str]]) -> list[str]:
+    """Flatten mixed id arguments, i.e. bare ids and sequences of ids."""
+    flat: list[str] = []
+    for id_or_ids in ids:
+        if isinstance(id_or_ids, str):
+            flat.append(id_or_ids)
+        else:
+            flat.extend(id_or_ids)
+    return flat
+
+
 def _ensure_jsonable(value: Any, path: str) -> None:
     """Ensure value can be JSON-serialized for syncing to the frontend."""
 
@@ -2448,12 +2459,12 @@ class ReactFlow(ReactComponent):
                 node_ids = list(msg.get("node_ids") or [])
                 if msg.get("node_id") and msg["node_id"] not in node_ids:
                     node_ids.append(msg["node_id"])
-                self.remove_nodes(node_ids)
+                self.remove_node(node_ids)
             case "edge_deleted":
                 edge_ids = list(msg.get("edge_ids") or [])
                 if msg.get("edge_id") and msg["edge_id"] not in edge_ids:
                     edge_ids.append(msg["edge_id"])
-                self.remove_edges(edge_ids)
+                self.remove_edge(edge_ids)
             case "node_clicked":
                 node_id = msg.get("node_id")
                 if node_id is None:
@@ -2509,17 +2520,25 @@ class ReactFlow(ReactComponent):
             )
         self._emit("client_error", msg)
 
-    def remove_node(self, node_id: str) -> None:
-        """Remove a node and all connected edges from the graph.
+    def remove_node(self, *node_ids: str | Sequence[str]) -> None:
+        """Remove one or more nodes and all connected edges from the graph.
 
-        Removes the specified node and automatically removes any edges that
-        are connected to it (either as source or target). This ensures the
+        Removes the specified nodes and automatically removes any edges that
+        are connected to them (either as source or target). This ensures the
         graph remains consistent.
+
+        Ids may be passed as separate arguments or as a single sequence. All
+        of them are removed in one update, i.e. ``nodes`` and ``edges`` are
+        each assigned once. Removing nodes one at a time instead syncs an
+        intermediate graph to the browser per node, which React Flow renders
+        as the nodes disappearing one by one.
 
         Parameters
         ----------
-        node_id : str
-            Unique identifier of the node to remove.
+        *node_ids : str or sequence of str
+            Unique identifiers of the nodes to remove, either as separate
+            arguments or as a single sequence. Ids that are not part of the
+            graph are ignored.
 
         Examples
         --------
@@ -2532,40 +2551,17 @@ class ReactFlow(ReactComponent):
         >>>
         >>> flow.remove_node("n1")  # Also removes edge "e1"
 
+        Remove several nodes in a single update:
+
+        >>> flow.remove_node("n1", "n2")
+        >>> flow.remove_node(["n1", "n2"])
+
         See Also
         --------
         add_node : Add a node to the graph
-        remove_nodes : Remove several nodes in a single update
-        remove_edge : Remove an edge from the graph
+        remove_edge : Remove one or more edges from the graph
         """
-        self.remove_nodes([node_id])
-
-    def remove_nodes(self, node_ids: Sequence[str]) -> None:
-        """Remove multiple nodes and their connected edges in one update.
-
-        Equivalent to calling :meth:`remove_node` for each id, but the
-        ``nodes`` and ``edges`` parameters are only assigned once. Removing
-        nodes one at a time syncs an intermediate graph to the browser per
-        node, which React Flow renders as the nodes disappearing one by one.
-
-        Parameters
-        ----------
-        node_ids : sequence of str
-            Unique identifiers of the nodes to remove. Ids that are not part
-            of the graph are ignored.
-
-        Examples
-        --------
-        Remove several nodes at once:
-
-        >>> flow.remove_nodes(["n1", "n2"])
-
-        See Also
-        --------
-        remove_node : Remove a single node
-        remove_edges : Remove several edges in a single update
-        """
-        ids = list(dict.fromkeys(node_ids))
+        ids = list(dict.fromkeys(_flatten_ids(node_ids)))
         if not ids:
             return
         id_set = set(ids)
@@ -2703,13 +2699,19 @@ class ReactFlow(ReactComponent):
         self.edges = self.edges + [raw_edge if isinstance(raw_edge, Edge) else payload]
         self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
-    def remove_edge(self, edge_id: str) -> None:
-        """Remove an edge from the graph by its ID.
+    def remove_edge(self, *edge_ids: str | Sequence[str]) -> None:
+        """Remove one or more edges from the graph by their ID.
+
+        Ids may be passed as separate arguments or as a single sequence. All
+        of them are removed in one update, i.e. ``edges`` is only assigned
+        once, so the browser renders a single update instead of one per edge.
 
         Parameters
         ----------
-        edge_id : str
-            Unique identifier of the edge to remove.
+        *edge_ids : str or sequence of str
+            Unique identifiers of the edges to remove, either as separate
+            arguments or as a single sequence. Ids that are not part of the
+            graph are ignored.
 
         Examples
         --------
@@ -2719,39 +2721,17 @@ class ReactFlow(ReactComponent):
         >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
         >>> flow.remove_edge("e1")
 
+        Remove several edges in a single update:
+
+        >>> flow.remove_edge("e1", "e2")
+        >>> flow.remove_edge(["e1", "e2"])
+
         See Also
         --------
         add_edge : Add an edge to the graph
-        remove_edges : Remove several edges in a single update
-        remove_node : Remove a node from the graph
+        remove_node : Remove one or more nodes from the graph
         """
-        self.remove_edges([edge_id])
-
-    def remove_edges(self, edge_ids: Sequence[str]) -> None:
-        """Remove multiple edges from the graph in one update.
-
-        Equivalent to calling :meth:`remove_edge` for each id, but the
-        ``edges`` parameter is only assigned once so the browser renders a
-        single update instead of one per edge.
-
-        Parameters
-        ----------
-        edge_ids : sequence of str
-            Unique identifiers of the edges to remove. Ids that are not part
-            of the graph are ignored.
-
-        Examples
-        --------
-        Remove several edges at once:
-
-        >>> flow.remove_edges(["e1", "e2"])
-
-        See Also
-        --------
-        remove_edge : Remove a single edge
-        remove_nodes : Remove several nodes in a single update
-        """
-        ids = list(dict.fromkeys(edge_ids))
+        ids = list(dict.fromkeys(_flatten_ids(edge_ids)))
         if not ids:
             return
         id_set = set(ids)

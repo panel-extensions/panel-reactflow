@@ -419,14 +419,14 @@ flow.remove_node("n3")   # also removes connected edges
 flow.remove_edge("e1")
 ```
 
-To remove several elements at once, use `remove_nodes()` and `remove_edges()`
-rather than looping over the singular methods. The plural forms assign `nodes`
-and `edges` once, so the browser renders a single update instead of one per
-element:
+`remove_node()` and `remove_edge()` also take several ids at once, either as
+separate arguments or as a single sequence. Pass them together rather than
+calling the methods in a loop: a batch assigns `nodes` and `edges` once, so the
+browser renders a single update instead of one per element.
 
 ```python
-flow.remove_nodes(["n1", "n2", "n3"])   # also removes connected edges
-flow.remove_edges(["e1", "e2"])
+flow.remove_node("n1", "n2", "n3")   # also removes connected edges
+flow.remove_edge(["e1", "e2"])
 ```
 
 More generally, every parameter assignment is synced to the browser on its own

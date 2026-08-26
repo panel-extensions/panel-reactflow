@@ -13,10 +13,12 @@
 
 ### Enhancements
 
-- **`remove_nodes()` / `remove_edges()`** — new methods that remove
-  several elements in a single update, for use instead of looping over
-  `remove_node()` / `remove_edge()`. For any other batch of changes made
-  from Python, wrap them in `pn.io.hold()` to render them at once.
+- **Batch removal** — `remove_node()` and `remove_edge()` now accept
+  several ids, either as separate arguments
+  (`flow.remove_node("n1", "n2")`) or as a sequence
+  (`flow.remove_node(["n1", "n2"])`), and remove them in a single update.
+  For any other batch of changes made from Python, wrap them in
+  `pn.io.hold()` to render them at once.
 
 ## Version 0.4.1
 
