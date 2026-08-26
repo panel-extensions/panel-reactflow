@@ -7,7 +7,7 @@ import inspect
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -21,6 +21,7 @@ from bokeh.embed.bundle import extension_dirs
 from bokeh.plotting import figure
 from panel.config import config
 from panel.custom import Child, Children, ReactComponent
+from panel.io.document import hold
 from panel.io.resources import EXTENSION_CDN
 from panel.io.state import state
 from panel.util import base_version, classproperty
@@ -51,6 +52,17 @@ BK_FIGURE_CSS = """
   height: calc(var(--rf-zoom) * 100%);
 }
 """
+
+
+def _flatten_ids(ids: Sequence[str | Sequence[str]]) -> list[str]:
+    """Flatten mixed id arguments, i.e. bare ids and sequences of ids."""
+    flat: list[str] = []
+    for id_or_ids in ids:
+        if isinstance(id_or_ids, str):
+            flat.append(id_or_ids)
+        else:
+            flat.extend(id_or_ids)
+    return flat
 
 
 def _ensure_jsonable(value: Any, path: str) -> None:
@@ -2399,9 +2411,19 @@ class ReactFlow(ReactComponent):
             self.edges = synced_edges
 
     def _handle_msg(self, msg: dict[str, Any]) -> None:
-        """Handle sync messages from the frontend."""
+        """Handle sync messages from the frontend.
+
+        Held so that every parameter update triggered by one frontend message
+        is combined into a single patch. Without the hold each assignment syncs
+        on its own and the browser renders every intermediate graph, e.g.
+        deleting a multi-node selection shows the nodes disappearing one by one.
+        """
         if not isinstance(msg, dict):
             return
+        with hold():
+            self._process_msg(msg)
+
+    def _process_msg(self, msg: dict[str, Any]) -> None:
         match msg.get("type"):
             case "sync":
                 nodes = msg.get("nodes")
@@ -2434,17 +2456,15 @@ class ReactFlow(ReactComponent):
                     return
                 self.add_edge(edge)
             case "node_deleted":
-                node_ids = msg.get("node_ids") or []
-                if msg.get("node_id"):
-                    node_ids = list(set(node_ids) | {msg.get("node_id")})
-                for node_id in node_ids:
-                    self.remove_node(node_id)
+                node_ids = list(msg.get("node_ids") or [])
+                if msg.get("node_id") and msg["node_id"] not in node_ids:
+                    node_ids.append(msg["node_id"])
+                self.remove_node(node_ids)
             case "edge_deleted":
-                edge_ids = msg.get("edge_ids") or []
-                if msg.get("edge_id"):
-                    edge_ids = list(set(edge_ids) | {msg.get("edge_id")})
-                for edge_id in edge_ids:
-                    self.remove_edge(edge_id)
+                edge_ids = list(msg.get("edge_ids") or [])
+                if msg.get("edge_id") and msg["edge_id"] not in edge_ids:
+                    edge_ids.append(msg["edge_id"])
+                self.remove_edge(edge_ids)
             case "node_clicked":
                 node_id = msg.get("node_id")
                 if node_id is None:
@@ -2500,17 +2520,25 @@ class ReactFlow(ReactComponent):
             )
         self._emit("client_error", msg)
 
-    def remove_node(self, node_id: str) -> None:
-        """Remove a node and all connected edges from the graph.
+    def remove_node(self, *node_ids: str | Sequence[str]) -> None:
+        """Remove one or more nodes and all connected edges from the graph.
 
-        Removes the specified node and automatically removes any edges that
-        are connected to it (either as source or target). This ensures the
+        Removes the specified nodes and automatically removes any edges that
+        are connected to them (either as source or target). This ensures the
         graph remains consistent.
+
+        Ids may be passed as separate arguments or as a single sequence. All
+        of them are removed in one update, i.e. ``nodes`` and ``edges`` are
+        each assigned once. Removing nodes one at a time instead syncs an
+        intermediate graph to the browser per node, which React Flow renders
+        as the nodes disappearing one by one.
 
         Parameters
         ----------
-        node_id : str
-            Unique identifier of the node to remove.
+        *node_ids : str or sequence of str
+            Unique identifiers of the nodes to remove, either as separate
+            arguments or as a single sequence. Ids that are not part of the
+            graph are ignored.
 
         Examples
         --------
@@ -2523,40 +2551,65 @@ class ReactFlow(ReactComponent):
         >>>
         >>> flow.remove_node("n1")  # Also removes edge "e1"
 
+        Remove several nodes in a single update:
+
+        >>> flow.remove_node("n1", "n2")
+        >>> flow.remove_node(["n1", "n2"])
+
         See Also
         --------
         add_node : Add a node to the graph
-        remove_edge : Remove an edge from the graph
+        remove_edge : Remove one or more edges from the graph
         """
-        removed_node = next((node for node in self.nodes if self._node_id(node) == node_id), None)
-        nodes = [node for node in self.nodes if self._node_id(node) != node_id]
-        removed_edges = [
-            edge
-            for edge in self.edges
-            if (edge.source if isinstance(edge, Edge) else edge.get("source")) == node_id
-            or (edge.target if isinstance(edge, Edge) else edge.get("target")) == node_id
-        ]
-        self.nodes = nodes
+        ids = list(dict.fromkeys(_flatten_ids(node_ids)))
+        if not ids:
+            return
+        id_set = set(ids)
+        removed_nodes = {}
+        remaining_nodes = []
+        for node in self.nodes:
+            node_id = self._node_id(node)
+            if node_id in id_set:
+                removed_nodes.setdefault(node_id, node)
+            else:
+                remaining_nodes.append(node)
+        removed_edges = [edge for edge in self.edges if self._edge_endpoints(edge) & id_set]
+        updates: dict[str, Any] = {}
+        if removed_nodes:
+            updates["nodes"] = remaining_nodes
         if removed_edges:
-            remaining_edges = [edge for edge in self.edges if edge not in removed_edges]
-            self.edges = remaining_edges
-        self._emit(
-            "node_deleted",
-            {
-                "type": "node_deleted",
-                "node_id": node_id,
-                "deleted_edges": [self._edge_id(edge) for edge in removed_edges],
-            },
-        )
-        if isinstance(removed_node, Node):
-            removed_node.flow = None
+            updates["edges"] = [edge for edge in self.edges if edge not in removed_edges]
+        if updates:
+            self.param.update(**updates)
+        # Report each edge under the first node that removed it, matching the
+        # payloads emitted when removing the nodes sequentially.
+        reported_edges: set[str | None] = set()
+        for node_id in ids:
+            deleted_edges = []
+            for edge in removed_edges:
+                edge_id = self._edge_id(edge)
+                if edge_id in reported_edges or node_id not in self._edge_endpoints(edge):
+                    continue
+                reported_edges.add(edge_id)
+                deleted_edges.append(edge_id)
             payload = {
                 "type": "node_deleted",
                 "node_id": node_id,
-                "deleted_edges": [self._edge_id(edge) for edge in removed_edges],
+                "deleted_edges": deleted_edges,
             }
-            self._invoke_node_hook(removed_node, "on_delete", payload)
-            self._invoke_node_hook(removed_node, "on_event", payload)
+            self._emit("node_deleted", payload)
+            removed_node = removed_nodes.get(node_id)
+            if isinstance(removed_node, Node):
+                removed_node.flow = None
+                self._invoke_node_hook(removed_node, "on_delete", dict(payload))
+                self._invoke_node_hook(removed_node, "on_event", dict(payload))
+
+    @classmethod
+    def _edge_endpoints(cls, edge: dict[str, Any] | Edge) -> set[str | None]:
+        """Return the source and target node ids of *edge*."""
+        if isinstance(edge, Edge):
+            return {edge.source, edge.target}
+        return {edge.get("source"), edge.get("target")}
 
     def add_edge(self, edge: dict[str, Any] | EdgeSpec | Edge) -> None:
         """Add an edge to the graph.
@@ -2646,13 +2699,19 @@ class ReactFlow(ReactComponent):
         self.edges = self.edges + [raw_edge if isinstance(raw_edge, Edge) else payload]
         self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
-    def remove_edge(self, edge_id: str) -> None:
-        """Remove an edge from the graph by its ID.
+    def remove_edge(self, *edge_ids: str | Sequence[str]) -> None:
+        """Remove one or more edges from the graph by their ID.
+
+        Ids may be passed as separate arguments or as a single sequence. All
+        of them are removed in one update, i.e. ``edges`` is only assigned
+        once, so the browser renders a single update instead of one per edge.
 
         Parameters
         ----------
-        edge_id : str
-            Unique identifier of the edge to remove.
+        *edge_ids : str or sequence of str
+            Unique identifiers of the edges to remove, either as separate
+            arguments or as a single sequence. Ids that are not part of the
+            graph are ignored.
 
         Examples
         --------
@@ -2662,21 +2721,40 @@ class ReactFlow(ReactComponent):
         >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
         >>> flow.remove_edge("e1")
 
+        Remove several edges in a single update:
+
+        >>> flow.remove_edge("e1", "e2")
+        >>> flow.remove_edge(["e1", "e2"])
+
         See Also
         --------
         add_edge : Add an edge to the graph
-        remove_node : Remove a node from the graph
+        remove_node : Remove one or more nodes from the graph
         """
-        removed_edge = next((edge for edge in self.edges if self._edge_id(edge) == edge_id), None)
-        removed = [edge for edge in self.edges if self._edge_id(edge) == edge_id]
-        self.edges = [edge for edge in self.edges if self._edge_id(edge) != edge_id]
-        if removed:
-            self._emit("edge_deleted", {"type": "edge_deleted", "edge_id": edge_id})
-        if isinstance(removed_edge, Edge):
-            removed_edge.flow = None
+        ids = list(dict.fromkeys(_flatten_ids(edge_ids)))
+        if not ids:
+            return
+        id_set = set(ids)
+        removed_edges = {}
+        remaining_edges = []
+        for edge in self.edges:
+            edge_id = self._edge_id(edge)
+            if edge_id in id_set:
+                removed_edges.setdefault(edge_id, edge)
+            else:
+                remaining_edges.append(edge)
+        if removed_edges:
+            self.edges = remaining_edges
+        for edge_id in ids:
+            removed_edge = removed_edges.get(edge_id)
+            if removed_edge is None:
+                continue
             payload = {"type": "edge_deleted", "edge_id": edge_id}
-            self._invoke_edge_hook(removed_edge, "on_delete", payload)
-            self._invoke_edge_hook(removed_edge, "on_event", payload)
+            self._emit("edge_deleted", payload)
+            if isinstance(removed_edge, Edge):
+                removed_edge.flow = None
+                self._invoke_edge_hook(removed_edge, "on_delete", dict(payload))
+                self._invoke_edge_hook(removed_edge, "on_event", dict(payload))
 
     def _apply_data_patch(
         self,

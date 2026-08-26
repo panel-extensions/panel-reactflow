@@ -1,5 +1,25 @@
 # Release Notes
 
+## Unreleased
+
+### Bug fixes
+
+- **Progressive re-render when deleting multiple elements** — deleting a
+  multi-node selection removed the nodes one at a time, syncing an
+  intermediate graph to the browser per node so the nodes visibly
+  disappeared one by one. Updates triggered by a frontend message are now
+  held and combined into a single patch, and node/edge deletion assigns
+  `nodes` and `edges` once.
+
+### Enhancements
+
+- **Batch removal** — `remove_node()` and `remove_edge()` now accept
+  several ids, either as separate arguments
+  (`flow.remove_node("n1", "n2")`) or as a sequence
+  (`flow.remove_node(["n1", "n2"])`), and remove them in a single update.
+  For any other batch of changes made from Python, wrap them in
+  `pn.io.hold()` to render them at once.
+
 ## Version 0.4.1
 
 A small enhancement release adding viewport zoom controls.

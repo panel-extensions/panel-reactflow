@@ -418,3 +418,26 @@ flow.add_edge(EdgeSpec(id="e2", source="n3", target="n4"))
 flow.remove_node("n3")   # also removes connected edges
 flow.remove_edge("e1")
 ```
+
+`remove_node()` and `remove_edge()` also take several ids at once, either as
+separate arguments or as a single sequence. Pass them together rather than
+calling the methods in a loop: a batch assigns `nodes` and `edges` once, so the
+browser renders a single update instead of one per element.
+
+```python
+flow.remove_node("n1", "n2", "n3")   # also removes connected edges
+flow.remove_edge(["e1", "e2"])
+```
+
+More generally, every parameter assignment is synced to the browser on its own
+and the canvas re-renders per sync, so a sequence of updates renders each
+intermediate graph. Wrap any batch of changes in `pn.io.hold()` to combine them
+into a single render:
+
+```python
+import panel as pn
+
+with pn.io.hold():
+    flow.nodes = new_nodes
+    flow.edges = new_edges
+```

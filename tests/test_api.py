@@ -1315,3 +1315,283 @@ def test_remove_node_with_edge_instances() -> None:
     assert all(n.id != "a" for n in flow.nodes)
     assert len(flow.edges) == 1
     assert flow.edges[0].id == "e2"
+
+
+def _count_sync_messages(flow: ReactFlow, params: list[str]) -> list[list[tuple[str, int]]]:
+    """Record the sync messages Panel would push to the frontend.
+
+    Panel links all parameters through a single ``onlychanged=False`` watcher,
+    so one watcher call corresponds to one message (and one browser render).
+    """
+    messages: list[list[tuple[str, int]]] = []
+    flow.param.watch(
+        lambda *events: messages.append([(e.name, len(e.new)) for e in events]),
+        params,
+        onlychanged=False,
+    )
+    return messages
+
+
+def _chain_flow(n: int = 5) -> ReactFlow:
+    return ReactFlow(
+        nodes=[{"id": f"n{i}", "position": {"x": 100 * i, "y": 0}, "data": {}} for i in range(n)],
+        edges=[{"id": f"e{i}", "source": f"n{i}", "target": f"n{i + 1}", "data": {}} for i in range(n - 1)],
+    )
+
+
+def test_remove_node_batch_syncs_once() -> None:
+    """Deleting several nodes must not sync an intermediate graph per node.
+
+    Otherwise the browser renders the removal progressively, one node at a time.
+    """
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node(["n1", "n2", "n3"])
+    assert len(messages) == 1
+    assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
+    assert flow.edges == []
+
+
+def test_handle_msg_node_deleted_syncs_once() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow._handle_msg({"type": "node_deleted", "node_id": None, "node_ids": ["n1", "n2", "n3"]})
+    assert len(messages) == 1
+    assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
+
+
+def test_handle_msg_edge_deleted_syncs_once() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["edges"])
+    flow._handle_msg({"type": "edge_deleted", "edge_id": None, "edge_ids": ["e0", "e1", "e2"]})
+    assert len(messages) == 1
+    assert [e["id"] for e in flow.edges] == ["e3"]
+
+
+def test_remove_node_syncs_nodes_and_edges_together() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node("n1")
+    assert len(messages) == 1
+    assert {name for name, _ in messages[0]} == {"nodes", "edges"}
+
+
+def test_remove_node_batch_triggers_views_once() -> None:
+    flow = _chain_flow()
+    triggers = []
+    flow.param.watch(lambda e: triggers.append(e), ["_views"], onlychanged=False)
+    flow.remove_node(["n1", "n2", "n3"])
+    assert len(triggers) == 1
+
+
+def test_remove_node_batch_matches_sequential_events() -> None:
+    """Batched removal must emit the same events as removing one at a time."""
+    sequential: list[dict] = []
+    flow = _chain_flow()
+    flow.on("node_deleted", sequential.append)
+    for node_id in ["n1", "n2", "n3"]:
+        flow.remove_node(node_id)
+
+    batched: list[dict] = []
+    flow = _chain_flow()
+    flow.on("node_deleted", batched.append)
+    flow.remove_node(["n1", "n2", "n3"])
+
+    assert batched == sequential
+
+
+def test_remove_node_batch_emits_deletion_events_in_order() -> None:
+    flow = _chain_flow()
+    events: list[dict] = []
+    flow.on("node_deleted", events.append)
+    flow.remove_node(["n3", "n1"])
+    assert [e["node_id"] for e in events] == ["n3", "n1"]
+
+
+def test_remove_node_batch_ignores_unknown_and_duplicate_ids() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node(["n1", "n1", "nope"])
+    assert len(messages) == 1
+    assert [n["id"] for n in flow.nodes] == ["n0", "n2", "n3", "n4"]
+
+    messages.clear()
+    flow.remove_node([])
+    flow.remove_node(["nope"])
+    assert messages == []
+
+
+def test_remove_edge_batch_ignores_unknown_ids() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["edges"])
+    flow.remove_edge(["e0", "e0", "nope"])
+    assert len(messages) == 1
+    assert [e["id"] for e in flow.edges] == ["e1", "e2", "e3"]
+
+    messages.clear()
+    flow.remove_edge(["nope"])
+    assert messages == []
+
+
+def test_remove_node_batch_detaches_node_instances() -> None:
+    nodes = [Node(id=f"n{i}", position={"x": 100 * i, "y": 0}) for i in range(3)]
+    edges = [Edge(id="e0", source="n0", target="n1"), Edge(id="e1", source="n1", target="n2")]
+    flow = ReactFlow(nodes=nodes, edges=edges)
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node(["n0", "n1"])
+    assert len(messages) == 1
+    assert [n.id for n in flow.nodes] == ["n2"]
+    assert flow.edges == []
+    assert nodes[0].flow is None
+    assert nodes[1].flow is None
+    assert nodes[2].flow is flow
+
+
+def test_remove_edge_batch_detaches_edge_instances() -> None:
+    nodes = [Node(id=f"n{i}", position={"x": 100 * i, "y": 0}) for i in range(3)]
+    edges = [Edge(id="e0", source="n0", target="n1"), Edge(id="e1", source="n1", target="n2")]
+    flow = ReactFlow(nodes=nodes, edges=edges)
+    flow.remove_edge(["e0", "e1"])
+    assert flow.edges == []
+    assert edges[0].flow is None
+    assert edges[1].flow is None
+
+
+def test_hold_combines_loop_removal_into_one_patch(document) -> None:
+    """``pn.io.hold`` is the supported way to batch a sequence of updates.
+
+    Bokeh's ``combine`` hold policy replaces an earlier event for the same
+    property, so repeated ``nodes`` assignments collapse into a single patch
+    and the browser renders the removal once instead of once per node.
+    """
+    from panel.io import hold
+    from panel.io.state import set_curdoc
+
+    flow = _chain_flow()
+    flow.get_root(document)
+    with set_curdoc(document):
+        assert document.callbacks.hold_value is None
+        with hold():
+            assert document.callbacks.hold_value == "combine"
+            for node_id in ["n1", "n2", "n3"]:
+                flow.remove_node(node_id)
+        assert document.callbacks.hold_value is None
+    assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
+    assert flow.edges == []
+
+
+def test_handle_msg_is_held(document) -> None:
+    """Frontend-initiated updates are batched without the caller opting in."""
+    from panel.io.state import set_curdoc
+
+    flow = _chain_flow()
+    flow.get_root(document)
+    holds = []
+    original = flow._process_msg
+
+    def record(msg):
+        holds.append(document.callbacks.hold_value)
+        return original(msg)
+
+    flow._process_msg = record
+    with set_curdoc(document):
+        flow._handle_msg({"type": "node_deleted", "node_id": None, "node_ids": ["n1", "n2"]})
+    assert holds == ["combine"]
+    assert [n["id"] for n in flow.nodes] == ["n0", "n3", "n4"]
+
+
+def test_handle_msg_without_document_still_applies() -> None:
+    flow = _chain_flow()
+    flow._handle_msg({"type": "node_deleted", "node_id": None, "node_ids": ["n1", "n2"]})
+    assert [n["id"] for n in flow.nodes] == ["n0", "n3", "n4"]
+
+
+def test_handle_msg_releases_hold_on_error(document) -> None:
+    from panel.io.state import set_curdoc
+
+    flow = _chain_flow()
+    flow.get_root(document)
+
+    def boom(msg):
+        flow.remove_node("n1")
+        raise RuntimeError("boom")
+
+    flow._process_msg = boom
+    with set_curdoc(document):
+        try:
+            flow._handle_msg({"type": "node_deleted", "node_ids": ["n1"]})
+        except RuntimeError:
+            pass
+        assert document.callbacks.hold_value is None
+
+
+def test_remove_node_batch_removes_every_node_matching_an_id() -> None:
+    """A duplicated id must not leave a stale copy behind."""
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n1", "position": {"x": 10, "y": 10}, "data": {}},
+            {"id": "n2", "position": {"x": 20, "y": 20}, "data": {}},
+        ],
+        edges=[
+            {"id": "e1", "source": "n1", "target": "n2", "data": {}},
+            {"id": "e1", "source": "n2", "target": "n1", "data": {}},
+        ],
+    )
+    flow.remove_node(["n1"])
+    assert [n["id"] for n in flow.nodes] == ["n2"]
+    assert flow.edges == []
+
+
+def test_remove_edge_batch_removes_every_edge_matching_an_id() -> None:
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 20, "y": 20}, "data": {}},
+        ],
+        edges=[
+            {"id": "e1", "source": "n1", "target": "n2", "data": {}},
+            {"id": "e1", "source": "n2", "target": "n1", "data": {}},
+            {"id": "e2", "source": "n1", "target": "n2", "data": {}},
+        ],
+    )
+    flow.remove_edge(["e1"])
+    assert [e["id"] for e in flow.edges] == ["e2"]
+
+
+def test_remove_node_accepts_varargs_and_sequences() -> None:
+    """Ids may be passed as separate arguments or as a single sequence."""
+    for remove in (
+        lambda f: f.remove_node("n1", "n2", "n3"),
+        lambda f: f.remove_node(["n1", "n2", "n3"]),
+        lambda f: f.remove_node("n1", ["n2", "n3"]),
+    ):
+        flow = _chain_flow()
+        messages = _count_sync_messages(flow, ["nodes", "edges"])
+        remove(flow)
+        assert [n["id"] for n in flow.nodes] == ["n0", "n4"]
+        assert flow.edges == []
+        assert len(messages) == 1
+
+
+def test_remove_edge_accepts_varargs_and_sequences() -> None:
+    for remove in (
+        lambda f: f.remove_edge("e0", "e1"),
+        lambda f: f.remove_edge(["e0", "e1"]),
+        lambda f: f.remove_edge("e0", ["e1"]),
+    ):
+        flow = _chain_flow()
+        messages = _count_sync_messages(flow, ["nodes", "edges"])
+        remove(flow)
+        assert [e["id"] for e in flow.edges] == ["e2", "e3"]
+        assert len(messages) == 1
+
+
+def test_remove_node_without_arguments_is_a_noop() -> None:
+    flow = _chain_flow()
+    messages = _count_sync_messages(flow, ["nodes", "edges"])
+    flow.remove_node()
+    flow.remove_edge()
+    assert len(flow.nodes) == 5
+    assert len(flow.edges) == 4
+    assert messages == []
