@@ -255,6 +255,32 @@ function signature(value) {
 }
 
 /**
+ * Combine the class React Flow needs for its own node chrome with the class
+ * declared on the Python side.
+ */
+function nodeClassName(type, className, model) {
+  const base = (type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
+  return [base, className].filter(Boolean).join(" ");
+}
+
+/**
+ * Merge a patch of top-level fields (`style`, `type`, `label`, ...) into a node
+ * or edge. `null` removes the field so the element falls back to the CSS/theme
+ * default, mirroring how Python omits `None` when it serializes the graph.
+ */
+function applyPropPatch(element, patch) {
+  const next = { ...element };
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value === null) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+  });
+  return next;
+}
+
+/**
  * Drop or repair graph elements that React Flow cannot render, so a structurally
  * broken graph degrades to a partial view instead of an unmounted canvas.
  *
@@ -514,6 +540,34 @@ function FlowInner({
             const nextLabel = msg.patch?.label ?? edge.label;
             return { ...edge, data, label: nextLabel };
           }),
+        );
+        return;
+      }
+      if (msg.type === "patch_node_props") {
+        const patch = msg.patch || {};
+        setNodes((current) =>
+          current.map((node) => {
+            if (node.id !== msg.node_id) {
+              return node;
+            }
+            const next = applyPropPatch(node, patch);
+            if ("label" in patch) {
+              // The node components render `data._label`, not the top-level label.
+              next.data = { ...(next.data || {}), _label: patch.label };
+            }
+            if ("className" in patch || "type" in patch) {
+              const declared = "className" in patch ? patch.className : node._className;
+              next._className = declared ?? null;
+              next.className = nodeClassName(next.type, declared, model);
+            }
+            return next;
+          }),
+        );
+        return;
+      }
+      if (msg.type === "patch_edge_props") {
+        setEdges((current) =>
+          current.map((edge) => (edge.id === msg.edge_id ? applyPropPatch(edge, msg.patch) : edge)),
         );
       }
     };
@@ -980,7 +1034,10 @@ export function render({ model, view }) {
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
       return {
         ...node,
-        className: (node.type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default",
+        // Keep the declared class around so a later className/type patch can
+        // recombine it with the React Flow node chrome class.
+        _className: node.className ?? null,
+        className: nodeClassName(node.type, node.className, model),
         data: {
           ...dataWithoutViewIdx,
           view: baseView,

@@ -300,7 +300,11 @@ def test_patch_edge_data_updates_edge_instance() -> None:
     )
     flow.patch_edge_data("e1", {"weight": 3, "label": "hi"})
     assert edge.data["weight"] == 3
+    # `label` is also a top-level Edge field, so it is mirrored onto
+    # `edge.label` (see panel-multi#60) as well as kept in `data`, which keeps
+    # the frontend and Python from disagreeing about where the label lives.
     assert edge.data["label"] == "hi"
+    assert edge.label == "hi"
 
 
 def test_sync_updates_edge_instance_fields() -> None:
@@ -441,6 +445,245 @@ def test_parameterized_edge_watchers_clean_up_on_delete() -> None:
     flow.on("edge_data_changed", events.append)
     edge.confidence = 0.2
     assert events == []
+
+
+def _capture_msgs(flow: ReactFlow) -> list:
+    msgs: list = []
+    flow._send_msg = msgs.append
+    return msgs
+
+
+def _two_node_flow(**params) -> ReactFlow:
+    return ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        **params,
+    )
+
+
+def test_node_base_param_change_patches_props() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0}, label="A")
+    flow = ReactFlow(nodes=[node])
+    msgs = _capture_msgs(flow)
+    events = []
+    flow.on("node_props_changed", events.append)
+
+    node.label = "A2"
+    node.style = {"backgroundColor": "#ef4444"}
+    node.type = "minimal"
+
+    assert [msg["type"] for msg in msgs] == ["patch_node_props"] * 3
+    assert [msg["patch"] for msg in msgs] == [
+        {"label": "A2"},
+        {"style": {"backgroundColor": "#ef4444"}},
+        {"type": "minimal"},
+    ]
+    assert all(msg["node_id"] == "n1" for msg in msgs)
+    assert [event["patch"] for event in events] == [msg["patch"] for msg in msgs]
+    # The instance stays the source of truth for a full re-serialization.
+    assert node.to_dict()["style"] == {"backgroundColor": "#ef4444"}
+
+
+def test_edge_base_param_change_patches_props() -> None:
+    edge = Edge(id="e1", source="n1", target="n2")
+    flow = _two_node_flow(edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    edge.style = {"strokeWidth": 6, "stroke": "#ef4444"}
+    edge.type = "step"
+    edge.label = "0.75"
+
+    assert [msg["patch"] for msg in msgs] == [
+        {"style": {"strokeWidth": 6, "stroke": "#ef4444"}},
+        {"type": "step"},
+        {"label": "0.75"},
+    ]
+    assert all(msg["type"] == "patch_edge_props" and msg["edge_id"] == "e1" for msg in msgs)
+    # Top-level fields must not leak into the edge's data dictionary.
+    assert edge.data == {}
+
+
+def test_edge_prop_set_to_none_clears_field() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", style={"stroke": "red"})
+    flow = _two_node_flow(edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    edge.style = None
+
+    assert msgs[-1]["patch"] == {"style": None}
+    assert "style" not in edge.to_dict()
+
+
+def test_batched_prop_updates_coalesce_into_one_patch() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0})
+    flow = ReactFlow(nodes=[node])
+    msgs = _capture_msgs(flow)
+
+    node.param.update(label="renamed", className="highlight")
+
+    assert len(msgs) == 1
+    assert msgs[0]["patch"] == {"label": "renamed", "className": "highlight"}
+
+
+def test_subclass_and_base_params_patch_separately() -> None:
+    node = _ParameterizedNode(id="n1", type="custom", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    msgs = _capture_msgs(flow)
+
+    node.threshold = 0.9
+    node.label = "Threshold node"
+
+    assert msgs[0] == {"type": "patch_node_data", "node_id": "n1", "patch": {"threshold": 0.9}}
+    assert msgs[1] == {"type": "patch_node_props", "node_id": "n1", "patch": {"label": "Threshold node"}}
+    assert node.data == {"threshold": 0.9}
+
+
+def test_patch_node_props_updates_dict_node() -> None:
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "style": {"stroke": "red"}}])
+    msgs = _capture_msgs(flow)
+
+    flow.patch_node_props("n1", {"label": "Renamed", "position": {"x": 5, "y": 6}})
+    assert flow.nodes[0]["label"] == "Renamed"
+    assert flow.nodes[0]["position"] == {"x": 5, "y": 6}
+    assert msgs[-1]["patch"] == {"label": "Renamed", "position": {"x": 5, "y": 6}}
+
+    flow.patch_node_props("n1", {"style": None})
+    assert "style" not in flow.nodes[0]
+
+
+def test_patch_edge_props_updates_dict_edge() -> None:
+    flow = _two_node_flow(edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}])
+    msgs = _capture_msgs(flow)
+
+    flow.patch_edge_props("e1", {"type": "step"})
+
+    assert flow.edges[0]["type"] == "step"
+    assert flow.edges[0]["data"] == {}
+    assert msgs[-1] == {"type": "patch_edge_props", "edge_id": "e1", "patch": {"type": "step"}}
+
+
+def test_patch_props_on_instance_sends_single_message() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0})
+    flow = ReactFlow(nodes=[node])
+    msgs = _capture_msgs(flow)
+
+    flow.patch_node_props("n1", {"label": "Renamed"})
+
+    assert node.label == "Renamed"
+    assert len(msgs) == 1
+
+
+def test_patch_props_rejects_data_keys() -> None:
+    flow = _two_node_flow(edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}])
+    with pytest.raises(ValueError, match="patch_node_data"):
+        flow.patch_node_props("n1", {"weight": 3})
+    with pytest.raises(ValueError, match="patch_edge_data"):
+        flow.patch_edge_props("e1", {"data": {"weight": 3}})
+
+
+def test_prop_watchers_clean_up_on_delete() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0})
+    edge = Edge(id="e1", source="n1", target="n2")
+    flow = ReactFlow(nodes=[node, {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}], edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    flow.remove_edge("e1")
+    flow.remove_node("n1")
+    node.label = "detached"
+    edge.style = {"stroke": "red"}
+
+    assert [msg for msg in msgs if msg["type"].endswith("_props")] == []
+
+
+def test_sync_does_not_echo_prop_patches() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0}, label="A")
+    edge = Edge(id="e1", source="n1", target="n2")
+    flow = ReactFlow(nodes=[node, {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}}], edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    flow._handle_msg(
+        {
+            "type": "sync",
+            "nodes": [{"id": "n1", "position": {"x": 4, "y": 5}, "label": "B", "data": {}}],
+            "edges": [{"id": "e1", "source": "n1", "target": "n2", "type": "step", "data": {}}],
+        }
+    )
+
+    assert node.label == "B"
+    assert edge.type == "step"
+    assert [msg for msg in msgs if msg["type"].endswith("_props")] == []
+
+
+def test_node_props_change_invokes_hook() -> None:
+    class _HookNode(Node):
+        def __init__(self, **params):
+            super().__init__(**params)
+            self.patches = []
+
+        def on_props_change(self, payload, flow):
+            self.patches.append(payload["patch"])
+
+    node = _HookNode(id="n1", position={"x": 0, "y": 0})
+    flow = ReactFlow(nodes=[node])
+    _capture_msgs(flow)
+
+    node.style = {"opacity": 0.5}
+
+    assert node.patches == [{"style": {"opacity": 0.5}}]
+
+
+def test_patch_edge_data_label_mirrors_onto_prop() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", data={})
+    flow = _two_node_flow(edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    flow.patch_edge_data("e1", {"weight": 0.9, "label": "strong"})
+
+    # The key stays in ``data`` for backwards compatibility, but the parameter
+    # now follows so a full re-serialization keeps the label.
+    assert edge.data == {"weight": 0.9, "label": "strong"}
+    assert edge.label == "strong"
+    assert edge.to_dict()["label"] == "strong"
+    assert [msg["type"] for msg in msgs] == ["patch_edge_data", "patch_edge_props"]
+    assert msgs[0]["patch"] == {"weight": 0.9, "label": "strong"}
+    assert msgs[1]["patch"] == {"label": "strong"}
+
+
+def test_patch_edge_data_label_mirrors_onto_dict_edge() -> None:
+    flow = _two_node_flow(edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}])
+    _capture_msgs(flow)
+
+    flow.patch_edge_data("e1", {"label": "strong"})
+
+    assert flow.edges[0]["label"] == "strong"
+
+
+def test_patch_node_data_label_mirrors_onto_prop() -> None:
+    node = Node(id="n1", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node])
+    msgs = _capture_msgs(flow)
+
+    # ``_label`` is the key the node components read, so it mirrors too.
+    flow.patch_node_data("n1", {"_label": "Renamed"})
+
+    assert node.label == "Renamed"
+    assert [msg["type"] for msg in msgs] == ["patch_node_data", "patch_node_props"]
+    assert msgs[1]["patch"] == {"label": "Renamed"}
+
+
+def test_patch_data_does_not_mirror_other_props() -> None:
+    edge = Edge(id="e1", source="n1", target="n2", data={})
+    flow = _two_node_flow(edges=[edge])
+    msgs = _capture_msgs(flow)
+
+    flow.patch_edge_data("e1", {"style": {"stroke": "red"}, "type": "domain-type"})
+
+    assert edge.style is None
+    assert edge.type is None
+    assert edge.data == {"style": {"stroke": "red"}, "type": "domain-type"}
+    assert [msg["type"] for msg in msgs] == ["patch_edge_data"]
 
 
 def test_edge_flow_ref_updates_on_edges_assignment() -> None:

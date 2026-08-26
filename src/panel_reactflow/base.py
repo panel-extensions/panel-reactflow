@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -630,7 +631,47 @@ class Node(param.Parameterized):
     - ``__panel__`` to render node content.
     - ``editor`` to provide a node-specific editor.
     - ``on_event`` (wildcard) and event-specific ``on_*`` hooks.
+
+    Assigning to a parameter after the node is part of a graph updates the
+    browser in place, without re-serializing the whole ``ReactFlow.nodes``
+    list. Parameters declared on a subclass are synced into the node's
+    ``data``; the presentational base parameters listed in ``_synced_props``
+    are synced as top-level React Flow fields.
     """
+
+    # Fields ``to_dict`` serializes outside ``data``, i.e. the ones
+    # ``ReactFlow.patch_node_props`` may update in place.
+    _props = (
+        "position",
+        "type",
+        "label",
+        "selected",
+        "draggable",
+        "connectable",
+        "deletable",
+        "style",
+        "className",
+    )
+
+    # Subset of ``_props`` pushed to the browser on assignment. ``position``
+    # and ``selected`` are driven by the frontend while the user drags or
+    # selects, so echoing them back would fight the pointer mid-interaction;
+    # use ``ReactFlow.patch_node_props`` to set them explicitly.
+    _synced_props = (
+        "type",
+        "label",
+        "draggable",
+        "connectable",
+        "deletable",
+        "style",
+        "className",
+    )
+
+    # ``data`` keys ``ReactFlow.patch_node_data`` mirrors onto a top-level
+    # property. The node components render the label out of ``data._label``, so
+    # a data patch that carries a label has to update the parameter too or the
+    # next full serialization reverts it.
+    _mirrored_data_keys = {"label": "label", "_label": "label"}
 
     id = param.String(default="", doc="Unique node identifier.")
     position = param.Dict(default={"x": 0.0, "y": 0.0}, doc="Node position.")
@@ -714,6 +755,9 @@ class Node(param.Parameterized):
 
     def on_data_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
         """Hook called when this node's data changes."""
+
+    def on_props_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this node's top-level properties change."""
 
     def on_selection_changed(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
         """Hook called when this node participates in a selection update."""
@@ -890,7 +934,48 @@ class EdgeSpec:
 
 
 class Edge(param.Parameterized):
-    """Base class for object-oriented edges."""
+    """Base class for object-oriented edges.
+
+    Assigning to a parameter after the edge is part of a graph updates the
+    browser in place, without re-serializing the whole ``ReactFlow.edges``
+    list. Parameters declared on a subclass are synced into the edge's
+    ``data``; the base parameters listed in ``_synced_props`` are synced as
+    top-level React Flow fields.
+    """
+
+    # Fields ``to_dict`` serializes outside ``data``, i.e. the ones
+    # ``ReactFlow.patch_edge_props`` may update in place.
+    _props = (
+        "source",
+        "target",
+        "label",
+        "type",
+        "selected",
+        "style",
+        "markerEnd",
+        "sourceHandle",
+        "targetHandle",
+    )
+
+    # Subset of ``_props`` pushed to the browser on assignment. ``selected``
+    # is driven by the frontend while the user selects, so echoing it back
+    # would fight the pointer; use ``ReactFlow.patch_edge_props`` to set it.
+    _synced_props = (
+        "source",
+        "target",
+        "label",
+        "type",
+        "style",
+        "markerEnd",
+        "sourceHandle",
+        "targetHandle",
+    )
+
+    # ``data`` keys ``ReactFlow.patch_edge_data`` mirrors onto a top-level
+    # property. The frontend has always promoted a patched label onto the edge
+    # itself, so the parameter has to follow or the next full serialization
+    # reverts it.
+    _mirrored_data_keys = {"label": "label"}
 
     id = param.String(default="", doc="Unique edge identifier.")
     source = param.String(default="", doc="Source node id.")
@@ -955,6 +1040,9 @@ class Edge(param.Parameterized):
 
     def on_data_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
         """Hook called when this edge's data changes."""
+
+    def on_props_change(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
+        """Hook called when this edge's top-level properties change."""
 
     def on_selection_changed(self, payload: dict[str, Any], flow: "ReactFlow") -> None:
         """Hook called when this edge participates in a selection update."""
@@ -1514,6 +1602,7 @@ class ReactFlow(ReactComponent):
         self._attached_edge_instances: dict[int, Edge] = {}
         self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
         self._edge_data_param_watchers: dict[str, tuple[Edge, list[Any]]] = {}
+        self._suppress_prop_sync = False
         self._node_view_cache: dict[str, tuple[int, Any]] = {}
         # Normalize type specs before parent init so the frontend receives
         # JSON-serializable descriptors from the start.
@@ -1751,25 +1840,15 @@ class ReactFlow(ReactComponent):
             if name in (edge.data or {}):
                 setattr(edge, name, edge.data[name])
 
-    def _teardown_node_data_param_watcher(self, node_id: str) -> None:
-        record = self._node_data_param_watchers.pop(node_id, None)
+    @staticmethod
+    def _teardown_param_watcher(watcher_store: dict[str, tuple[Any, list[Any]]], item_id: str) -> None:
+        record = watcher_store.pop(item_id, None)
         if record is None:
             return
-        node, watchers = record
+        item, watchers = record
         for watcher in watchers:
             try:
-                node.param.unwatch(watcher)
-            except Exception:
-                pass
-
-    def _teardown_edge_data_param_watcher(self, edge_id: str) -> None:
-        record = self._edge_data_param_watchers.pop(edge_id, None)
-        if record is None:
-            return
-        edge, watchers = record
-        for watcher in watchers:
-            try:
-                edge.param.unwatch(watcher)
+                item.param.unwatch(watcher)
             except Exception:
                 pass
 
@@ -1798,67 +1877,109 @@ class ReactFlow(ReactComponent):
 
     def _update_node_data_param_watchers(self) -> None:
         current_nodes = {node.id: node for node in self.nodes if isinstance(node, Node) and node.id}
-        for node_id, (watched_node, _) in list(self._node_data_param_watchers.items()):
-            current = current_nodes.get(node_id)
-            if current is None or current is not watched_node:
-                self._teardown_node_data_param_watcher(node_id)
-        for node_id, node in current_nodes.items():
-            if node_id in self._node_data_param_watchers:
-                continue
-            watchers = []
-            for name in node._data_param_names():
-                watchers.append(
-                    node.param.watch(
-                        lambda event, _id=node_id, _name=name, _node=node: self._on_node_data_param_change(_id, _name, _node, event),
-                        name,
-                    )
-                )
-            self._node_data_param_watchers[node_id] = (node, watchers)
+        self._update_param_watchers(
+            current_items=current_nodes,
+            watcher_store=self._node_data_param_watchers,
+            get_instance=self._get_node_instance,
+            data_patch_fn=self.patch_node_data,
+            prop_patch_fn=self.patch_node_props,
+        )
 
     def _update_edge_data_param_watchers(self) -> None:
         current_edges = {edge.id: edge for edge in self.edges if isinstance(edge, Edge) and edge.id}
-        for edge_id, (watched_edge, _) in list(self._edge_data_param_watchers.items()):
-            current = current_edges.get(edge_id)
-            if current is None or current is not watched_edge:
-                self._teardown_edge_data_param_watcher(edge_id)
-        for edge_id, edge in current_edges.items():
-            if edge_id in self._edge_data_param_watchers:
+        self._update_param_watchers(
+            current_items=current_edges,
+            watcher_store=self._edge_data_param_watchers,
+            get_instance=self._get_edge_instance,
+            data_patch_fn=self.patch_edge_data,
+            prop_patch_fn=self.patch_edge_props,
+        )
+
+    def _update_param_watchers(
+        self,
+        *,
+        current_items: dict[str, Node | Edge],
+        watcher_store: dict[str, tuple[Node | Edge, list[Any]]],
+        get_instance: Callable[[str], Node | Edge | None],
+        data_patch_fn: Callable[[str, dict[str, Any]], None],
+        prop_patch_fn: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """Keep param watchers for a set of live ``Node``/``Edge`` instances in sync.
+
+        Watches both the subclass-defined data params
+        (``item._data_param_names()``), which are patched into ``data``, and the
+        presentational base params (``item._synced_props``, e.g.
+        ``label``/``style``), which are patched as top-level React Flow fields,
+        so that assigning either on a live instance reaches the frontend.
+        """
+        for item_id, (watched_item, _) in list(watcher_store.items()):
+            current = current_items.get(item_id)
+            if current is None or current is not watched_item:
+                self._teardown_param_watcher(watcher_store, item_id)
+        for item_id, item in current_items.items():
+            if item_id in watcher_store:
                 continue
-            watchers = []
-            for name in edge._data_param_names():
-                watchers.append(
-                    edge.param.watch(
-                        lambda event, _id=edge_id, _name=name, _edge=edge: self._on_edge_data_param_change(_id, _name, _edge, event),
-                        name,
-                    )
+            watchers = [
+                item.param.watch(
+                    lambda event, _id=item_id, _name=name, _item=item: self._on_data_param_change(get_instance, data_patch_fn, _id, _name, _item, event),
+                    name,
                 )
-            self._edge_data_param_watchers[edge_id] = (edge, watchers)
+                for name in item._data_param_names()
+            ]
+            # A single watcher for every property, so that a batched
+            # ``param.update`` coalesces into one patch message.
+            watchers.append(
+                item.param.watch(
+                    lambda *events, _id=item_id, _item=item: self._on_prop_param_change(get_instance, prop_patch_fn, _id, _item, *events),
+                    list(item._synced_props),
+                )
+            )
+            watcher_store[item_id] = (item, watchers)
 
-    def _on_node_data_param_change(
-        self,
-        node_id: str,
+    @staticmethod
+    def _on_data_param_change(
+        get_instance: Callable[[str], Node | Edge | None],
+        patch_fn: Callable[[str, dict[str, Any]], None],
+        item_id: str,
         param_name: str,
-        node: Node,
+        item: Node | Edge,
         event: param.parameterized.Event,
     ) -> None:
-        if self._get_node_instance(node_id) is not node:
+        if get_instance(item_id) is not item:
             return
-        if (node.data or {}).get(param_name) == event.new:
+        # Guards against the redundant re-send ``_sync_*_data_params_from_data``
+        # would otherwise cause.
+        if (item.data or {}).get(param_name) == event.new:
             return
-        self.patch_node_data(node_id, {param_name: event.new})
+        patch_fn(item_id, {param_name: event.new})
 
-    def _on_edge_data_param_change(
+    def _on_prop_param_change(
         self,
-        edge_id: str,
-        param_name: str,
-        edge: Edge,
-        event: param.parameterized.Event,
+        get_instance: Callable[[str], Node | Edge | None],
+        patch_fn: Callable[[str, dict[str, Any]], None],
+        item_id: str,
+        item: Node | Edge,
+        *events: param.parameterized.Event,
     ) -> None:
-        if self._get_edge_instance(edge_id) is not edge:
+        if self._suppress_prop_sync:
             return
-        if (edge.data or {}).get(param_name) == event.new:
+        if get_instance(item_id) is not item:
             return
-        self.patch_edge_data(edge_id, {param_name: event.new})
+        patch_fn(item_id, {event.name: event.new for event in events})
+
+    @contextmanager
+    def _suppressed_prop_sync(self):
+        """Apply values that came from (or are already in) the browser.
+
+        Prevents the ``Node``/``Edge`` property watchers from echoing a patch
+        back to the frontend for a value the frontend already holds.
+        """
+        previous = self._suppress_prop_sync
+        self._suppress_prop_sync = True
+        try:
+            yield
+        finally:
+            self._suppress_prop_sync = previous
 
     @staticmethod
     def _invoke_node_callback(callback: Callable, payload: dict[str, Any], flow: "ReactFlow") -> None:
@@ -1884,7 +2005,7 @@ class ReactFlow(ReactComponent):
             node_payload = payload.get("node", {})
             if isinstance(node_payload, dict) and node_payload.get("id"):
                 node_ids = [node_payload["id"]]
-        elif event_type in ("node_moved", "node_clicked", "node_data_changed"):
+        elif event_type in ("node_moved", "node_clicked", "node_data_changed", "node_props_changed"):
             node_id = payload.get("node_id")
             if node_id:
                 node_ids = [node_id]
@@ -1898,6 +2019,7 @@ class ReactFlow(ReactComponent):
             "node_moved": "on_move",
             "node_clicked": "on_click",
             "node_data_changed": "on_data_change",
+            "node_props_changed": "on_props_change",
             "selection_changed": "on_selection_changed",
             "sync": "on_sync",
         }
@@ -1916,7 +2038,7 @@ class ReactFlow(ReactComponent):
             edge_payload = payload.get("edge", {})
             if isinstance(edge_payload, dict) and edge_payload.get("id"):
                 edge_ids = [edge_payload["id"]]
-        elif event_type in ("edge_deleted", "edge_data_changed"):
+        elif event_type in ("edge_deleted", "edge_data_changed", "edge_props_changed"):
             edge_id = payload.get("edge_id")
             if edge_id:
                 edge_ids = [edge_id]
@@ -1929,6 +2051,7 @@ class ReactFlow(ReactComponent):
             "edge_added": "on_add",
             "edge_deleted": "on_delete",
             "edge_data_changed": "on_data_change",
+            "edge_props_changed": "on_props_change",
             "selection_changed": "on_selection_changed",
             "sync": "on_sync",
         }
@@ -2224,6 +2347,57 @@ class ReactFlow(ReactComponent):
         self.nodes = self.nodes + [raw_node if isinstance(raw_node, Node) else payload]
         self._emit("node_added", {"type": "node_added", "node": payload})
 
+    def _apply_sync(self, nodes: list[dict[str, Any]] | None, edges: list[dict[str, Any]] | None) -> None:
+        """Apply a full graph payload coming from the frontend."""
+        if nodes is not None:
+            node_instances = {node.id: node for node in self.nodes if isinstance(node, Node)}
+            synced_nodes: list[dict[str, Any] | Node] = []
+            for payload in nodes:
+                node = node_instances.get(payload.get("id"))
+                if node is None:
+                    synced_nodes.append(payload)
+                    continue
+                node.position = dict(payload.get("position", node.position))
+                node.type = payload.get("type", node.type)
+                node.label = payload.get("label", node.label)
+                node.data = dict(payload.get("data", node.data))
+                self._sync_node_data_params_from_data(node)
+                node.selected = payload.get("selected", node.selected)
+                node.draggable = payload.get("draggable", node.draggable)
+                node.connectable = payload.get("connectable", node.connectable)
+                node.deletable = payload.get("deletable", node.deletable)
+                if "style" in payload:
+                    node.style = payload.get("style")
+                if "className" in payload:
+                    node.className = payload.get("className")
+                synced_nodes.append(node)
+            self.nodes = synced_nodes
+        if edges is not None:
+            edge_instances = {edge.id: edge for edge in self.edges if isinstance(edge, Edge)}
+            synced_edges: list[dict[str, Any] | Edge] = []
+            for payload in edges:
+                edge = edge_instances.get(payload.get("id"))
+                if edge is None:
+                    synced_edges.append(payload)
+                    continue
+                edge.source = payload.get("source", edge.source)
+                edge.target = payload.get("target", edge.target)
+                edge.label = payload.get("label", edge.label)
+                edge.type = payload.get("type", edge.type)
+                edge.selected = payload.get("selected", edge.selected)
+                edge.data = dict(payload.get("data", edge.data))
+                self._sync_edge_data_params_from_data(edge)
+                if "style" in payload:
+                    edge.style = payload.get("style")
+                if "markerEnd" in payload:
+                    edge.markerEnd = payload.get("markerEnd")
+                if "sourceHandle" in payload:
+                    edge.sourceHandle = payload.get("sourceHandle")
+                if "targetHandle" in payload:
+                    edge.targetHandle = payload.get("targetHandle")
+                synced_edges.append(edge)
+            self.edges = synced_edges
+
     def _handle_msg(self, msg: dict[str, Any]) -> None:
         """Handle sync messages from the frontend."""
         if not isinstance(msg, dict):
@@ -2232,56 +2406,8 @@ class ReactFlow(ReactComponent):
             case "sync":
                 nodes = msg.get("nodes")
                 edges = msg.get("edges")
-                if nodes is not None:
-                    current_instances = {node.id: node for node in self.nodes if isinstance(node, Node)}
-                    synced_nodes: list[dict[str, Any] | Node] = []
-                    for payload in nodes:
-                        node_id = payload.get("id")
-                        if node_id in current_instances:
-                            node = current_instances[node_id]
-                            node.position = dict(payload.get("position", node.position))
-                            node.type = payload.get("type", node.type)
-                            node.label = payload.get("label", node.label)
-                            node.data = dict(payload.get("data", node.data))
-                            self._sync_node_data_params_from_data(node)
-                            node.selected = payload.get("selected", node.selected)
-                            node.draggable = payload.get("draggable", node.draggable)
-                            node.connectable = payload.get("connectable", node.connectable)
-                            node.deletable = payload.get("deletable", node.deletable)
-                            if "style" in payload:
-                                node.style = payload.get("style")
-                            if "className" in payload:
-                                node.className = payload.get("className")
-                            synced_nodes.append(node)
-                        else:
-                            synced_nodes.append(payload)
-                    self.nodes = synced_nodes
-                if edges is not None:
-                    current_instances = {edge.id: edge for edge in self.edges if isinstance(edge, Edge)}
-                    synced_edges: list[dict[str, Any] | Edge] = []
-                    for payload in edges:
-                        edge_id = payload.get("id")
-                        if edge_id in current_instances:
-                            edge = current_instances[edge_id]
-                            edge.source = payload.get("source", edge.source)
-                            edge.target = payload.get("target", edge.target)
-                            edge.label = payload.get("label", edge.label)
-                            edge.type = payload.get("type", edge.type)
-                            edge.selected = payload.get("selected", edge.selected)
-                            edge.data = dict(payload.get("data", edge.data))
-                            self._sync_edge_data_params_from_data(edge)
-                            if "style" in payload:
-                                edge.style = payload.get("style")
-                            if "markerEnd" in payload:
-                                edge.markerEnd = payload.get("markerEnd")
-                            if "sourceHandle" in payload:
-                                edge.sourceHandle = payload.get("sourceHandle")
-                            if "targetHandle" in payload:
-                                edge.targetHandle = payload.get("targetHandle")
-                            synced_edges.append(edge)
-                        else:
-                            synced_edges.append(payload)
-                    self.edges = synced_edges
+                with self._suppressed_prop_sync():
+                    self._apply_sync(nodes, edges)
                 self._emit("sync", msg)
             case "node_moved":
                 node_id = msg.get("node_id")
@@ -2552,6 +2678,38 @@ class ReactFlow(ReactComponent):
             self._invoke_edge_hook(removed_edge, "on_delete", payload)
             self._invoke_edge_hook(removed_edge, "on_event", payload)
 
+    def _apply_data_patch(
+        self,
+        *,
+        items: list,
+        item_id: str,
+        patch: dict[str, Any],
+        get_id: Callable[[Any], str | None],
+        get_data: Callable[[Any], dict[str, Any]],
+        set_data: Callable[[Any, dict[str, Any]], None],
+        get_schema: Callable[[Any], dict[str, Any] | None],
+        sync_from_data: Callable[[Any], None],
+        instance_cls: type,
+    ) -> None:
+        """Shared implementation for ``patch_node_data``/``patch_edge_data``.
+
+        Merges ``patch`` into the matching item's ``data``, validating it
+        against the item type's schema when ``validate_on_patch`` is enabled.
+        Top-level React Flow fields are patched separately, by
+        ``patch_node_props``/``patch_edge_props``.
+        """
+        for item in items:
+            if get_id(item) != item_id:
+                continue
+            data = get_data(item)
+            data.update(patch)
+            if self.validate_on_patch:
+                _validate_data(data, get_schema(item))
+            set_data(item, data)
+            if isinstance(item, instance_cls):
+                sync_from_data(item)
+            break
+
     def patch_node_data(self, node_id: str, patch: dict[str, Any]) -> None:
         """Update specific properties in a node's data dictionary.
 
@@ -2600,24 +2758,33 @@ class ReactFlow(ReactComponent):
         modify node properties in the UI. The patch is also sent to the
         frontend to keep the visualization in sync.
 
+        A ``label`` (or ``_label``) key is kept in ``data`` *and* mirrored onto
+        the node's top-level label, since that is where the node components
+        read it from. Every other key is treated as opaque data; use
+        :meth:`patch_node_props` for the remaining presentational fields.
+
         See Also
         --------
         patch_edge_data : Update edge data properties
+        patch_node_props : Update top-level node properties
         add_node : Add a new node to the graph
         """
-        for node in self.nodes:
-            if self._node_id(node) == node_id:
-                data = self._node_data(node)
-                data.update(patch)
-                if self.validate_on_patch:
-                    schema = self._get_node_schema(self._node_type(node))
-                    _validate_data(data, schema)
-                self._node_set_data(node, data)
-                if isinstance(node, Node):
-                    self._sync_node_data_params_from_data(node)
-                break
+        self._apply_data_patch(
+            items=self.nodes,
+            item_id=node_id,
+            patch=patch,
+            get_id=self._node_id,
+            get_data=self._node_data,
+            set_data=self._node_set_data,
+            get_schema=lambda node: self._get_node_schema(self._node_type(node)),
+            sync_from_data=self._sync_node_data_params_from_data,
+            instance_cls=Node,
+        )
         self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
         self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
+        mirrored = self._mirrored_props(patch, Node._mirrored_data_keys)
+        if mirrored:
+            self.patch_node_props(node_id, mirrored)
 
     def patch_edge_data(self, edge_id: str, patch: dict[str, Any]) -> None:
         """Update specific properties in an edge's data dictionary.
@@ -2661,25 +2828,165 @@ class ReactFlow(ReactComponent):
         modify edge properties in the UI. The patch is also sent to the
         frontend to keep the visualization in sync.
 
+        A ``label`` key is kept in ``data`` *and* mirrored onto the edge's
+        top-level label, which is what React Flow renders. Every other key is
+        treated as opaque data; use :meth:`patch_edge_props` for the remaining
+        presentational fields.
+
         See Also
         --------
         patch_node_data : Update node data properties
+        patch_edge_props : Update top-level edge properties
         add_edge : Add a new edge to the graph
         """
-        for edge in self.edges:
-            if self._edge_id(edge) == edge_id:
-                data = self._edge_data(edge)
-                data.update(patch)
-                if self.validate_on_patch:
-                    edge_type = self._edge_type(edge)
-                    schema = self._get_edge_schema(edge_type) if edge_type else None
-                    _validate_data(data, schema)
-                self._edge_set_data(edge, data)
-                if isinstance(edge, Edge):
-                    self._sync_edge_data_params_from_data(edge)
-                break
+        self._apply_data_patch(
+            items=self.edges,
+            item_id=edge_id,
+            patch=patch,
+            get_id=self._edge_id,
+            get_data=self._edge_data,
+            set_data=self._edge_set_data,
+            get_schema=lambda edge: self._get_edge_schema(self._edge_type(edge)) if self._edge_type(edge) else None,
+            sync_from_data=self._sync_edge_data_params_from_data,
+            instance_cls=Edge,
+        )
         self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
         self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
+        mirrored = self._mirrored_props(patch, Edge._mirrored_data_keys)
+        if mirrored:
+            self.patch_edge_props(edge_id, mirrored)
+
+    @staticmethod
+    def _mirrored_props(patch: dict[str, Any], mirrored: dict[str, str]) -> dict[str, Any]:
+        return {prop: patch[key] for key, prop in mirrored.items() if key in patch}
+
+    def _validate_prop_patch(self, patch: dict[str, Any], *, kind: str, allowed: tuple[str, ...]) -> None:
+        unknown = [key for key in patch if key not in allowed]
+        if not unknown:
+            return
+        hint = f"Use patch_{kind}_data to update the {kind}'s data dictionary."
+        prop_name = "property" if len(unknown) == 1 else "properties"
+        raise ValueError(f"Cannot patch {kind} {prop_name} {unknown!r}; expected one of {list(allowed)!r}. {hint}")
+
+    def _apply_prop_patch(self, obj: dict[str, Any] | Node | Edge, patch: dict[str, Any]) -> None:
+        """Apply a top-level property patch to the Python-side node/edge."""
+        if isinstance(obj, (Node, Edge)):
+            # The watchers already sent (or are about to send) the patch, so
+            # applying it here must not trigger a second message.
+            with self._suppressed_prop_sync():
+                for key, value in patch.items():
+                    setattr(obj, key, value)
+        else:
+            for key, value in patch.items():
+                if value is None:
+                    obj.pop(key, None)
+                else:
+                    obj[key] = value
+
+    def patch_node_props(self, node_id: str, patch: dict[str, Any]) -> None:
+        """Update top-level properties of a node.
+
+        Sends an incremental patch to the frontend, updating fields that live
+        outside the node's ``data`` dictionary (``label``, ``style``, ``type``,
+        ``position``, ...) without re-serializing the whole ``nodes`` list.
+
+        Assigning to the corresponding parameter of a :class:`Node` instance
+        calls this method for you, so this is mainly useful for nodes defined
+        as plain dictionaries and for the frontend-driven ``position`` and
+        ``selected`` fields.
+
+        Parameters
+        ----------
+        node_id : str
+            Unique identifier of the node to update.
+        patch : dict
+            Mapping of property names to new values. Supported keys are
+            ``position``, ``type``, ``label``, ``selected``, ``draggable``,
+            ``connectable``, ``deletable``, ``style`` and ``className``.
+            Passing ``None`` clears the property so the node falls back to
+            the CSS/theme default.
+
+        Raises
+        ------
+        ValueError
+            If *patch* contains a key that is not a top-level node property.
+
+        Examples
+        --------
+        Restyle a node and rename it:
+
+        >>> flow.patch_node_props("n1", {"style": {"border": "2px solid red"}, "label": "Failed"})
+
+        Clear a style so the theme default applies again:
+
+        >>> flow.patch_node_props("n1", {"style": None})
+
+        Move a node programmatically:
+
+        >>> flow.patch_node_props("n1", {"position": {"x": 120, "y": 40}})
+
+        See Also
+        --------
+        patch_node_data : Update the node's ``data`` dictionary
+        patch_edge_props : Update top-level edge properties
+        """
+        self._validate_prop_patch(patch, kind="node", allowed=Node._props)
+        for node in self.nodes:
+            if self._node_id(node) == node_id:
+                self._apply_prop_patch(node, patch)
+                break
+        self._send_msg({"type": "patch_node_props", "node_id": node_id, "patch": patch})
+        self._emit("node_props_changed", {"type": "node_props_changed", "node_id": node_id, "patch": patch})
+
+    def patch_edge_props(self, edge_id: str, patch: dict[str, Any]) -> None:
+        """Update top-level properties of an edge.
+
+        Sends an incremental patch to the frontend, updating fields that live
+        outside the edge's ``data`` dictionary (``label``, ``style``, ``type``,
+        ``markerEnd``, ...) without re-serializing the whole ``edges`` list.
+
+        Assigning to the corresponding parameter of an :class:`Edge` instance
+        calls this method for you, so this is mainly useful for edges defined
+        as plain dictionaries and for the frontend-driven ``selected`` field.
+
+        Parameters
+        ----------
+        edge_id : str
+            Unique identifier of the edge to update.
+        patch : dict
+            Mapping of property names to new values. Supported keys are
+            ``source``, ``target``, ``label``, ``type``, ``selected``,
+            ``style``, ``markerEnd``, ``sourceHandle`` and ``targetHandle``.
+            Passing ``None`` clears the property so the edge falls back to
+            the CSS/theme default.
+
+        Raises
+        ------
+        ValueError
+            If *patch* contains a key that is not a top-level edge property.
+
+        Examples
+        --------
+        Highlight an edge and switch it to a step router:
+
+        >>> flow.patch_edge_props("e1", {"style": {"stroke": "#ef4444", "strokeWidth": 6}, "type": "step"})
+
+        Clear the style so the theme default applies again:
+
+        >>> flow.patch_edge_props("e1", {"style": None})
+
+        See Also
+        --------
+        patch_edge_data : Update the edge's ``data`` dictionary
+        patch_node_props : Update top-level node properties
+        """
+        self._validate_prop_patch(patch, kind="edge", allowed=Edge._props)
+        for edge in self.edges:
+            if self._edge_id(edge) == edge_id:
+                self._apply_prop_patch(edge, patch)
+                break
+        self._send_msg({"type": "patch_edge_props", "edge_id": edge_id, "patch": patch})
+        self._emit("edge_props_changed", {"type": "edge_props_changed", "edge_id": edge_id, "patch": patch})
 
     def to_networkx(self, *, multigraph: bool = False):
         """Convert the current graph to NetworkX format.
@@ -2946,9 +3253,13 @@ class ReactFlow(ReactComponent):
             - ``"node_moved"``: Node was dragged to a new position
             - ``"node_clicked"``: Node was clicked
             - ``"node_data_changed"``: Node data was modified
+            - ``"node_props_changed"``: Top-level node properties (``label``,
+              ``style``, ``type``, ...) were modified
             - ``"edge_added"``: Edge was added to the graph
             - ``"edge_deleted"``: Edge was removed from the graph
             - ``"edge_data_changed"``: Edge data was modified
+            - ``"edge_props_changed"``: Top-level edge properties (``label``,
+              ``style``, ``type``, ...) were modified
             - ``"selection_changed"``: Selection changed
             - ``"sync"``: Full graph sync from frontend
             - ``"client_error"``: The graph view hit a rendering error in the

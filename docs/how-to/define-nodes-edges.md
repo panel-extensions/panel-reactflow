@@ -358,25 +358,44 @@ Without `sourceHandle` and `targetHandle`, edges connect to the default (first) 
 
 ---
 
-## Update data vs. label
+## Update data vs. presentation
 
-`data` and `label` live in different places and are updated differently:
-
-- **Data** — use `patch_node_data()` or `patch_edge_data()`.  This sends
-  an incremental patch to the frontend without replacing the full list.
-- **Label** — replace the node/edge in `flow.nodes` or `flow.edges`.
+A node or edge has an arbitrary `data` dictionary plus a set of top-level React
+Flow fields (`label`, `style`, `type`, `className`, `position`, ...).  Each has
+its own patch method, and both send an incremental update to the frontend
+instead of replacing the full list:
 
 ```python
 # Patch a data field
 flow.patch_node_data("n1", {"status": "running"})
 flow.patch_edge_data("e1", {"weight": 0.75})
 
-# Update a label
-flow.nodes = [
-    {**node, "label": "Start (running)"} if node["id"] == "n1" else node
-    for node in flow.nodes
-]
+# Patch a top-level field
+flow.patch_node_props("n1", {"label": "Start (running)", "className": "busy"})
+flow.patch_edge_props("e1", {"style": {"stroke": "#ef4444", "strokeWidth": 4}, "type": "step"})
 ```
+
+Passing `None` to `patch_node_props()`/`patch_edge_props()` clears the field so
+the element falls back to the CSS/theme default:
+
+```python
+flow.patch_edge_props("e1", {"style": None})
+```
+
+If you use `Node`/`Edge` subclasses, you rarely need either method: assigning to
+a parameter patches the browser in place.  Parameters you declare on the
+subclass are synced into `data`, the presentational base parameters are synced
+as top-level fields.
+
+```python
+node.label = "Start (running)"                  # top-level label
+edge.style = {"stroke": "#ef4444"}              # top-level style
+edge.weight = 0.75                              # subclass param, goes into data
+```
+
+`position` and `selected` are the exception: the browser owns them while the
+user drags or selects, so assignment does not push them.  Use
+`patch_node_props()` to move or select a node from Python.
 
 ---
 
