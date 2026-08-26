@@ -300,7 +300,11 @@ def test_patch_edge_data_updates_edge_instance() -> None:
     )
     flow.patch_edge_data("e1", {"weight": 3, "label": "hi"})
     assert edge.data["weight"] == 3
-    assert edge.data["label"] == "hi"
+    # `label` is a top-level Edge field, not part of `data` (see
+    # panel-multi#60); it should land on `edge.label` and must not leak
+    # into `data` as a phantom key.
+    assert edge.label == "hi"
+    assert "label" not in edge.data
 
 
 def test_sync_updates_edge_instance_fields() -> None:

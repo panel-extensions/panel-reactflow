@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from uuid import uuid4
 
 import panel as pn
@@ -645,6 +645,12 @@ class Node(param.Parameterized):
     className = param.String(default=None, allow_None=True, doc="Optional CSS class.")
     flow = param.Parameter(default=None, allow_None=True, precedence=-1, doc="Parent ReactFlow instance.")
 
+    #: Base params that map to top-level React Flow node fields rather than
+    #: arbitrary ``data`` payload keys. Assigning one of these on a live
+    #: ``Node`` instance is watched and synced to the frontend, just like
+    #: subclass-defined data params (see ``_data_param_names``).
+    _TOP_LEVEL_SYNC_PARAMS: ClassVar[tuple[str, ...]] = ("label", "style", "className")
+
     @classmethod
     def _data_param_names(cls) -> list[str]:
         return _parameterized_data_param_names(cls, Node)
@@ -904,6 +910,10 @@ class Edge(param.Parameterized):
     sourceHandle = param.String(default=None, allow_None=True, doc="Optional source handle id.")
     targetHandle = param.String(default=None, allow_None=True, doc="Optional target handle id.")
     flow = param.Parameter(default=None, allow_None=True, precedence=-1, doc="Parent ReactFlow instance.")
+
+    #: Base params that map to top-level React Flow edge fields rather than
+    #: arbitrary ``data`` payload keys. See ``Node._TOP_LEVEL_SYNC_PARAMS``.
+    _TOP_LEVEL_SYNC_PARAMS: ClassVar[tuple[str, ...]] = ("label", "type", "style", "markerEnd", "sourceHandle", "targetHandle")
 
     @classmethod
     def _data_param_names(cls) -> list[str]:
@@ -1682,6 +1692,22 @@ class ReactFlow(ReactComponent):
             node["data"] = data
 
     @staticmethod
+    def _node_set_top_level(node: dict[str, Any] | Node, key: str, value: Any) -> None:
+        """Assign a top-level field (label/style/className) on a node.
+
+        For ``Node`` instances this sets the corresponding param, which is a
+        no-op if the value hasn't changed (avoiding re-triggering the param
+        watcher that calls back into ``patch_node_data``). For plain dicts,
+        ``None`` clears the field so it falls back to defaults.
+        """
+        if isinstance(node, Node):
+            setattr(node, key, value)
+        elif value is None:
+            node.pop(key, None)
+        else:
+            node[key] = value
+
+    @staticmethod
     def _node_payload(node: dict[str, Any] | NodeSpec | Node) -> dict[str, Any]:
         if isinstance(node, Node):
             return node.to_dict()
@@ -1720,6 +1746,20 @@ class ReactFlow(ReactComponent):
             edge["data"] = data
 
     @staticmethod
+    def _edge_set_top_level(edge: dict[str, Any] | Edge, key: str, value: Any) -> None:
+        """Assign a top-level field (style/type/label/...) on an edge.
+
+        See ``_node_set_top_level`` for why ``Edge`` instances are safe from
+        watcher re-entrancy and why ``None`` clears the field on plain dicts.
+        """
+        if isinstance(edge, Edge):
+            setattr(edge, key, value)
+        elif value is None:
+            edge.pop(key, None)
+        else:
+            edge[key] = value
+
+    @staticmethod
     def _edge_payload(edge: dict[str, Any] | EdgeSpec | Edge) -> dict[str, Any]:
         if isinstance(edge, Edge):
             return edge.to_dict()
@@ -1751,25 +1791,15 @@ class ReactFlow(ReactComponent):
             if name in (edge.data or {}):
                 setattr(edge, name, edge.data[name])
 
-    def _teardown_node_data_param_watcher(self, node_id: str) -> None:
-        record = self._node_data_param_watchers.pop(node_id, None)
+    @staticmethod
+    def _teardown_param_watcher(watcher_store: dict[str, tuple[Any, list[Any]]], item_id: str) -> None:
+        record = watcher_store.pop(item_id, None)
         if record is None:
             return
-        node, watchers = record
+        item, watchers = record
         for watcher in watchers:
             try:
-                node.param.unwatch(watcher)
-            except Exception:
-                pass
-
-    def _teardown_edge_data_param_watcher(self, edge_id: str) -> None:
-        record = self._edge_data_param_watchers.pop(edge_id, None)
-        if record is None:
-            return
-        edge, watchers = record
-        for watcher in watchers:
-            try:
-                edge.param.unwatch(watcher)
+                item.param.unwatch(watcher)
             except Exception:
                 pass
 
@@ -1798,67 +1828,81 @@ class ReactFlow(ReactComponent):
 
     def _update_node_data_param_watchers(self) -> None:
         current_nodes = {node.id: node for node in self.nodes if isinstance(node, Node) and node.id}
-        for node_id, (watched_node, _) in list(self._node_data_param_watchers.items()):
-            current = current_nodes.get(node_id)
-            if current is None or current is not watched_node:
-                self._teardown_node_data_param_watcher(node_id)
-        for node_id, node in current_nodes.items():
-            if node_id in self._node_data_param_watchers:
-                continue
-            watchers = []
-            for name in node._data_param_names():
-                watchers.append(
-                    node.param.watch(
-                        lambda event, _id=node_id, _name=name, _node=node: self._on_node_data_param_change(_id, _name, _node, event),
-                        name,
-                    )
-                )
-            self._node_data_param_watchers[node_id] = (node, watchers)
+        self._update_param_watchers(
+            current_items=current_nodes,
+            watcher_store=self._node_data_param_watchers,
+            get_instance=self._get_node_instance,
+            patch_fn=self.patch_node_data,
+        )
 
     def _update_edge_data_param_watchers(self) -> None:
         current_edges = {edge.id: edge for edge in self.edges if isinstance(edge, Edge) and edge.id}
-        for edge_id, (watched_edge, _) in list(self._edge_data_param_watchers.items()):
-            current = current_edges.get(edge_id)
-            if current is None or current is not watched_edge:
-                self._teardown_edge_data_param_watcher(edge_id)
-        for edge_id, edge in current_edges.items():
-            if edge_id in self._edge_data_param_watchers:
+        self._update_param_watchers(
+            current_items=current_edges,
+            watcher_store=self._edge_data_param_watchers,
+            get_instance=self._get_edge_instance,
+            patch_fn=self.patch_edge_data,
+        )
+
+    def _update_param_watchers(
+        self,
+        *,
+        current_items: dict[str, Node | Edge],
+        watcher_store: dict[str, tuple[Node | Edge, list[Any]]],
+        get_instance: Callable[[str], Node | Edge | None],
+        patch_fn: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        """Keep param watchers for a set of live ``Node``/``Edge`` instances in sync.
+
+        Watches both subclass-defined data params (``item._data_param_names()``)
+        and the item's serializable base params (``item._TOP_LEVEL_SYNC_PARAMS``,
+        e.g. ``label``/``style``), so that assigning either on a live instance
+        pushes a patch to the frontend. ``patch_fn`` (``patch_node_data`` or
+        ``patch_edge_data``) already knows how to route each kind of param name
+        to the right place (``data`` vs. a top-level field).
+        """
+        for item_id, (watched_item, _) in list(watcher_store.items()):
+            current = current_items.get(item_id)
+            if current is None or current is not watched_item:
+                self._teardown_param_watcher(watcher_store, item_id)
+        for item_id, item in current_items.items():
+            if item_id in watcher_store:
                 continue
-            watchers = []
-            for name in edge._data_param_names():
-                watchers.append(
-                    edge.param.watch(
-                        lambda event, _id=edge_id, _name=name, _edge=edge: self._on_edge_data_param_change(_id, _name, _edge, event),
-                        name,
-                    )
+            data_names = set(item._data_param_names())
+            names = [*data_names, *type(item)._TOP_LEVEL_SYNC_PARAMS]
+            watchers = [
+                item.param.watch(
+                    lambda event, _id=item_id, _name=name, _item=item, _is_data=name in data_names: self._on_synced_param_change(
+                        get_instance, patch_fn, _id, _name, _item, event, _is_data
+                    ),
+                    name,
                 )
-            self._edge_data_param_watchers[edge_id] = (edge, watchers)
+                for name in names
+            ]
+            watcher_store[item_id] = (item, watchers)
 
-    def _on_node_data_param_change(
-        self,
-        node_id: str,
+    @staticmethod
+    def _on_synced_param_change(
+        get_instance: Callable[[str], Node | Edge | None],
+        patch_fn: Callable[[str, dict[str, Any]], None],
+        item_id: str,
         param_name: str,
-        node: Node,
+        item: Node | Edge,
         event: param.parameterized.Event,
+        is_data_param: bool,
     ) -> None:
-        if self._get_node_instance(node_id) is not node:
-            return
-        if (node.data or {}).get(param_name) == event.new:
-            return
-        self.patch_node_data(node_id, {param_name: event.new})
+        """Push a live param change on a ``Node``/``Edge`` instance to the frontend.
 
-    def _on_edge_data_param_change(
-        self,
-        edge_id: str,
-        param_name: str,
-        edge: Edge,
-        event: param.parameterized.Event,
-    ) -> None:
-        if self._get_edge_instance(edge_id) is not edge:
+        ``is_data_param`` distinguishes subclass data params (guarded against
+        redundant re-sends caused by ``_sync_*_data_params_from_data``) from
+        base top-level params (``label``/``style``/...), which aren't stored
+        in ``.data`` so no such guard applies.
+        """
+        if get_instance(item_id) is not item:
             return
-        if (edge.data or {}).get(param_name) == event.new:
+        if is_data_param and (item.data or {}).get(param_name) == event.new:
             return
-        self.patch_edge_data(edge_id, {param_name: event.new})
+        patch_fn(item_id, {param_name: event.new})
 
     @staticmethod
     def _invoke_node_callback(callback: Callable, payload: dict[str, Any], flow: "ReactFlow") -> None:
@@ -2552,6 +2596,47 @@ class ReactFlow(ReactComponent):
             self._invoke_edge_hook(removed_edge, "on_delete", payload)
             self._invoke_edge_hook(removed_edge, "on_event", payload)
 
+    def _apply_data_patch(
+        self,
+        *,
+        items: list,
+        item_id: str,
+        patch: dict[str, Any],
+        top_level_params: tuple[str, ...],
+        get_id: Callable[[Any], str | None],
+        get_data: Callable[[Any], dict[str, Any]],
+        set_data: Callable[[Any, dict[str, Any]], None],
+        set_top_level: Callable[[Any, str, Any], None],
+        get_schema: Callable[[Any], dict[str, Any] | None],
+        sync_from_data: Callable[[Any], None],
+        instance_cls: type,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Shared implementation for ``patch_node_data``/``patch_edge_data``.
+
+        Splits ``patch`` into top-level fields (``label``/``style``/...,
+        see ``Node._TOP_LEVEL_SYNC_PARAMS``/``Edge._TOP_LEVEL_SYNC_PARAMS``)
+        and arbitrary ``data`` keys, applies each to the right place on the
+        matching item, and returns ``(top_patch, data_patch)`` so the caller
+        can forward that same split to the frontend.
+        """
+        top_patch = {k: v for k, v in patch.items() if k in top_level_params}
+        data_patch = {k: v for k, v in patch.items() if k not in top_level_params}
+        for item in items:
+            if get_id(item) != item_id:
+                continue
+            if data_patch:
+                data = get_data(item)
+                data.update(data_patch)
+                if self.validate_on_patch:
+                    _validate_data(data, get_schema(item))
+                set_data(item, data)
+                if isinstance(item, instance_cls):
+                    sync_from_data(item)
+            for key, value in top_patch.items():
+                set_top_level(item, key, value)
+            break
+        return top_patch, data_patch
+
     def patch_node_data(self, node_id: str, patch: dict[str, Any]) -> None:
         """Update specific properties in a node's data dictionary.
 
@@ -2605,18 +2690,23 @@ class ReactFlow(ReactComponent):
         patch_edge_data : Update edge data properties
         add_node : Add a new node to the graph
         """
-        for node in self.nodes:
-            if self._node_id(node) == node_id:
-                data = self._node_data(node)
-                data.update(patch)
-                if self.validate_on_patch:
-                    schema = self._get_node_schema(self._node_type(node))
-                    _validate_data(data, schema)
-                self._node_set_data(node, data)
-                if isinstance(node, Node):
-                    self._sync_node_data_params_from_data(node)
-                break
-        self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
+        top_patch, data_patch = self._apply_data_patch(
+            items=self.nodes,
+            item_id=node_id,
+            patch=patch,
+            top_level_params=Node._TOP_LEVEL_SYNC_PARAMS,
+            get_id=self._node_id,
+            get_data=self._node_data,
+            set_data=self._node_set_data,
+            set_top_level=self._node_set_top_level,
+            get_schema=lambda node: self._get_node_schema(self._node_type(node)),
+            sync_from_data=self._sync_node_data_params_from_data,
+            instance_cls=Node,
+        )
+        # `top_patch`/`data_patch` tell the frontend exactly where each key
+        # belongs (top-level node field vs. `data`), so it doesn't need its
+        # own copy of which keys are "top-level" to stay in sync with here.
+        self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": data_patch, "top_patch": top_patch})
         self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
 
     def patch_edge_data(self, edge_id: str, patch: dict[str, Any]) -> None:
@@ -2666,19 +2756,20 @@ class ReactFlow(ReactComponent):
         patch_node_data : Update node data properties
         add_edge : Add a new edge to the graph
         """
-        for edge in self.edges:
-            if self._edge_id(edge) == edge_id:
-                data = self._edge_data(edge)
-                data.update(patch)
-                if self.validate_on_patch:
-                    edge_type = self._edge_type(edge)
-                    schema = self._get_edge_schema(edge_type) if edge_type else None
-                    _validate_data(data, schema)
-                self._edge_set_data(edge, data)
-                if isinstance(edge, Edge):
-                    self._sync_edge_data_params_from_data(edge)
-                break
-        self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
+        top_patch, data_patch = self._apply_data_patch(
+            items=self.edges,
+            item_id=edge_id,
+            patch=patch,
+            top_level_params=Edge._TOP_LEVEL_SYNC_PARAMS,
+            get_id=self._edge_id,
+            get_data=self._edge_data,
+            set_data=self._edge_set_data,
+            set_top_level=self._edge_set_top_level,
+            get_schema=lambda edge: self._get_edge_schema(self._edge_type(edge)) if self._edge_type(edge) else None,
+            sync_from_data=self._sync_edge_data_params_from_data,
+            instance_cls=Edge,
+        )
+        self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": data_patch, "top_patch": top_patch})
         self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
 
     def to_networkx(self, *, multigraph: bool = False):

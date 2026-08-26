@@ -7,7 +7,7 @@ import pytest
 from panel.custom import Child, ReactComponent
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import EdgeSpec, JsonEditor, Node, NodeSpec, NodeType, ReactFlow
+from panel_reactflow import Edge, EdgeSpec, JsonEditor, Node, NodeSpec, NodeType, ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -200,6 +200,46 @@ def test_patch_node_and_edge_labels_update_ui(page):
 
     expect(_node_locator(page, "Start patched")).to_have_count(1)
     expect(_edge_label_locator(page, "Edge patched")).to_have_count(1)
+
+
+def test_base_node_edge_params_sync_live_to_ui(page):
+    """Regression test for panel-multi#60.
+
+    Assigning base ``Node``/``Edge`` params (label/style/type) on an
+    existing instance must reach the browser immediately, without needing
+    to reassign ``flow.nodes``/``flow.edges`` as a workaround.
+    """
+    node = Node(id="n1", position={"x": 0, "y": 0}, label="Start")
+    edge = Edge(id="e1", source="n1", target="n2")
+    flow = ReactFlow(
+        nodes=[node, Node(id="n2", position={"x": 260, "y": 60}, label="End")],
+        edges=[edge],
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    edge_path = page.locator('.react-flow__edge[data-id="e1"] path.react-flow__edge-path').first
+    node_label = page.locator('.react-flow__node[data-id="n1"] .rf-node-label')
+    expect(node_label).to_have_text("Start")
+
+    initial_stroke = edge_path.evaluate("el => window.getComputedStyle(el).stroke")
+
+    # Direct assignment on the live instances - should be a no-op no longer.
+    node.label = "Start2"
+    edge.style = {"stroke": "#ef4444", "strokeWidth": 6}
+
+    expect(node_label).to_have_text("Start2")
+
+    def _stroke_updated():
+        return edge_path.evaluate("el => window.getComputedStyle(el).stroke") != initial_stroke
+
+    wait_until(_stroke_updated, timeout=8000)
+    assert edge_path.evaluate("el => window.getComputedStyle(el).stroke") == "rgb(239, 68, 68)"
+
+    # Clearing style (None) should remove it, falling back to the default.
+    edge.style = None
+    wait_until(lambda: edge_path.evaluate("el => window.getComputedStyle(el).stroke") == initial_stroke, timeout=8000)
 
 
 def test_programmatic_add_remove_nodes_edges(page):

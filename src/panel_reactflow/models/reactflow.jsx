@@ -18,6 +18,23 @@ const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-s
 // stop retrying and hand control to the user.
 const SAFE_MODE_ATTEMPT = 2;
 const MAX_RECOVERY_ATTEMPTS = 2;
+
+// Apply a `top_patch` (from a patch_node_data/patch_edge_data message) onto
+// a React Flow node/edge object. Python already decides which keys are
+// top-level vs. `data` (see `_apply_data_patch` in base.py) and sends them
+// as separate `patch`/`top_patch` dicts, so this stays generic: any
+// `null`/`undefined` value clears the field (mirrors `_node_set_top_level`/
+// `_edge_set_top_level` treating `None` as "remove"), anything else is
+// assigned directly.
+function applyTopLevelPatch(target, topPatch) {
+  for (const [key, value] of Object.entries(topPatch || {})) {
+    if (value === null || value === undefined) {
+      delete target[key];
+    } else {
+      target[key] = value;
+    }
+  }
+}
 const RETRY_DELAY_MS = 100;
 // How long a remounted flow must survive before its retry budget is refilled.
 const HEALTHY_RESET_MS = 5000;
@@ -498,8 +515,15 @@ function FlowInner({
             if (node.id !== msg.node_id) {
               return node;
             }
-            const data = { ...(node.data || {}), ...(msg.patch || {}) };
-            return { ...node, data };
+            const topPatch = msg.top_patch || {};
+            const next = { ...node, data: { ...(node.data || {}), ...(msg.patch || {}) } };
+            applyTopLevelPatch(next, topPatch);
+            if ("label" in topPatch) {
+              // Node rendering reads the label from `data._label`, not the
+              // top-level `label` field directly (see makeNodeComponent).
+              next.data = { ...next.data, _label: topPatch.label };
+            }
+            return next;
           }),
         );
         return;
@@ -510,9 +534,9 @@ function FlowInner({
             if (edge.id !== msg.edge_id) {
               return edge;
             }
-            const data = { ...(edge.data || {}), ...(msg.patch || {}) };
-            const nextLabel = msg.patch?.label ?? edge.label;
-            return { ...edge, data, label: nextLabel };
+            const next = { ...edge, data: { ...(edge.data || {}), ...(msg.patch || {}) } };
+            applyTopLevelPatch(next, msg.top_patch || {});
+            return next;
           }),
         );
       }
