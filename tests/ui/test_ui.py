@@ -714,8 +714,7 @@ def test_connectable_handles_programmatic_edge_with_restricted_handles(page):
 
 
 _NODE_COUNT_PROBE = """
-() => {
-  const container = document.querySelector('.react-flow__nodes');
+(container) => {
   window.__nodeCounts = [container.childElementCount];
   window.__probeObserver = new MutationObserver(() => {
     window.__nodeCounts.push(container.childElementCount);
@@ -723,6 +722,24 @@ _NODE_COUNT_PROBE = """
   window.__probeObserver.observe(container, {childList: true});
 }
 """
+
+
+def _record_node_counts(page):
+    """Start recording every node-container child count the browser renders.
+
+    The probe is installed on the element Playwright resolves rather than
+    looked up with ``document.querySelector``, which cannot reach into the
+    component's shadow root.
+    """
+    container = page.locator(".react-flow__nodes")
+    expect(container).to_have_count(1)
+    container.evaluate(_NODE_COUNT_PROBE)
+
+
+def _recorded_node_counts(page):
+    """Return the recorded counts once the graph has settled."""
+    page.wait_for_timeout(300)
+    return page.evaluate("window.__nodeCounts")
 
 
 def _flow_document(flow):
@@ -751,12 +768,11 @@ def test_remove_node_batch_does_not_render_intermediate_graphs(page):
     serve_component(page, flow)
     expect(page.locator(".react-flow__node")).to_have_count(6)
 
-    page.evaluate(_NODE_COUNT_PROBE)
+    _record_node_counts(page)
     flow.remove_node(["n1", "n2", "n3", "n4"])
 
     expect(page.locator(".react-flow__node")).to_have_count(2)
-    page.wait_for_timeout(300)
-    counts = page.evaluate("window.__nodeCounts")
+    counts = _recorded_node_counts(page)
     assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
 
 
@@ -766,7 +782,7 @@ def test_hold_does_not_render_intermediate_graphs(page):
     serve_component(page, flow)
     expect(page.locator(".react-flow__node")).to_have_count(6)
 
-    page.evaluate(_NODE_COUNT_PROBE)
+    _record_node_counts(page)
     # In a served app callbacks already run with a current Document, so
     # ``pn.io.hold()`` needs no argument; the test drives the flow from
     # another thread and has to name the Document explicitly.
@@ -775,8 +791,7 @@ def test_hold_does_not_render_intermediate_graphs(page):
             flow.remove_node(node_id)
 
     expect(page.locator(".react-flow__node")).to_have_count(2)
-    page.wait_for_timeout(300)
-    counts = page.evaluate("window.__nodeCounts")
+    counts = _recorded_node_counts(page)
     assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
 
 
@@ -791,11 +806,10 @@ def test_multi_select_delete_does_not_render_intermediate_graphs(page):
         _node_locator(page, label).click(force=True, modifiers=["Shift"])
     wait_until(lambda: len(flow.selection["nodes"]) == 4, timeout=8000)
 
-    page.evaluate(_NODE_COUNT_PROBE)
+    _record_node_counts(page)
     page.keyboard.press("Backspace")
 
     wait_until(lambda: len(flow.nodes) == 2, timeout=8000)
     expect(page.locator(".react-flow__node")).to_have_count(2)
-    page.wait_for_timeout(300)
-    counts = page.evaluate("window.__nodeCounts")
+    counts = _recorded_node_counts(page)
     assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
