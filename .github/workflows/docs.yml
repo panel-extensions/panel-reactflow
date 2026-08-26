@@ -47,7 +47,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: Set up Pixi
-        uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        uses: prefix-dev/setup-pixi@5185adfbffb4bd703da3010310260805d89ebb11 # v0.9.6
         with:
           environments: docs
       - name: Build documentation
@@ -59,7 +59,7 @@ jobs:
           if-no-files-found: error
           path: builtdocs
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v5
         with:
           path: ./builtdocs
 
@@ -88,4 +88,4 @@ jobs:
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'main') ||
           (github.event_name == 'push' && !(contains(steps.vars.outputs.tag, 'a') || contains(steps.vars.outputs.tag, 'b') || contains(steps.vars.outputs.tag, 'rc'))))
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
