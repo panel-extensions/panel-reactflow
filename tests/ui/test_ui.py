@@ -1,5 +1,7 @@
 """UI tests for ReactFlow using Playwright."""
 
+import re
+
 import panel as pn
 import panel.models.jsoneditor  # noqa
 import param
@@ -202,44 +204,93 @@ def test_patch_node_and_edge_labels_update_ui(page):
     expect(_edge_label_locator(page, "Edge patched")).to_have_count(1)
 
 
-def test_base_node_edge_params_sync_live_to_ui(page):
+def _instance_flow():
+    nodes = [
+        Node(id="n1", position={"x": 0, "y": 0}, label="Start"),
+        Node(id="n2", position={"x": 260, "y": 60}, label="End"),
+    ]
+    edges = [Edge(id="e1", source="n1", target="n2", label="Edge A")]
+    flow = ReactFlow(nodes=nodes, edges=edges, width=900, height=600)
+    return flow, nodes, edges
+
+
+def _edge_style(page, prop):
+    return page.locator(".react-flow__edge-path").first.evaluate(f"el => getComputedStyle(el).{prop}")
+
+
+def _node_style(page, label, prop):
+    return _node_locator(page, label).first.evaluate(f"el => getComputedStyle(el).{prop}")
+
+
+def test_base_param_assignment_updates_ui(page):
     """Regression test for panel-multi#60.
 
-    Assigning base ``Node``/``Edge`` params (label/style/type) on an
-    existing instance must reach the browser immediately, without needing
-    to reassign ``flow.nodes``/``flow.edges`` as a workaround.
+    Assigning a base ``Node``/``Edge`` param on a live instance must reach the
+    browser immediately, without reassigning ``flow.nodes``/``flow.edges``.
     """
-    node = Node(id="n1", position={"x": 0, "y": 0}, label="Start")
-    edge = Edge(id="e1", source="n1", target="n2")
-    flow = ReactFlow(
-        nodes=[node, Node(id="n2", position={"x": 260, "y": 60}, label="End")],
-        edges=[edge],
-        width=900,
-        height=600,
-    )
+    flow, nodes, edges = _instance_flow()
+    serve_component(page, flow)
+    expect(_node_locator(page, "Start")).to_have_count(1)
+
+    nodes[0].label = "Start patched"
+    edges[0].label = "Edge patched"
+    edges[0].style = {"strokeWidth": 6}
+
+    expect(_node_locator(page, "Start patched")).to_have_count(1)
+    expect(_edge_label_locator(page, "Edge patched")).to_have_count(1)
+    wait_until(lambda: _edge_style(page, "strokeWidth") == "6px", timeout=8000)
+
+
+def test_edge_type_assignment_updates_ui(page):
+    flow, _nodes, edges = _instance_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+    edges[0].type = "step"
+
+    expect(page.locator(".react-flow__edge-step")).to_have_count(1)
+
+
+def test_style_assignment_cleared_by_none(page):
+    flow, nodes, edges = _instance_flow()
     serve_component(page, flow)
 
-    edge_path = page.locator('.react-flow__edge[data-id="e1"] path.react-flow__edge-path').first
-    node_label = page.locator('.react-flow__node[data-id="n1"] .rf-node-label')
-    expect(node_label).to_have_text("Start")
+    edges[0].style = {"strokeWidth": 6}
+    wait_until(lambda: _edge_style(page, "strokeWidth") == "6px", timeout=8000)
 
-    initial_stroke = edge_path.evaluate("el => window.getComputedStyle(el).stroke")
+    edges[0].style = None
+    wait_until(lambda: _edge_style(page, "strokeWidth") != "6px", timeout=8000)
 
-    # Direct assignment on the live instances - should be a no-op no longer.
-    node.label = "Start2"
-    edge.style = {"stroke": "#ef4444", "strokeWidth": 6}
+    nodes[0].style = {"opacity": 0.5}
+    wait_until(lambda: _node_style(page, "Start", "opacity") == "0.5", timeout=8000)
 
-    expect(node_label).to_have_text("Start2")
+    nodes[0].style = None
+    wait_until(lambda: _node_style(page, "Start", "opacity") == "1", timeout=8000)
 
-    def _stroke_updated():
-        return edge_path.evaluate("el => window.getComputedStyle(el).stroke") != initial_stroke
 
-    wait_until(_stroke_updated, timeout=8000)
-    assert edge_path.evaluate("el => window.getComputedStyle(el).stroke") == "rgb(239, 68, 68)"
+def test_class_name_assignment_updates_ui(page):
+    flow, nodes, _edges = _instance_flow()
+    serve_component(page, flow)
 
-    # Clearing style (None) should remove it, falling back to the default.
-    edge.style = None
-    wait_until(lambda: edge_path.evaluate("el => window.getComputedStyle(el).stroke") == initial_stroke, timeout=8000)
+    nodes[0].className = "custom-node"
+
+    expect(_node_locator(page, "Start")).to_have_class(re.compile(r"custom-node"))
+
+    # A full re-serialization must not drop the declared class again.
+    flow.nodes = list(flow.nodes)
+    expect(_node_locator(page, "Start")).to_have_class(re.compile(r"custom-node"))
+
+
+def test_patch_props_moves_node(page):
+    flow, _nodes, _edges = _instance_flow()
+    serve_component(page, flow)
+
+    flow.patch_node_props("n1", {"position": {"x": 400, "y": 200}})
+
+    wait_until(
+        lambda: "translate(400px, 200px)" in _node_locator(page, "Start").first.get_attribute("style"),
+        timeout=8000,
+    )
 
 
 def test_programmatic_add_remove_nodes_edges(page):

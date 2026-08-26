@@ -18,23 +18,6 @@ const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-s
 // stop retrying and hand control to the user.
 const SAFE_MODE_ATTEMPT = 2;
 const MAX_RECOVERY_ATTEMPTS = 2;
-
-// Apply a `top_patch` (from a patch_node_data/patch_edge_data message) onto
-// a React Flow node/edge object. Python already decides which keys are
-// top-level vs. `data` (see `_apply_data_patch` in base.py) and sends them
-// as separate `patch`/`top_patch` dicts, so this stays generic: any
-// `null`/`undefined` value clears the field (mirrors `_node_set_top_level`/
-// `_edge_set_top_level` treating `None` as "remove"), anything else is
-// assigned directly.
-function applyTopLevelPatch(target, topPatch) {
-  for (const [key, value] of Object.entries(topPatch || {})) {
-    if (value === null || value === undefined) {
-      delete target[key];
-    } else {
-      target[key] = value;
-    }
-  }
-}
 const RETRY_DELAY_MS = 100;
 // How long a remounted flow must survive before its retry budget is refilled.
 const HEALTHY_RESET_MS = 5000;
@@ -269,6 +252,32 @@ function signature(value) {
   } catch (error) {
     return null;
   }
+}
+
+/**
+ * Combine the class React Flow needs for its own node chrome with the class
+ * declared on the Python side.
+ */
+function nodeClassName(type, className, model) {
+  const base = (type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
+  return [base, className].filter(Boolean).join(" ");
+}
+
+/**
+ * Merge a patch of top-level fields (`style`, `type`, `label`, ...) into a node
+ * or edge. `null` removes the field so the element falls back to the CSS/theme
+ * default, mirroring how Python omits `None` when it serializes the graph.
+ */
+function applyPropPatch(element, patch) {
+  const next = { ...element };
+  Object.entries(patch || {}).forEach(([key, value]) => {
+    if (value === null) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+  });
+  return next;
 }
 
 /**
@@ -515,15 +524,8 @@ function FlowInner({
             if (node.id !== msg.node_id) {
               return node;
             }
-            const topPatch = msg.top_patch || {};
-            const next = { ...node, data: { ...(node.data || {}), ...(msg.patch || {}) } };
-            applyTopLevelPatch(next, topPatch);
-            if ("label" in topPatch) {
-              // Node rendering reads the label from `data._label`, not the
-              // top-level `label` field directly (see makeNodeComponent).
-              next.data = { ...next.data, _label: topPatch.label };
-            }
-            return next;
+            const data = { ...(node.data || {}), ...(msg.patch || {}) };
+            return { ...node, data };
           }),
         );
         return;
@@ -534,10 +536,38 @@ function FlowInner({
             if (edge.id !== msg.edge_id) {
               return edge;
             }
-            const next = { ...edge, data: { ...(edge.data || {}), ...(msg.patch || {}) } };
-            applyTopLevelPatch(next, msg.top_patch || {});
+            const data = { ...(edge.data || {}), ...(msg.patch || {}) };
+            const nextLabel = msg.patch?.label ?? edge.label;
+            return { ...edge, data, label: nextLabel };
+          }),
+        );
+        return;
+      }
+      if (msg.type === "patch_node_props") {
+        const patch = msg.patch || {};
+        setNodes((current) =>
+          current.map((node) => {
+            if (node.id !== msg.node_id) {
+              return node;
+            }
+            const next = applyPropPatch(node, patch);
+            if ("label" in patch) {
+              // The node components render `data._label`, not the top-level label.
+              next.data = { ...(next.data || {}), _label: patch.label };
+            }
+            if ("className" in patch || "type" in patch) {
+              const declared = "className" in patch ? patch.className : node._className;
+              next._className = declared ?? null;
+              next.className = nodeClassName(next.type, declared, model);
+            }
             return next;
           }),
+        );
+        return;
+      }
+      if (msg.type === "patch_edge_props") {
+        setEdges((current) =>
+          current.map((edge) => (edge.id === msg.edge_id ? applyPropPatch(edge, msg.patch) : edge)),
         );
       }
     };
@@ -1004,7 +1034,10 @@ export function render({ model, view }) {
       const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
       return {
         ...node,
-        className: (node.type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default",
+        // Keep the declared class around so a later className/type patch can
+        // recombine it with the React Flow node chrome class.
+        _className: node.className ?? null,
+        className: nodeClassName(node.type, node.className, model),
         data: {
           ...dataWithoutViewIdx,
           view: baseView,
