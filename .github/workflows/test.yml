@@ -20,10 +20,10 @@ jobs:
       code_change: ${{ steps.filter.outputs.code }}
       matrix: ${{ env.MATRIX }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: github.event_name != 'pull_request'
       - name: Check for code changes
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -72,7 +72,7 @@ jobs:
     name: Pixi lock
     runs-on: ubuntu-latest
     steps:
-      - uses: holoviz-dev/holoviz_tasks/pixi_lock@v0
+      - uses: holoviz-dev/holoviz_tasks/pixi-lock@8fb2d0a3e4c70e218d487e0eed3b9c2488997212 # v1.0.6
         with:
           cache: ${{ github.event.inputs.cache == 'true' || github.event.inputs.cache == '' }}
 
@@ -80,15 +80,15 @@ jobs:
     needs: [setup, pixi_lock]
     runs-on: "ubuntu-latest"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up pixi
-        uses: prefix-dev/setup-pixi@v0.9.4
-      - uses: holoviz-dev/holoviz_tasks/pre-commit@v0
-      - uses: pre-commit/action@v3.0.1
+        uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+      - uses: holoviz-dev/holoviz_tasks/pre-commit@8fb2d0a3e4c70e218d487e0eed3b9c2488997212 # v1.0.6
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
         if: needs.setup.outputs.img_change == 'true'
         with:
           extra_args: -a --hook-stage manual oxipng || true --
-      - uses: stefanzweifel/git-auto-commit-action@v7
+      - uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
         if: needs.setup.outputs.img_change == 'true'
         with:
           commit_message: "Optimize PNG images (lossless)"
@@ -111,11 +111,11 @@ jobs:
           - windows-latest
     steps:
       - name: Checkout branch
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: Set up pixi
-        uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e # v0.9.4
+        uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
         with:
           environments: ${{ matrix.environment }}
       - name: Install repository
@@ -139,7 +139,7 @@ jobs:
       PANEL_LOG_LEVEL: info
       FAIL: "--screenshot only-on-failure --full-page-screenshot --output ui_screenshots --tracing retain-on-failure"
     steps:
-      - uses: holoviz-dev/holoviz_tasks/pixi_install@v0
+      - uses: holoviz-dev/holoviz_tasks/pixi-install@8fb2d0a3e4c70e218d487e0eed3b9c2488997212 # v1.0.6
         with:
           environments: ${{ matrix.environment }}
           install: false
@@ -151,14 +151,14 @@ jobs:
           echo "[run]\nconcurrency = greenlet" > .uicoveragerc
           pixi run -e ${{ matrix.environment }} test-ui $COV --cov-config=.uicoveragerc $FAIL
       - name: Upload UI Screenshots
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: ui_screenshots_${{ runner.os }}
           path: ./ui_screenshots
           if-no-files-found: ignore
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: panel-extensions/panel-splitjs
