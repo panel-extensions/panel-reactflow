@@ -24,6 +24,7 @@ hatchling = "*"
 hatch-vcs = "*"
 nodejs = ">=18"
 esbuild = "*"
+hvplot = ">=0.12.2,<0.13"
 
 [feature.py310.dependencies]
 python = "3.10.*"
