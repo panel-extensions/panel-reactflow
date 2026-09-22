@@ -26,7 +26,7 @@ NODE_TYPES = {
 }
 
 
-def _flow():
+def _flow(**params):
     nodes = [
         NodeSpec(id="src", type="source", position={"x": 0, "y": 100}, data={}).to_dict(),
         NodeSpec(id="snk", type="sink", position={"x": 300, "y": 100}, data={}).to_dict(),
@@ -38,6 +38,7 @@ def _flow():
         node_types=NODE_TYPES,
         width=900,
         height=600,
+        **params,
     )
 
 
@@ -115,3 +116,27 @@ def test_edge_click_emits_event(page):
     wait_until(lambda: len(events) == 1, timeout=8000)
     assert events[0]["edge_id"] == "e1"
     assert "position" in events[0]
+
+
+def test_hover_trigger_waits_for_delay_and_opens_popup(page):
+    flow = _flow(value_popup_trigger="hover", value_popup_hover_delay=100, value_popup_hover_distance=20)
+    flow.on("handle_hovered", lambda payload, flow: flow.show_popup(pn.pane.Markdown("Value: 42"), payload["position"]))
+    serve_component(page, flow)
+
+    handle = page.locator(".react-flow__handle-right").first
+    handle.hover()
+    popup = page.locator(".rf-value-popup")
+    expect(popup).not_to_be_visible()
+    page.wait_for_timeout(150)
+    expect(popup).to_be_visible()
+
+
+def test_hover_trigger_does_not_emit_click_event(page):
+    events = []
+    flow = _flow(value_popup_trigger="hover")
+    flow.on("handle_clicked", lambda payload: events.append(payload))
+    serve_component(page, flow)
+
+    page.locator(".react-flow__handle-right").first.click()
+    page.wait_for_timeout(100)
+    assert events == []

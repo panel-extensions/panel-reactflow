@@ -58,6 +58,9 @@ flow = ReactFlow(
     nodes=nodes,
     edges=edges,
     node_types=node_types,
+    value_popup_trigger="click",  # Change to "hover" to inspect after a dwell.
+    value_popup_hover_delay=500,
+    value_popup_hover_distance=24,
     sizing_mode="stretch_both",
     min_height=450,
 )

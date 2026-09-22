@@ -35,6 +35,12 @@ function renderHandles(direction, handles, opts = {}) {
   const position = direction === "input" ? Position.Left : Position.Right;
   const tooltipPos = direction === "input" ? "left" : "right";
   const onHandleClick = opts.onHandleClick;
+  const onHandleHover = opts.onHandleHover;
+
+  const makeHoverHandler = (id, eventType) =>
+    onHandleHover
+      ? (event) => onHandleHover(id, direction, eventType, event)
+      : undefined;
 
   const makeClickHandler = (id) =>
     onHandleClick
@@ -69,6 +75,8 @@ function renderHandles(direction, handles, opts = {}) {
         type={handleType}
         position={position}
         onClick={makeClickHandler(null)}
+        onMouseEnter={makeHoverHandler(null, "enter")}
+        onMouseLeave={makeHoverHandler(null, "leave")}
         {...handleProps}
       />
     );
@@ -88,15 +96,66 @@ function renderHandles(direction, handles, opts = {}) {
         style={{ top: `${(index + 1) * spacing}%` }}
         {...(tooltip ? {"data-tooltip": tooltip, "data-tooltip-pos": tooltipPos} : {})}
         onClick={makeClickHandler(id)}
+        onMouseEnter={makeHoverHandler(id, "enter")}
+        onMouseLeave={makeHoverHandler(id, "leave")}
         {...handleProps}
       />
     );
   });
 }
 
-function makeNodeComponent(typeName, typeSpec, editorMode, model) {
+function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay, hoverDistance) {
   return function NodeComponent({ id, data }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
+    const hoverTimerRef = useRef(null);
+    const hoverCleanupRef = useRef(null);
+    const onHandleHover = useCallback(
+      (handleId, direction, eventType, event) => {
+        if (valuePopupTrigger !== "hover") {
+          return;
+        }
+        if (eventType === "leave") {
+          if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+          }
+          return;
+        }
+        const position = { x: event.clientX, y: event.clientY };
+        if (hoverTimerRef.current) {
+          clearTimeout(hoverTimerRef.current);
+        }
+        if (hoverCleanupRef.current) {
+          hoverCleanupRef.current();
+        }
+        const target = { node_id: id, handle_id: handleId, direction };
+        const cleanup = () => {
+          if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+          }
+          if (hoverCleanupRef.current === cleanup) {
+            hoverCleanupRef.current = null;
+          }
+          document.removeEventListener("pointermove", onPointerMove, true);
+        };
+        const onPointerMove = (moveEvent) => {
+          const dx = moveEvent.clientX - position.x;
+          const dy = moveEvent.clientY - position.y;
+          if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
+            model.send_msg({ type: "handle_unhovered", ...target });
+            cleanup();
+          }
+        };
+        hoverCleanupRef.current = cleanup;
+        hoverTimerRef.current = setTimeout(() => {
+          hoverTimerRef.current = null;
+          model.send_msg({ type: "handle_hovered", ...target, position });
+          document.addEventListener("pointermove", onPointerMove, true);
+        }, hoverDelay);
+      },
+      [id, valuePopupTrigger, hoverDelay, hoverDistance],
+    );
     const onHandleClick = useCallback(
       (handleId, direction, event) => {
         model.send_msg({
@@ -233,6 +292,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model) {
           connectableStart: spec.inputConnectableStart,
           connectableEnd: spec.inputConnectableEnd,
           onHandleClick,
+          onHandleHover,
         })}
         <div className="rf-node-label" style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
           {displayLabel}
@@ -248,6 +308,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model) {
           connectableStart: spec.outputConnectableStart,
           connectableEnd: spec.outputConnectableEnd,
           onHandleClick,
+          onHandleHover,
         })}
       </div>
     );
@@ -570,6 +631,9 @@ function FlowInner({
   syncMode,
   debounceMs,
   viewport,
+  valuePopupTrigger,
+  hoverDelay,
+  hoverDistance,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -826,6 +890,54 @@ function FlowInner({
     [sendPatch],
   );
 
+  const edgeHoverTimerRef = useRef(null);
+  const edgeHoverCleanupRef = useRef(null);
+  const onEdgeHover = useCallback(
+    (event, edge) => {
+      if (valuePopupTrigger !== "hover") {
+        return;
+      }
+      if (edgeHoverTimerRef.current) {
+        clearTimeout(edgeHoverTimerRef.current);
+      }
+      if (edgeHoverCleanupRef.current) {
+        edgeHoverCleanupRef.current();
+      }
+      const position = { x: event.clientX, y: event.clientY };
+      const target = { edge_id: edge.id };
+      const cleanup = () => {
+        if (edgeHoverTimerRef.current) {
+          clearTimeout(edgeHoverTimerRef.current);
+          edgeHoverTimerRef.current = null;
+        }
+        if (edgeHoverCleanupRef.current === cleanup) {
+          edgeHoverCleanupRef.current = null;
+        }
+        document.removeEventListener("pointermove", onPointerMove, true);
+      };
+      const onPointerMove = (moveEvent) => {
+        const dx = moveEvent.clientX - position.x;
+        const dy = moveEvent.clientY - position.y;
+        if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
+          sendPatch({ type: "edge_unhovered", ...target });
+          cleanup();
+        }
+      };
+      edgeHoverCleanupRef.current = cleanup;
+      edgeHoverTimerRef.current = setTimeout(() => {
+        edgeHoverTimerRef.current = null;
+        sendPatch({ type: "edge_hovered", ...target, position });
+        document.addEventListener("pointermove", onPointerMove, true);
+      }, hoverDelay);
+    },
+    [sendPatch, valuePopupTrigger, hoverDelay, hoverDistance],
+  );
+
+  const onEdgeHoverEnd = useCallback(
+    () => {},
+    [],
+  );
+
   const onEdgeClick = useCallback(
     (event, edge) => {
       sendPatch({
@@ -872,12 +984,16 @@ function FlowInner({
       onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
       onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
       onEdgeClick: wrap("onEdgeClick", onEdgeClick),
+      onEdgeMouseEnter: wrap("onEdgeMouseEnter", onEdgeHover),
+      onEdgeMouseLeave: wrap("onEdgeMouseLeave", onEdgeHoverEnd),
       onPaneClick: wrap("onPaneClick", onPaneClick),
     };
   }, [
     handleNodesChange,
     onConnect,
     onEdgeClick,
+    onEdgeHover,
+    onEdgeHoverEnd,
     onEdgesChange,
     onEdgesDelete,
     onMoveEnd,
@@ -928,6 +1044,9 @@ export function render({ model, view }) {
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
+  const [valuePopupTrigger] = model.useState("value_popup_trigger");
+  const [hoverDelay] = model.useState("value_popup_hover_delay");
+  const [hoverDistance] = model.useState("value_popup_hover_distance");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");
@@ -1147,10 +1266,12 @@ export function render({ model, view }) {
   const hydratedNodeTypes = useMemo(() => {
     const mapping = {};
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
-      mapping[typeName] = makeNodeComponent(typeName, spec, editorMode, model);
+      mapping[typeName] = makeNodeComponent(
+        typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay, hoverDistance,
+      );
     });
     return mapping;
-  }, [editorMode, pyNodeTypes, model]);
+  }, [editorMode, pyNodeTypes, model, valuePopupTrigger, hoverDelay, hoverDistance]);
 
   const contextMenuRef = useRef(null);
   const valuePopupRef = useRef(null);
@@ -1242,6 +1363,9 @@ export function render({ model, view }) {
       syncMode={syncMode}
       debounceMs={debounceMs}
       viewport={viewport}
+      valuePopupTrigger={valuePopupTrigger}
+      hoverDelay={hoverDelay}
+      hoverDistance={hoverDistance}
     />
   );
 

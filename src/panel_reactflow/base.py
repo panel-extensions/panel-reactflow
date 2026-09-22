@@ -1581,6 +1581,24 @@ class ReactFlow(ReactComponent):
 
     viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
 
+    value_popup_trigger = param.ObjectSelector(
+        default="click",
+        objects=["click", "hover", "none"],
+        doc="Whether port and edge inspection events are triggered on click, hover, or not automatically.",
+    )
+
+    value_popup_hover_delay = param.Integer(
+        default=500,
+        bounds=(0, None),
+        doc="Delay in milliseconds before a hover inspection event is emitted.",
+    )
+
+    value_popup_hover_distance = param.Number(
+        default=24,
+        bounds=(0, None),
+        doc="Pointer distance in pixels from the hover anchor before closing the popup.",
+    )
+
     top_panel = Children(default=[], doc="Children rendered in a top-center panel.")
     bottom_panel = Children(default=[], doc="Children rendered in a bottom-center panel.")
     left_panel = Children(default=[], doc="Children rendered in a center-left panel.")
@@ -2485,12 +2503,26 @@ class ReactFlow(ReactComponent):
                 node_id = msg.get("node_id")
                 if node_id is None:
                     return
-                self._emit("handle_clicked", msg)
+                if self.value_popup_trigger == "click":
+                    self._emit("handle_clicked", msg)
             case "edge_clicked":
                 edge_id = msg.get("edge_id")
                 if edge_id is None:
                     return
-                self._emit("edge_clicked", msg)
+                if self.value_popup_trigger == "click":
+                    self._emit("edge_clicked", msg)
+            case "handle_hovered":
+                if self.value_popup_trigger == "hover" and msg.get("node_id") is not None:
+                    self._emit("handle_hovered", msg)
+            case "handle_unhovered":
+                if self.value_popup_trigger == "hover" and msg.get("node_id") is not None:
+                    self._emit("handle_unhovered", msg)
+            case "edge_hovered":
+                if self.value_popup_trigger == "hover" and msg.get("edge_id") is not None:
+                    self._emit("edge_hovered", msg)
+            case "edge_unhovered":
+                if self.value_popup_trigger == "hover" and msg.get("edge_id") is not None:
+                    self._emit("edge_unhovered", msg)
             case "node_context_menu":
                 node_id = msg.get("node_id")
                 position = msg.get("position")
@@ -3364,6 +3396,12 @@ class ReactFlow(ReactComponent):
         See Also
         --------
         close_popup : Dismiss the popup programmatically.
+
+        Notes
+        -----
+        Set ``value_popup_trigger="hover"`` to use the configured dwell delay
+        and movement distance before and after opening a value popup. Set it to
+        ``"none"`` to disable automatic inspection events.
         """
         self._value_popup = content
         self._value_popup_position = position
@@ -3398,6 +3436,10 @@ class ReactFlow(ReactComponent):
             - ``"edge_clicked"``: An edge was clicked. Payload has
               ``edge_id`` and a screen ``position`` suitable for
               :meth:`show_popup`.
+            - ``"handle_hovered"`` / ``"edge_hovered"``: A port or edge was
+              entered while ``value_popup_trigger="hover"``.
+            - ``"handle_unhovered"`` / ``"edge_unhovered"``: The pointer left
+              the inspected port or edge.
             - ``"node_data_changed"``: Node data was modified
             - ``"node_props_changed"``: Top-level node properties (``label``,
               ``style``, ``type``, ...) were modified
