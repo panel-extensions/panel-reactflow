@@ -294,6 +294,9 @@ def on_edge_clicked(payload, flow):
 
 flow.on("handle_clicked", on_handle_clicked)
 flow.on("edge_clicked", on_edge_clicked)
+# Register these instead when using popup_trigger="hover".
+flow.on("handle_hovered", on_handle_clicked)
+flow.on("edge_hovered", on_edge_clicked)
 ```
 
 The popup closes itself when the user clicks elsewhere, or programmatically

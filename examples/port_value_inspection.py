@@ -77,21 +77,23 @@ def show_value(title, value, position):
     )
 
 
-def on_handle_clicked(payload, flow):
+def on_handle_inspected(payload, flow):
     node_id = payload["node_id"]
     handle_id = payload["handle_id"]
     value = live_values.get(node_id, {}).get(handle_id)
     show_value(f"{node_id}.{handle_id}", value, payload["position"])
 
 
-def on_edge_clicked(payload, flow):
+def on_edge_inspected(payload, flow):
     node_id, handle_id = edge_sources[payload["edge_id"]]
     value = live_values[node_id][handle_id]
     show_value(f"{node_id}.{handle_id}", value, payload["position"])
 
 
-flow.on("handle_clicked", on_handle_clicked)
-flow.on("edge_clicked", on_edge_clicked)
+flow.on("handle_clicked", on_handle_inspected)
+flow.on("edge_clicked", on_edge_inspected)
+flow.on("handle_hovered", on_handle_inspected)
+flow.on("edge_hovered", on_edge_inspected)
 
 pn.Column(
     "# Port value inspection",
