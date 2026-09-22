@@ -73,6 +73,7 @@ def test_reactflow_add_node_dynamically_creates_views(document, comm):
         "left_panel",
         "right_panel",
         "_context_menu",
+        "_value_popup",
         "_selected_editor",
     ]
 
@@ -111,6 +112,7 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
         "left_panel",
         "right_panel",
         "_context_menu",
+        "_value_popup",
         "_selected_editor",
     ]
     assert len(model.data._views) == 1
