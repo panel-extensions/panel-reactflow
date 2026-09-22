@@ -21,6 +21,28 @@ const MAX_RECOVERY_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 100;
 // How long a remounted flow must survive before its retry budget is refilled.
 const HEALTHY_RESET_MS = 5000;
+const HOVER_CLOSE_GRACE_MS = 150;
+const popupHoverState = { inside: false, closeTimers: new Set() };
+
+function schedulePopupClose(callback) {
+  const timer = setTimeout(() => {
+    popupHoverState.closeTimers.delete(timer);
+    if (!popupHoverState.inside) {
+      callback();
+    }
+  }, HOVER_CLOSE_GRACE_MS);
+  popupHoverState.closeTimers.add(timer);
+}
+
+function enterValuePopup() {
+  popupHoverState.inside = true;
+  popupHoverState.closeTimers.forEach((timer) => clearTimeout(timer));
+  popupHoverState.closeTimers.clear();
+}
+
+function leaveValuePopup() {
+  popupHoverState.inside = false;
+}
 
 const figureStylesheet = `
 .bk-Canvas {
@@ -29,6 +51,15 @@ const figureStylesheet = `
   width: calc(var(--rf-zoom) * 100%);
   height: calc(var(--rf-zoom) * 100%);
 }`.trim();
+
+function isInsideValuePopup(x, y) {
+  const popup = document.querySelector(".rf-value-popup");
+  if (!popup) {
+    return false;
+  }
+  const rect = popup.getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
 
 function renderHandles(direction, handles, opts = {}) {
   const handleType = direction === "input" ? "target" : "source";
@@ -75,8 +106,8 @@ function renderHandles(direction, handles, opts = {}) {
         type={handleType}
         position={position}
         onClick={makeClickHandler(null)}
-        onMouseEnter={makeHoverHandler(null, "enter")}
-        onMouseLeave={makeHoverHandler(null, "leave")}
+        onPointerEnter={makeHoverHandler(null, "enter")}
+        onPointerLeave={makeHoverHandler(null, "leave")}
         {...handleProps}
       />
     );
@@ -96,8 +127,8 @@ function renderHandles(direction, handles, opts = {}) {
         style={{ top: `${(index + 1) * spacing}%` }}
         {...(tooltip ? {"data-tooltip": tooltip, "data-tooltip-pos": tooltipPos} : {})}
         onClick={makeClickHandler(id)}
-        onMouseEnter={makeHoverHandler(id, "enter")}
-        onMouseLeave={makeHoverHandler(id, "leave")}
+        onPointerEnter={makeHoverHandler(id, "enter")}
+        onPointerLeave={makeHoverHandler(id, "leave")}
         {...handleProps}
       />
     );
@@ -142,9 +173,14 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
         const onPointerMove = (moveEvent) => {
           const dx = moveEvent.clientX - position.x;
           const dy = moveEvent.clientY - position.y;
+          if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
+            return;
+          }
           if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
-            model.send_msg({ type: "handle_unhovered", ...target });
-            cleanup();
+            schedulePopupClose(() => {
+              model.send_msg({ type: "handle_unhovered", ...target });
+              cleanup();
+            });
           }
         };
         hoverCleanupRef.current = cleanup;
@@ -918,9 +954,14 @@ function FlowInner({
       const onPointerMove = (moveEvent) => {
         const dx = moveEvent.clientX - position.x;
         const dy = moveEvent.clientY - position.y;
+        if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
+          return;
+        }
         if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
-          sendPatch({ type: "edge_unhovered", ...target });
-          cleanup();
+          schedulePopupClose(() => {
+            sendPatch({ type: "edge_unhovered", ...target });
+            cleanup();
+          });
         }
       };
       edgeHoverCleanupRef.current = cleanup;
@@ -1414,6 +1455,8 @@ export function render({ model, view }) {
         <div
           ref={valuePopupRef}
           className="rf-value-popup"
+          onPointerEnter={enterValuePopup}
+          onPointerLeave={leaveValuePopup}
           style={{
             position: "absolute",
             top: valuePopupPosition.y - (containerRef.current?.getBoundingClientRect().top ?? 0),

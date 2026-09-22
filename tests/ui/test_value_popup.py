@@ -140,3 +140,18 @@ def test_hover_trigger_does_not_emit_click_event(page):
     page.locator(".react-flow__handle-right").first.click()
     page.wait_for_timeout(100)
     assert events == []
+
+
+def test_hover_popup_remains_open_when_pointer_enters_popup(page):
+    flow = _flow(popup_trigger="hover", popup_hover_delay=100, popup_hover_distance=20)
+    flow.on("handle_hovered", lambda payload, flow: flow.show_popup(pn.pane.Markdown("Value: 42"), payload["position"]))
+    serve_component(page, flow)
+
+    handle = page.locator(".react-flow__handle-right").first
+    handle.hover()
+    popup = page.locator(".rf-value-popup")
+    page.wait_for_timeout(150)
+    expect(popup).to_be_visible()
+    popup.hover()
+    page.wait_for_timeout(100)
+    expect(popup).to_be_visible()
