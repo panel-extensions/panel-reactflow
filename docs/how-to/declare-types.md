@@ -301,6 +301,13 @@ via `flow.close_popup()`. `panel-reactflow` only provides the click events and
 overlay; looking up "the current value" for a port is application-specific,
 since it depends on how you execute or simulate the graph.
 
+For a complete runnable graph with typed port hover tooltips and popups for
+both handles and edges, run:
+
+```bash
+panel serve examples/port_value_inspection.py --show
+```
+
 ---
 
 ## Control handle connectivity
