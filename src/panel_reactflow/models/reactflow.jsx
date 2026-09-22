@@ -1044,9 +1044,9 @@ export function render({ model, view }) {
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
-  const [valuePopupTrigger] = model.useState("value_popup_trigger");
-  const [hoverDelay] = model.useState("value_popup_hover_delay");
-  const [hoverDistance] = model.useState("value_popup_hover_distance");
+  const [valuePopupTrigger] = model.useState("popup_trigger");
+  const [hoverDelay] = model.useState("popup_hover_delay");
+  const [hoverDistance] = model.useState("popup_hover_distance");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");

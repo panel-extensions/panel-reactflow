@@ -119,7 +119,7 @@ def test_edge_click_emits_event(page):
 
 
 def test_hover_trigger_waits_for_delay_and_opens_popup(page):
-    flow = _flow(value_popup_trigger="hover", value_popup_hover_delay=100, value_popup_hover_distance=20)
+    flow = _flow(popup_trigger="hover", popup_hover_delay=100, popup_hover_distance=20)
     flow.on("handle_hovered", lambda payload, flow: flow.show_popup(pn.pane.Markdown("Value: 42"), payload["position"]))
     serve_component(page, flow)
 
@@ -133,7 +133,7 @@ def test_hover_trigger_waits_for_delay_and_opens_popup(page):
 
 def test_hover_trigger_does_not_emit_click_event(page):
     events = []
-    flow = _flow(value_popup_trigger="hover")
+    flow = _flow(popup_trigger="hover")
     flow.on("handle_clicked", lambda payload: events.append(payload))
     serve_component(page, flow)
 

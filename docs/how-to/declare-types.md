@@ -297,11 +297,11 @@ flow.on("edge_clicked", on_edge_clicked)
 ```
 
 The popup closes itself when the user clicks elsewhere, or programmatically
-via `flow.close_popup()`. Set `value_popup_trigger="hover"` to require the
+via `flow.close_popup()`. Set `popup_trigger="hover"` to require the
 pointer to dwell over a port or edge before opening the popup. The default
-`value_popup_hover_delay` is 500 ms; after opening, the popup remains visible
-until the pointer moves `value_popup_hover_distance` pixels from the hover
-anchor. Use `value_popup_trigger="none"` to disable the built-in inspection
+`popup_hover_delay` is 500 ms; after opening, the popup remains visible
+until the pointer moves `popup_hover_distance` pixels from the hover
+anchor. Use `popup_trigger="none"` to disable the built-in inspection
 events. `panel-reactflow` only provides the interaction events and overlay;
 looking up "the current value" for a port is application-specific.
 
