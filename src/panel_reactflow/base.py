@@ -269,11 +269,13 @@ class NodeType:
     inputs : list of str or dict, optional
         List of input port definitions. Each entry can be a plain string
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
-        keys. When a label is provided it renders as a tooltip on hover.
+        and ``"type"`` keys. When a label and/or type is provided it renders
+        as a tooltip on hover, e.g. ``"Raw data input (DataFrame)"``.
     outputs : list of str or dict, optional
         List of output port definitions. Each entry can be a plain string
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
-        keys. When a label is provided it renders as a tooltip on hover.
+        and ``"type"`` keys. When a label and/or type is provided it renders
+        as a tooltip on hover, e.g. ``"Raw data input (DataFrame)"``.
     input_connectable : bool, default True
         Whether input handles are connectable. When False, users cannot create
         connections to or from input handles.
@@ -1579,6 +1581,18 @@ class ReactFlow(ReactComponent):
 
     viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
 
+    popup_trigger = param.ObjectSelector(
+        default="click",
+        objects=["click", "hover", "none"],
+        doc="Whether port and edge inspection events are triggered on click, hover, or not automatically.",
+    )
+
+    popup_hover_delay = param.Integer(
+        default=500,
+        bounds=(0, None),
+        doc="Delay in milliseconds before a hover inspection event is emitted.",
+    )
+
     top_panel = Children(default=[], doc="Children rendered in a top-center panel.")
     bottom_panel = Children(default=[], doc="Children rendered in a bottom-center panel.")
     left_panel = Children(default=[], doc="Children rendered in a center-left panel.")
@@ -1591,6 +1605,8 @@ class ReactFlow(ReactComponent):
     _selected_editor = Child(doc="Active editor for the selected node/edge in side mode.")
     _context_menu = Child(doc="Context menu component rendered on node right-click.")
     _context_menu_position = param.Dict(default=None, allow_None=True, doc="Screen position for the context menu overlay.")
+    _value_popup = Child(doc="Popup component rendered on handle/edge click, e.g. via show_popup().")
+    _value_popup_position = param.Dict(default=None, allow_None=True, doc="Screen position for the value popup overlay.")
     _views = Children(default=[], doc="Panel viewables rendered inside nodes via view_idx.")
     _node_update_count = param.Integer(default=0, doc="Monotonic counter for normalized node updates.")
 
@@ -1999,7 +2015,14 @@ class ReactFlow(ReactComponent):
             cb = partial(callback, payload, flow)
         else:
             cb = partial(callback, payload)
-        pn.state.execute(cb)
+        # schedule=False: the outer _process_event already forced this whole
+        # message-handling pass onto the doc's own callback (schedule=False),
+        # so 'auto' scheduling here would see the doc as still locked and
+        # defer to the next tick. That breaks Child-param updates (e.g. via
+        # show_popup) made from inside a hook, since the model reconciliation
+        # that turns a Viewable into its Bokeh model expects to run in the
+        # same pass as the triggering event.
+        pn.state.execute(cb, schedule=False)
 
     def _invoke_node_hook(self, node: Node, hook_name: str, payload: dict[str, Any]) -> None:
         hook = getattr(node, hook_name, None)
@@ -2198,7 +2221,7 @@ class ReactFlow(ReactComponent):
             children["_node_editor_views"] = editor_models
             old_models += editor_old
 
-        for name in ("top_panel", "bottom_panel", "left_panel", "right_panel", "_context_menu", "_selected_editor"):
+        for name in ("top_panel", "bottom_panel", "left_panel", "right_panel", "_context_menu", "_value_popup", "_selected_editor"):
             panels = getattr(self, name, None)
             if panels is None:
                 children[name] = None
@@ -2470,6 +2493,30 @@ class ReactFlow(ReactComponent):
                 if node_id is None:
                     return
                 self._emit("node_clicked", msg)
+            case "handle_clicked":
+                node_id = msg.get("node_id")
+                if node_id is None:
+                    return
+                if self.popup_trigger == "click":
+                    self._emit("handle_clicked", msg)
+            case "edge_clicked":
+                edge_id = msg.get("edge_id")
+                if edge_id is None:
+                    return
+                if self.popup_trigger == "click":
+                    self._emit("edge_clicked", msg)
+            case "handle_hovered":
+                if self.popup_trigger == "hover" and msg.get("node_id") is not None:
+                    self._emit("handle_hovered", msg)
+            case "handle_unhovered":
+                if self.popup_trigger == "hover" and msg.get("node_id") is not None:
+                    self._emit("handle_unhovered", msg)
+            case "edge_hovered":
+                if self.popup_trigger == "hover" and msg.get("edge_id") is not None:
+                    self._emit("edge_hovered", msg)
+            case "edge_unhovered":
+                if self.popup_trigger == "hover" and msg.get("edge_id") is not None:
+                    self._emit("edge_unhovered", msg)
             case "node_context_menu":
                 node_id = msg.get("node_id")
                 position = msg.get("position")
@@ -2487,6 +2534,9 @@ class ReactFlow(ReactComponent):
             case "close_context_menu":
                 self._context_menu = None
                 self._context_menu_position = None
+            case "close_value_popup":
+                self._value_popup = None
+                self._value_popup_position = None
             case "client_error":
                 self._handle_client_error(msg)
             case _:
@@ -3313,6 +3363,48 @@ class ReactFlow(ReactComponent):
             edges.append(edge)
         return cls(nodes=nodes, edges=edges)
 
+    def show_popup(self, content: Any, position: dict[str, float]) -> None:
+        """Show a Panel viewable in a floating overlay at a screen position.
+
+        Intended for use from ``"handle_clicked"`` and ``"edge_clicked"``
+        callbacks to display, e.g., the current value flowing through a port
+        or connection, but can be called for any reason.
+
+        Parameters
+        ----------
+        content
+            A Panel viewable (or anything ``pn.panel()`` accepts) to render
+            inside the popup.
+        position
+            Screen position with ``x``/``y`` keys, typically taken straight
+            from the ``"position"`` field of the triggering event payload.
+
+        Examples
+        --------
+        >>> def on_handle_clicked(payload, flow):
+        ...     value = compute_value(payload["node_id"], payload["handle_id"])
+        ...     flow.show_popup(pn.pane.Markdown(f"Value: {value}"), payload["position"])
+        >>>
+        >>> flow.on("handle_clicked", on_handle_clicked)
+
+        See Also
+        --------
+        close_popup : Dismiss the popup programmatically.
+
+        Notes
+        -----
+        Set ``popup_trigger="hover"`` to use the configured dwell delay
+        and movement distance before and after opening a value popup. Set it to
+        ``"none"`` to disable automatic inspection events.
+        """
+        self._value_popup = content
+        self._value_popup_position = position
+
+    def close_popup(self) -> None:
+        """Dismiss the popup shown by :meth:`show_popup`, if any."""
+        self._value_popup = None
+        self._value_popup_position = None
+
     def on(self, event_type: str, callback) -> None:
         """Register a callback for graph events.
 
@@ -3330,6 +3422,18 @@ class ReactFlow(ReactComponent):
             - ``"node_deleted"``: Node was removed from the graph
             - ``"node_moved"``: Node was dragged to a new position
             - ``"node_clicked"``: Node was clicked
+            - ``"handle_clicked"``: A node's input/output handle was clicked.
+              Payload has ``node_id``, ``handle_id`` (``None`` for a node's
+              unnamed default handle), ``direction`` (``"input"`` or
+              ``"output"``) and a screen ``position`` suitable for
+              :meth:`show_popup`.
+            - ``"edge_clicked"``: An edge was clicked. Payload has
+              ``edge_id`` and a screen ``position`` suitable for
+              :meth:`show_popup`.
+            - ``"handle_hovered"`` / ``"edge_hovered"``: A port or edge was
+              entered while ``popup_trigger="hover"``.
+            - ``"handle_unhovered"`` / ``"edge_unhovered"``: The pointer left
+              the inspected port or edge.
             - ``"node_data_changed"``: Node data was modified
             - ``"node_props_changed"``: Top-level node properties (``label``,
               ``style``, ``type``, ...) were modified
@@ -3408,6 +3512,15 @@ class ReactFlow(ReactComponent):
         >>>
         >>> flow.on("node_data_changed", on_data_change)
 
+        Show the current value of a port when its handle is clicked:
+
+        >>> import panel as pn
+        >>> def on_handle_clicked(payload, flow):
+        ...     value = my_values[payload["node_id"]][payload["handle_id"]]
+        ...     flow.show_popup(pn.pane.Markdown(f"**Value:** {value}"), payload["position"])
+        >>>
+        >>> flow.on("handle_clicked", on_handle_clicked)
+
         Notes
         -----
         Multiple callbacks can be registered for the same event type.
@@ -3422,18 +3535,22 @@ class ReactFlow(ReactComponent):
         self._event_handlers.setdefault(event_type, []).append(callback)
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
+        # schedule=False: see the matching comment on _invoke_node_callback.
+        # This runs the message handling that triggered the event, so
+        # deferring to the next tick would break Child-param updates (e.g.
+        # via show_popup) made from inside a registered callback.
         for callback in self._event_handlers.get(event_type, []):
             if len(inspect.signature(callback).parameters) == 2:
                 cb = partial(callback, payload, self)
             else:
                 cb = partial(callback, payload)
-            pn.state.execute(cb)
+            pn.state.execute(cb, schedule=False)
         for callback in self._event_handlers.get("*", []):
             if len(inspect.signature(callback).parameters) == 2:
                 cb = partial(callback, payload, self)
             else:
                 cb = partial(callback, payload)
-            pn.state.execute(cb)
+            pn.state.execute(cb, schedule=False)
         self._dispatch_node_hooks(event_type, payload)
         self._dispatch_edge_hooks(event_type, payload)
 

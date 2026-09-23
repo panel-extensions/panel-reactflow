@@ -244,7 +244,8 @@ validation or auto-generated forms.
 ## Handle tooltips
 
 By default, handles are plain connection points. You can add a tooltip (shown
-on hover) by passing a dict with `"id"` and `"label"` instead of a plain string:
+on hover) by passing a dict with `"id"` and `"label"` and/or `"type"` instead
+of a plain string:
 
 ```python
 from panel_reactflow import NodeType
@@ -253,19 +254,68 @@ node_types = {
     "transform": NodeType(
         type="transform",
         label="Transform",
-        inputs=[{"id": "in", "label": "Data Input"}],
+        inputs=[{"id": "in", "label": "Data Input", "type": "DataFrame"}],
         outputs=[
-            {"id": "success", "label": "Successful results"},
-            {"id": "error", "label": "Failed records"},
+            {"id": "success", "label": "Successful results", "type": "DataFrame"},
+            {"id": "error", "label": "Failed records", "type": "list"},
         ],
     ),
 }
 ```
 
-Plain strings and dicts can be mixed freely in the same list:
+The tooltip combines both when present (`"Data Input (DataFrame)"`), or falls
+back to whichever one is given. Plain strings and dicts can be mixed freely in
+the same list:
 
 ```python
-inputs=["simple_port", {"id": "documented_port", "label": "Hover to see this"}]
+inputs=["simple_port", {"id": "documented_port", "label": "Hover to see this", "type": "int"}]
+```
+
+---
+
+## Show a port's current value on click
+
+Clicking a handle emits a `"handle_clicked"` event with the node id, handle
+id, direction (`"input"`/`"output"`) and a screen position. Clicking an edge
+emits `"edge_clicked"` with the edge id and position. Use
+`ReactFlow.show_popup(content, position)` in the handler to display whatever
+you consider the "current value" for that port or connection:
+
+```python
+def on_handle_clicked(payload, flow):
+    node_id, handle_id = payload["node_id"], payload["handle_id"]
+    value = live_values.get(node_id, {}).get(handle_id)
+    flow.show_popup(pn.pane.Markdown(f"**{handle_id}**: {value!r}"), payload["position"])
+
+def on_edge_clicked(payload, flow):
+    source_id, source_port = edge_sources[payload["edge_id"]]
+    value = live_values.get(source_id, {}).get(source_port)
+    flow.show_popup(pn.pane.Markdown(f"**Value:** {value!r}"), payload["position"])
+
+flow.on("handle_clicked", on_handle_clicked)
+flow.on("edge_clicked", on_edge_clicked)
+```
+
+For `popup_trigger="hover"`, register `handle_hovered` and `edge_hovered` to
+show the popup and their corresponding `handle_unhovered` and `edge_unhovered`
+events to call `flow.close_popup()`. Match the unhovered target against the
+currently displayed one so a delayed leave event does not dismiss a newer
+popup. See the runnable example below for both pairs of callbacks.
+
+The default `popup_hover_delay` is 500 ms. After opening, an unhover event is
+emitted when the pointer moves more than 10% of the shorter canvas dimension
+from the anchor (at least 48 pixels) and is not over the popup. Click-opened
+popups dismiss on outside click; either mode can dismiss programmatically via
+`flow.close_popup()`. Use
+`popup_trigger="none"` to disable the built-in inspection events.
+`panel-reactflow` only provides the interaction events and overlay; looking up
+"the current value" for a port is application-specific.
+
+For a complete runnable graph with typed port hover tooltips and popups for
+both handles and edges, run:
+
+```bash
+panel serve examples/port_value_inspection.py --show
 ```
 
 ---

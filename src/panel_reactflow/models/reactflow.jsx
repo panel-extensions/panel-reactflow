@@ -21,6 +21,28 @@ const MAX_RECOVERY_ATTEMPTS = 2;
 const RETRY_DELAY_MS = 100;
 // How long a remounted flow must survive before its retry budget is refilled.
 const HEALTHY_RESET_MS = 5000;
+const HOVER_CLOSE_GRACE_MS = 150;
+const popupHoverState = { inside: false, closeTimers: new Set() };
+
+function schedulePopupClose(callback) {
+  const timer = setTimeout(() => {
+    popupHoverState.closeTimers.delete(timer);
+    if (!popupHoverState.inside) {
+      callback();
+    }
+  }, HOVER_CLOSE_GRACE_MS);
+  popupHoverState.closeTimers.add(timer);
+}
+
+function enterValuePopup() {
+  popupHoverState.inside = true;
+  popupHoverState.closeTimers.forEach((timer) => clearTimeout(timer));
+  popupHoverState.closeTimers.clear();
+}
+
+function leaveValuePopup() {
+  popupHoverState.inside = false;
+}
 
 const figureStylesheet = `
 .bk-Canvas {
@@ -30,9 +52,41 @@ const figureStylesheet = `
   height: calc(var(--rf-zoom) * 100%);
 }`.trim();
 
+function isInsideValuePopup(x, y) {
+  const popup = document.querySelector(".rf-value-popup");
+  if (!popup) {
+    return false;
+  }
+  const rect = popup.getBoundingClientRect();
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function popupCloseDistance(event) {
+  const frame = event.currentTarget.closest(".react-flow")?.getBoundingClientRect();
+  return Math.max(48, Math.min(frame?.width ?? 0, frame?.height ?? 0) * 0.1);
+}
+
 function renderHandles(direction, handles, opts = {}) {
   const handleType = direction === "input" ? "target" : "source";
   const position = direction === "input" ? Position.Left : Position.Right;
+  const tooltipPos = direction === "input" ? "left" : "right";
+  const onHandleClick = opts.onHandleClick;
+  const onHandleHover = opts.onHandleHover;
+
+  const makeHoverHandler = (id, eventType) =>
+    onHandleHover
+      ? (event) => onHandleHover(id, direction, eventType, event)
+      : undefined;
+
+  const makeClickHandler = (id) =>
+    onHandleClick
+      ? (event) => {
+          // A handle click also bubbles to the node underneath, which would
+          // otherwise select/drag it instead of opening the value popup.
+          event.stopPropagation();
+          onHandleClick(id, direction, event);
+        }
+      : undefined;
 
   // Build handle props from opts, only including defined values
   const handleProps = {};
@@ -52,12 +106,23 @@ function renderHandles(direction, handles, opts = {}) {
   }
   // null/undefined → default handle
   if (!handles?.length) {
-    return <Handle type={handleType} position={position} {...handleProps} />;
+    return (
+      <Handle
+        type={handleType}
+        position={position}
+        onClick={makeClickHandler(null)}
+        onPointerEnter={makeHoverHandler(null, "enter")}
+        onPointerLeave={makeHoverHandler(null, "leave")}
+        {...handleProps}
+      />
+    );
   }
   const spacing = 100 / (handles.length + 1);
   return handles.map((handle, index) => {
     const id = typeof handle === "string" ? handle : handle.id;
     const label = typeof handle === "object" ? handle.label : undefined;
+    const dtype = typeof handle === "object" ? handle.type : undefined;
+    const tooltip = label && dtype ? `${label} (${dtype})` : label || dtype;
     return (
       <Handle
         key={`${direction}-${id}`}
@@ -65,16 +130,86 @@ function renderHandles(direction, handles, opts = {}) {
         type={handleType}
         position={position}
         style={{ top: `${(index + 1) * spacing}%` }}
-        {...(label ? {"data-tooltip": label, "data-tooltip-pos": direction === "input" ? "left" : "right"} : {})}
+        {...(tooltip ? {"data-tooltip": tooltip, "data-tooltip-pos": tooltipPos} : {})}
+        onClick={makeClickHandler(id)}
+        onPointerEnter={makeHoverHandler(id, "enter")}
+        onPointerLeave={makeHoverHandler(id, "leave")}
         {...handleProps}
       />
     );
   });
 }
 
-function makeNodeComponent(typeName, typeSpec, editorMode) {
+function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
+    const hoverTimerRef = useRef(null);
+    const hoverCleanupRef = useRef(null);
+    const onHandleHover = useCallback(
+      (handleId, direction, eventType, event) => {
+        if (valuePopupTrigger !== "hover") {
+          return;
+        }
+        if (eventType === "leave") {
+          if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+          }
+          return;
+        }
+        const position = { x: event.clientX, y: event.clientY };
+        const closeDistance = popupCloseDistance(event);
+        if (hoverTimerRef.current) {
+          clearTimeout(hoverTimerRef.current);
+        }
+        if (hoverCleanupRef.current) {
+          hoverCleanupRef.current();
+        }
+        const target = { node_id: id, handle_id: handleId, direction };
+        const cleanup = () => {
+          if (hoverTimerRef.current) {
+            clearTimeout(hoverTimerRef.current);
+            hoverTimerRef.current = null;
+          }
+          if (hoverCleanupRef.current === cleanup) {
+            hoverCleanupRef.current = null;
+          }
+          document.removeEventListener("pointermove", onPointerMove, true);
+        };
+        const onPointerMove = (moveEvent) => {
+          const dx = moveEvent.clientX - position.x;
+          const dy = moveEvent.clientY - position.y;
+          if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
+            return;
+          }
+          if (dx * dx + dy * dy >= closeDistance * closeDistance) {
+            schedulePopupClose(() => {
+              model.send_msg({ type: "handle_unhovered", ...target });
+              cleanup();
+            });
+          }
+        };
+        hoverCleanupRef.current = cleanup;
+        hoverTimerRef.current = setTimeout(() => {
+          hoverTimerRef.current = null;
+          model.send_msg({ type: "handle_hovered", ...target, position });
+          document.addEventListener("pointermove", onPointerMove, true);
+        }, hoverDelay);
+      },
+      [id, valuePopupTrigger, hoverDelay],
+    );
+    const onHandleClick = useCallback(
+      (handleId, direction, event) => {
+        model.send_msg({
+          type: "handle_clicked",
+          node_id: id,
+          handle_id: handleId,
+          direction,
+          position: { x: event.clientX, y: event.clientY },
+        });
+      },
+      [id],
+    );
     const zoom = useStore((s) => s.transform?.[2] ?? 1);
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
@@ -198,6 +333,8 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
           connectable: spec.inputConnectable,
           connectableStart: spec.inputConnectableStart,
           connectableEnd: spec.inputConnectableEnd,
+          onHandleClick,
+          onHandleHover,
         })}
         <div className="rf-node-label" style={{ fontWeight: 600, margin: displayLabel ? "0.2em 0 0.5em 0.5em" : "0" }}>
           {displayLabel}
@@ -212,6 +349,8 @@ function makeNodeComponent(typeName, typeSpec, editorMode) {
           connectable: spec.outputConnectable,
           connectableStart: spec.outputConnectableStart,
           connectableEnd: spec.outputConnectableEnd,
+          onHandleClick,
+          onHandleHover,
         })}
       </div>
     );
@@ -252,6 +391,38 @@ function signature(value) {
   } catch (error) {
     return null;
   }
+}
+
+/**
+ * Close a positioned overlay (context menu, value popup) when the user
+ * clicks outside of it, by sending `closeMsgType` back to Python.
+ */
+function useCloseOnOutsideClick(position, ref, closeMsgType, model) {
+  useEffect(() => {
+    if (!position) return undefined;
+    const handleClick = (event) => {
+      const el = ref.current;
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        if (
+          event.clientX >= rect.left &&
+          event.clientX <= rect.right &&
+          event.clientY >= rect.top &&
+          event.clientY <= rect.bottom
+        ) {
+          return;
+        }
+      }
+      model.send_msg({ type: closeMsgType });
+    };
+    const id = requestAnimationFrame(() => {
+      document.addEventListener("mousedown", handleClick, true);
+    });
+    return () => {
+      cancelAnimationFrame(id);
+      document.removeEventListener("mousedown", handleClick, true);
+    };
+  }, [position, ref, closeMsgType, model]);
 }
 
 /**
@@ -502,6 +673,8 @@ function FlowInner({
   syncMode,
   debounceMs,
   viewport,
+  valuePopupTrigger,
+  hoverDelay,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -758,6 +931,71 @@ function FlowInner({
     [sendPatch],
   );
 
+  const edgeHoverTimerRef = useRef(null);
+  const edgeHoverCleanupRef = useRef(null);
+  const onEdgeHover = useCallback(
+    (event, edge) => {
+      if (valuePopupTrigger !== "hover") {
+        return;
+      }
+      if (edgeHoverTimerRef.current) {
+        clearTimeout(edgeHoverTimerRef.current);
+      }
+      if (edgeHoverCleanupRef.current) {
+        edgeHoverCleanupRef.current();
+      }
+      const position = { x: event.clientX, y: event.clientY };
+      const closeDistance = popupCloseDistance(event);
+      const target = { edge_id: edge.id };
+      const cleanup = () => {
+        if (edgeHoverTimerRef.current) {
+          clearTimeout(edgeHoverTimerRef.current);
+          edgeHoverTimerRef.current = null;
+        }
+        if (edgeHoverCleanupRef.current === cleanup) {
+          edgeHoverCleanupRef.current = null;
+        }
+        document.removeEventListener("pointermove", onPointerMove, true);
+      };
+      const onPointerMove = (moveEvent) => {
+        const dx = moveEvent.clientX - position.x;
+        const dy = moveEvent.clientY - position.y;
+        if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
+          return;
+        }
+        if (dx * dx + dy * dy >= closeDistance * closeDistance) {
+          schedulePopupClose(() => {
+            sendPatch({ type: "edge_unhovered", ...target });
+            cleanup();
+          });
+        }
+      };
+      edgeHoverCleanupRef.current = cleanup;
+      edgeHoverTimerRef.current = setTimeout(() => {
+        edgeHoverTimerRef.current = null;
+        sendPatch({ type: "edge_hovered", ...target, position });
+        document.addEventListener("pointermove", onPointerMove, true);
+      }, hoverDelay);
+    },
+    [sendPatch, valuePopupTrigger, hoverDelay],
+  );
+
+  const onEdgeHoverEnd = useCallback(
+    () => {},
+    [],
+  );
+
+  const onEdgeClick = useCallback(
+    (event, edge) => {
+      sendPatch({
+        type: "edge_clicked",
+        edge_id: edge.id,
+        position: { x: event.clientX, y: event.clientY },
+      });
+    },
+    [sendPatch],
+  );
+
   const onMoveEnd = useCallback(
     (_event, nextViewport) => {
       if (!areEqual(nextViewport, viewport)) {
@@ -792,11 +1030,17 @@ function FlowInner({
       onMoveEnd: wrap("onMoveEnd", onMoveEnd),
       onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
       onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
+      onEdgeClick: wrap("onEdgeClick", onEdgeClick),
+      onEdgeMouseEnter: wrap("onEdgeMouseEnter", onEdgeHover),
+      onEdgeMouseLeave: wrap("onEdgeMouseLeave", onEdgeHoverEnd),
       onPaneClick: wrap("onPaneClick", onPaneClick),
     };
   }, [
     handleNodesChange,
     onConnect,
+    onEdgeClick,
+    onEdgeHover,
+    onEdgeHoverEnd,
     onEdgesChange,
     onEdgesDelete,
     onMoveEnd,
@@ -847,6 +1091,8 @@ export function render({ model, view }) {
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
+  const [valuePopupTrigger] = model.useState("popup_trigger");
+  const [hoverDelay] = model.useState("popup_hover_delay");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");
@@ -857,6 +1103,8 @@ export function render({ model, view }) {
   const [viewport, setViewport] = model.useState("viewport");
   const [contextMenuPosition] = model.useState("_context_menu_position");
   const contextMenu = model.get_child("_context_menu");
+  const [valuePopupPosition] = model.useState("_value_popup_position");
+  const valuePopup = model.get_child("_value_popup");
   const selectedEditor = model.get_child("_selected_editor");
   const views = model.get_child("_views");
   const nodeEditors = model.get_child("_node_editor_views");
@@ -1064,39 +1312,23 @@ export function render({ model, view }) {
   const hydratedNodeTypes = useMemo(() => {
     const mapping = {};
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
-      mapping[typeName] = makeNodeComponent(typeName, spec, editorMode);
+      mapping[typeName] = makeNodeComponent(
+        typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay,
+      );
     });
     return mapping;
-  }, [editorMode, pyNodeTypes]);
+  }, [editorMode, pyNodeTypes, model, valuePopupTrigger, hoverDelay]);
 
   const contextMenuRef = useRef(null);
+  const valuePopupRef = useRef(null);
   const containerRef = useRef(null);
 
-  useEffect(() => {
-    if (!contextMenuPosition) return;
-    const handleClick = (event) => {
-      const el = contextMenuRef.current;
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        if (
-          event.clientX >= rect.left &&
-          event.clientX <= rect.right &&
-          event.clientY >= rect.top &&
-          event.clientY <= rect.bottom
-        ) {
-          return;
-        }
-      }
-      model.send_msg({ type: "close_context_menu" });
-    };
-    const id = requestAnimationFrame(() => {
-      document.addEventListener("mousedown", handleClick, true);
-    });
-    return () => {
-      cancelAnimationFrame(id);
-      document.removeEventListener("mousedown", handleClick, true);
-    };
-  }, [contextMenuPosition, model]);
+  // Shared outside-click dismissal for the context menu and value popup
+  // overlays: both are absolutely-positioned children the frontend renders
+  // on demand, so Python has no click event to react to when the user just
+  // wants to dismiss one without interacting with the canvas underneath.
+  useCloseOnOutsideClick(contextMenuPosition, contextMenuRef, "close_context_menu", model);
+  useCloseOnOutsideClick(valuePopupPosition, valuePopupRef, "close_value_popup", model);
 
   const hydratedEdgeTypes = useMemo(() => ({
     bezier: BezierEdge,
@@ -1177,6 +1409,8 @@ export function render({ model, view }) {
       syncMode={syncMode}
       debounceMs={debounceMs}
       viewport={viewport}
+      valuePopupTrigger={valuePopupTrigger}
+      hoverDelay={hoverDelay}
     />
   );
 
@@ -1219,6 +1453,22 @@ export function render({ model, view }) {
           }}
         >
           {contextMenu}
+        </div>
+      ) : null}
+      {valuePopup && valuePopupPosition ? (
+        <div
+          ref={valuePopupRef}
+          className="rf-value-popup"
+          onPointerEnter={enterValuePopup}
+          onPointerLeave={leaveValuePopup}
+          style={{
+            position: "absolute",
+            top: valuePopupPosition.y - (containerRef.current?.getBoundingClientRect().top ?? 0),
+            left: valuePopupPosition.x - (containerRef.current?.getBoundingClientRect().left ?? 0),
+            zIndex: 1000,
+          }}
+        >
+          {valuePopup}
         </div>
       ) : null}
     </div>

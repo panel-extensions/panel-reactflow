@@ -840,6 +840,86 @@ def test_handle_msg_node_clicked_emits_once() -> None:
     assert events[0]["node_id"] == "n1"
 
 
+def test_hover_events_emit_only_in_hover_mode() -> None:
+    flow = ReactFlow(popup_trigger="hover")
+    events: list[dict] = []
+    flow.on("handle_hovered", events.append)
+    flow._handle_msg({"type": "handle_hovered", "node_id": "n1", "handle_id": "out"})
+    assert events == [{"type": "handle_hovered", "node_id": "n1", "handle_id": "out"}]
+
+    flow.popup_trigger = "click"
+    flow._handle_msg({"type": "handle_hovered", "node_id": "n1", "handle_id": "out"})
+    assert len(events) == 1
+
+
+def test_handle_msg_handle_clicked_emits_once() -> None:
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
+    events: list[dict] = []
+    flow.on("handle_clicked", events.append)
+    flow._handle_msg(
+        {
+            "type": "handle_clicked",
+            "node_id": "n1",
+            "handle_id": "out",
+            "direction": "output",
+            "position": {"x": 12, "y": 34},
+        },
+    )
+    assert len(events) == 1
+    assert events[0]["node_id"] == "n1"
+    assert events[0]["handle_id"] == "out"
+    assert events[0]["direction"] == "output"
+    assert events[0]["position"] == {"x": 12, "y": 34}
+
+
+def test_handle_msg_handle_clicked_requires_node_id() -> None:
+    flow = ReactFlow()
+    events: list[dict] = []
+    flow.on("handle_clicked", events.append)
+    flow._handle_msg({"type": "handle_clicked", "handle_id": "out"})
+    assert events == []
+
+
+def test_handle_msg_edge_clicked_emits_once() -> None:
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}],
+    )
+    events: list[dict] = []
+    flow.on("edge_clicked", events.append)
+    flow._handle_msg({"type": "edge_clicked", "edge_id": "e1", "position": {"x": 5, "y": 6}})
+    assert len(events) == 1
+    assert events[0]["edge_id"] == "e1"
+    assert events[0]["position"] == {"x": 5, "y": 6}
+
+
+def test_show_popup_sets_content_and_position() -> None:
+    flow = ReactFlow()
+    content = pn.pane.Markdown("Value: 42")
+    flow.show_popup(content, {"x": 1, "y": 2})
+    assert flow._value_popup is content
+    assert flow._value_popup_position == {"x": 1, "y": 2}
+
+
+def test_close_popup_clears_content_and_position() -> None:
+    flow = ReactFlow()
+    flow.show_popup(pn.pane.Markdown("Value"), {"x": 1, "y": 2})
+    flow.close_popup()
+    assert flow._value_popup is None
+    assert flow._value_popup_position is None
+
+
+def test_handle_msg_close_value_popup_clears_popup() -> None:
+    flow = ReactFlow()
+    flow.show_popup(pn.pane.Markdown("Value"), {"x": 1, "y": 2})
+    flow._handle_msg({"type": "close_value_popup"})
+    assert flow._value_popup is None
+    assert flow._value_popup_position is None
+
+
 def test_handle_msg_sync_emits_once() -> None:
     flow = ReactFlow()
     events: list[dict] = []

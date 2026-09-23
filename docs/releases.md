@@ -1,15 +1,40 @@
 # Release Notes
 
-## Unreleased
+## Version 0.5.0
 
-### Bug fixes
+This release focuses on driving the graph from Python: the
+presentational properties of `Node` and `Edge` now sync to the browser
+in place, batches of changes render as a single update, and a new error
+boundary keeps a malformed graph from blanking the canvas.
 
-- **Progressive re-render when deleting multiple elements** — deleting a
-  multi-node selection removed the nodes one at a time, syncing an
-  intermediate graph to the browser per node so the nodes visibly
-  disappeared one by one. Updates triggered by a frontend message are now
-  held and combined into a single patch, and node/edge deletion assigns
-  `nodes` and `edges` once.
+### Highlights
+
+- **Error recovery** — the canvas is now wrapped in an error boundary,
+  controlled by the new `error_recovery` parameter (`"auto"` by default,
+  or `"manual"` / `"off"`). In `"auto"` mode a React render error
+  remounts the canvas, then remounts again in a view-only safe mode that
+  repairs or hides elements it cannot render (invalid positions, unknown
+  node/edge types, dangling edges, duplicate or missing ids) without
+  mutating the server-side graph. If retries are exhausted a recovery
+  panel offers *Try again*, *Reload page* and *Copy details*. Every
+  error is logged to the `panel.reactflow` logger and emitted as a
+  `client_error` event, so browser-side failures are no longer invisible
+  to the server
+  ([#70](https://github.com/panel-extensions/panel-reactflow/pull/70)).
+
+- **Base property sync** — the top-level React Flow fields on `Node` and
+  `Edge` (`label`, `type`, `style`, `className`, `draggable`,
+  `connectable`, `deletable`, ...) are now synced to the frontend, so
+  assigning `node.label = "Start (running)"` patches the browser in place
+  instead of requiring `flow.nodes` to be replaced. Parameters declared
+  on a subclass continue to sync into `data`. New `patch_node_props()`
+  and `patch_edge_props()` methods do the same for dict-based nodes and
+  edges, where passing `None` clears a field back to the CSS/theme
+  default, and new `on_props_change` hooks fire on `Node`/`Edge`
+  subclasses when the frontend changes a property. `position` and
+  `selected` remain browser-owned during drag and selection and are only
+  pushed via `patch_node_props()`
+  ([#71](https://github.com/panel-extensions/panel-reactflow/pull/71)).
 
 ### Enhancements
 
@@ -18,7 +43,18 @@
   (`flow.remove_node("n1", "n2")`) or as a sequence
   (`flow.remove_node(["n1", "n2"])`), and remove them in a single update.
   For any other batch of changes made from Python, wrap them in
-  `pn.io.hold()` to render them at once.
+  `pn.io.hold()` to render them at once
+  ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
+
+### Bug fixes
+
+- **Progressive re-render when deleting multiple elements** — deleting a
+  multi-node selection removed the nodes one at a time, syncing an
+  intermediate graph to the browser per node so the nodes visibly
+  disappeared one by one. Updates triggered by a frontend message are now
+  held and combined into a single patch, and node/edge deletion assigns
+  `nodes` and `edges` once
+  ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
 
 ## Version 0.4.1
 
