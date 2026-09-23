@@ -1593,12 +1593,6 @@ class ReactFlow(ReactComponent):
         doc="Delay in milliseconds before a hover inspection event is emitted.",
     )
 
-    popup_hover_distance = param.Number(
-        default=24,
-        bounds=(0, None),
-        doc="Pointer distance in pixels from the hover anchor before closing the popup.",
-    )
-
     top_panel = Children(default=[], doc="Children rendered in a top-center panel.")
     bottom_panel = Children(default=[], doc="Children rendered in a bottom-center panel.")
     left_panel = Children(default=[], doc="Children rendered in a center-left panel.")

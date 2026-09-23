@@ -61,6 +61,11 @@ function isInsideValuePopup(x, y) {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
 }
 
+function popupCloseDistance(event) {
+  const frame = event.currentTarget.closest(".react-flow")?.getBoundingClientRect();
+  return Math.max(48, Math.min(frame?.width ?? 0, frame?.height ?? 0) * 0.1);
+}
+
 function renderHandles(direction, handles, opts = {}) {
   const handleType = direction === "input" ? "target" : "source";
   const position = direction === "input" ? Position.Left : Position.Right;
@@ -135,7 +140,7 @@ function renderHandles(direction, handles, opts = {}) {
   });
 }
 
-function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay, hoverDistance) {
+function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data }) {
     const [toolbarOpen, toggleToolbar] = React.useState(false);
     const hoverTimerRef = useRef(null);
@@ -153,6 +158,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
           return;
         }
         const position = { x: event.clientX, y: event.clientY };
+        const closeDistance = popupCloseDistance(event);
         if (hoverTimerRef.current) {
           clearTimeout(hoverTimerRef.current);
         }
@@ -176,7 +182,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
           if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
             return;
           }
-          if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
+          if (dx * dx + dy * dy >= closeDistance * closeDistance) {
             schedulePopupClose(() => {
               model.send_msg({ type: "handle_unhovered", ...target });
               cleanup();
@@ -190,7 +196,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
           document.addEventListener("pointermove", onPointerMove, true);
         }, hoverDelay);
       },
-      [id, valuePopupTrigger, hoverDelay, hoverDistance],
+      [id, valuePopupTrigger, hoverDelay],
     );
     const onHandleClick = useCallback(
       (handleId, direction, event) => {
@@ -669,7 +675,6 @@ function FlowInner({
   viewport,
   valuePopupTrigger,
   hoverDelay,
-  hoverDistance,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -940,6 +945,7 @@ function FlowInner({
         edgeHoverCleanupRef.current();
       }
       const position = { x: event.clientX, y: event.clientY };
+      const closeDistance = popupCloseDistance(event);
       const target = { edge_id: edge.id };
       const cleanup = () => {
         if (edgeHoverTimerRef.current) {
@@ -957,7 +963,7 @@ function FlowInner({
         if (isInsideValuePopup(moveEvent.clientX, moveEvent.clientY)) {
           return;
         }
-        if (dx * dx + dy * dy >= hoverDistance * hoverDistance) {
+        if (dx * dx + dy * dy >= closeDistance * closeDistance) {
           schedulePopupClose(() => {
             sendPatch({ type: "edge_unhovered", ...target });
             cleanup();
@@ -971,7 +977,7 @@ function FlowInner({
         document.addEventListener("pointermove", onPointerMove, true);
       }, hoverDelay);
     },
-    [sendPatch, valuePopupTrigger, hoverDelay, hoverDistance],
+    [sendPatch, valuePopupTrigger, hoverDelay],
   );
 
   const onEdgeHoverEnd = useCallback(
@@ -1087,7 +1093,6 @@ export function render({ model, view }) {
   const [editorMode] = model.useState("editor_mode");
   const [valuePopupTrigger] = model.useState("popup_trigger");
   const [hoverDelay] = model.useState("popup_hover_delay");
-  const [hoverDistance] = model.useState("popup_hover_distance");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
   const [enableDelete] = model.useState("enable_delete");
@@ -1308,11 +1313,11 @@ export function render({ model, view }) {
     const mapping = {};
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
       mapping[typeName] = makeNodeComponent(
-        typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay, hoverDistance,
+        typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay,
       );
     });
     return mapping;
-  }, [editorMode, pyNodeTypes, model, valuePopupTrigger, hoverDelay, hoverDistance]);
+  }, [editorMode, pyNodeTypes, model, valuePopupTrigger, hoverDelay]);
 
   const contextMenuRef = useRef(null);
   const valuePopupRef = useRef(null);
@@ -1406,7 +1411,6 @@ export function render({ model, view }) {
       viewport={viewport}
       valuePopupTrigger={valuePopupTrigger}
       hoverDelay={hoverDelay}
-      hoverDistance={hoverDistance}
     />
   );
 

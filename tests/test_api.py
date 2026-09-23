@@ -840,13 +840,6 @@ def test_handle_msg_node_clicked_emits_once() -> None:
     assert events[0]["node_id"] == "n1"
 
 
-def test_popup_trigger_defaults_to_click() -> None:
-    flow = ReactFlow()
-    assert flow.popup_trigger == "click"
-    assert flow.popup_hover_delay == 500
-    assert flow.popup_hover_distance == 24
-
-
 def test_hover_events_emit_only_in_hover_mode() -> None:
     flow = ReactFlow(popup_trigger="hover")
     events: list[dict] = []

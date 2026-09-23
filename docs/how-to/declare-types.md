@@ -294,19 +294,22 @@ def on_edge_clicked(payload, flow):
 
 flow.on("handle_clicked", on_handle_clicked)
 flow.on("edge_clicked", on_edge_clicked)
-# Register these instead when using popup_trigger="hover".
-flow.on("handle_hovered", on_handle_clicked)
-flow.on("edge_hovered", on_edge_clicked)
 ```
 
-The popup closes itself when the user clicks elsewhere, or programmatically
-via `flow.close_popup()`. Set `popup_trigger="hover"` to require the
-pointer to dwell over a port or edge before opening the popup. The default
-`popup_hover_delay` is 500 ms; after opening, the popup remains visible
-until the pointer moves `popup_hover_distance` pixels from the hover
-anchor. Use `popup_trigger="none"` to disable the built-in inspection
-events. `panel-reactflow` only provides the interaction events and overlay;
-looking up "the current value" for a port is application-specific.
+For `popup_trigger="hover"`, register `handle_hovered` and `edge_hovered` to
+show the popup and their corresponding `handle_unhovered` and `edge_unhovered`
+events to call `flow.close_popup()`. Match the unhovered target against the
+currently displayed one so a delayed leave event does not dismiss a newer
+popup. See the runnable example below for both pairs of callbacks.
+
+The default `popup_hover_delay` is 500 ms. After opening, an unhover event is
+emitted when the pointer moves more than 10% of the shorter canvas dimension
+from the anchor (at least 48 pixels) and is not over the popup. Click-opened
+popups dismiss on outside click; either mode can dismiss programmatically via
+`flow.close_popup()`. Use
+`popup_trigger="none"` to disable the built-in inspection events.
+`panel-reactflow` only provides the interaction events and overlay; looking up
+"the current value" for a port is application-specific.
 
 For a complete runnable graph with typed port hover tooltips and popups for
 both handles and edges, run:
