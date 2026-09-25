@@ -1011,6 +1011,7 @@ function FlowInner({
       while (edgesRef.current.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
       const newEdge = { ...connection, id: edgeId };
       const updated = addEdge(newEdge, edgesRef.current);
+      if (updated === edgesRef.current) return;
       setEdges(updated);
       sendPatch({ type: "edge_added", edge: newEdge });
     },

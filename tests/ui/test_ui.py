@@ -171,6 +171,7 @@ def test_viewport_syncs_to_python(page):
 
 
 def test_connecting_edge_updates_python(page):
+    """Repeated drags without duplicate validation keep browser and Python edges in sync."""
     flow = _make_flow(include_edge=False)
     serve_component(page, flow)
 
@@ -184,6 +185,11 @@ def test_connecting_edge_updates_python(page):
 
     wait_until(_edge_added, timeout=8000)
     expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+    source_handle.drag_to(target_handle)
+    page.wait_for_timeout(300)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+    assert len(flow.edges) == 1
 
 
 def test_frontend_connection_validation_filters_targets(page):
