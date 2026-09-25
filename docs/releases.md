@@ -2,12 +2,29 @@
 
 ## Version 0.5.0
 
-This release focuses on driving the graph from Python: the
-presentational properties of `Node` and `Edge` now sync to the browser
-in place, batches of changes render as a single update, and a new error
-boundary keeps a malformed graph from blanking the canvas.
+This release adds port and edge value inspection and connection checks
+for interactive graph editing. `Node` and `Edge` properties now sync to
+the browser in place, batches of changes render as a single update, and
+an error boundary keeps a malformed graph from blanking the canvas.
 
 ### Highlights
+
+- **Port and edge inspection**: handle and edge click events can open a
+  Panel popup with `flow.show_popup(content, position)`. Set
+  `popup_trigger="hover"` to use hover events instead; use
+  `flow.close_popup()` to dismiss it. Applications supply the value to
+  display, and `examples/port_value_inspection.py` shows both interactions
+  ([#74](https://github.com/panel-extensions/panel-reactflow/pull/74)).
+
+- **Connection validation**: opt-in browser policies reject connections
+  with the wrong direction or handle type, full inputs, duplicate edges,
+  and cycles. Register Python rules with `add_connection_validator()` to
+  show rejection reasons on candidate handles during a drag. Python
+  validators check interactive drags only; they do not restrict
+  `flow.add_edge()` or direct changes to `flow.edges`. See
+  [Validate Connections](how-to/validate-connections.md) and
+  `examples/connection_validation.py`
+  ([#75](https://github.com/panel-extensions/panel-reactflow/pull/75)).
 
 - **Error recovery** — the canvas is now wrapped in an error boundary,
   controlled by the new `error_recovery` parameter (`"auto"` by default,
