@@ -269,8 +269,9 @@ class NodeType:
     inputs : list of str or dict, optional
         List of input port definitions. Each entry can be a plain string
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
-        and ``"type"`` keys. When a label and/or type is provided it renders
-        as a tooltip on hover, e.g. ``"Raw data input (DataFrame)"``.
+        and ``"type"`` keys. An optional ``"maxConnections"`` integer limits
+        connections when ``connection_validation["capacity"]`` is enabled.
+        Labels and types render as tooltips on hover.
     outputs : list of str or dict, optional
         List of output port definitions. Each entry can be a plain string
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
@@ -361,8 +362,8 @@ class NodeType:
     type: str
     label: str | None = None
     schema: Any = None
-    inputs: list[str | dict[str, str]] | None = None
-    outputs: list[str | dict[str, str]] | None = None
+    inputs: list[str | dict[str, Any]] | None = None
+    outputs: list[str | dict[str, Any]] | None = None
     input_connectable: bool = True
     input_connectable_start: bool = True
     input_connectable_end: bool = True
@@ -1525,6 +1526,8 @@ class ReactFlow(ReactComponent):
     edges = param.List(default=[], doc="Canonical list of edge dictionaries or Edge instances.")
     node_types = param.Dict(default={}, doc="Node type descriptors keyed by type name.")
     edge_types = param.Dict(default={}, doc="Edge type descriptors keyed by type name.")
+    connection_validation = param.Dict(default={}, doc="Opt-in frontend connection policies (direction, cycles, duplicates, types, capacity).")
+    has_connection_validators = param.Boolean(default=False, doc="Whether Python connection validators are registered.")
 
     node_editors = param.Dict(default={}, doc="Node editor factories keyed by type name.", precedence=-1)
     edge_editors = param.Dict(default={}, doc="Edge editor factories keyed by type name.", precedence=-1)
@@ -1645,6 +1648,7 @@ class ReactFlow(ReactComponent):
             params["edges"] = [ReactFlow._coerce_edge(edge) for edge in params["edges"]]
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
+        self._connection_validators: list[Callable] = []
         self.param.watch(self._sync_instance_flow_refs, ["nodes", "edges"])
         self.param.watch(self._normalize_nodes, ["nodes"])
         self.param.watch(self._normalize_edges, ["edges"])
@@ -2448,6 +2452,8 @@ class ReactFlow(ReactComponent):
 
     def _process_msg(self, msg: dict[str, Any]) -> None:
         match msg.get("type"):
+            case "connection_validation_requested":
+                self._validate_connection_request(msg)
             case "sync":
                 nodes = msg.get("nodes")
                 edges = msg.get("edges")
@@ -2541,6 +2547,60 @@ class ReactFlow(ReactComponent):
                 self._handle_client_error(msg)
             case _:
                 return
+
+    def add_connection_validator(self, callback: Callable) -> None:
+        """Register a validator returning None to allow or a reason to reject.
+
+        Callbacks accept either a connection payload or (payload, flow).
+        They run in registration order for each candidate during a drag.
+        """
+        if not callable(callback):
+            raise TypeError("Connection validator must be callable.")
+        self._connection_validators.append(callback)
+        self.has_connection_validators = True
+
+    def remove_connection_validator(self, callback: Callable) -> None:
+        """Unregister a previously added connection validator."""
+        self._connection_validators.remove(callback)
+        self.has_connection_validators = bool(self._connection_validators)
+
+    def _validate_connection_request(self, msg: dict[str, Any]) -> None:
+        node_id = msg["node_id"]
+        handle_id = msg["handle_id"]
+        handle_type = msg["handle_type"]
+        opposite_type = "target" if handle_type == "source" else "source"
+        port_key = "inputs" if opposite_type == "target" else "outputs"
+        results = []
+        for node in self.nodes:
+            candidate_id = self._node_id(node)
+            node_type = self.node_types.get(self._node_type(node), {})
+            handles = node_type.get(port_key)
+            if handles is None:
+                handles = [None]
+            for handle in handles:
+                candidate_handle = handle.get("id") if isinstance(handle, dict) else handle
+                if handle_type == "source":
+                    payload = {"source": node_id, "target": candidate_id, "sourceHandle": handle_id, "targetHandle": candidate_handle}
+                else:
+                    payload = {"source": candidate_id, "target": node_id, "sourceHandle": candidate_handle, "targetHandle": handle_id}
+                reason = None
+                for callback in self._connection_validators:
+                    try:
+                        if len(inspect.signature(callback).parameters) == 2:
+                            reason = callback(payload, self)
+                        else:
+                            reason = callback(payload)
+                        if reason is not None and not isinstance(reason, str):
+                            reason = "Connection validator must return None or a reason string."
+                        elif reason == "":
+                            reason = "Connection rejected."
+                    except Exception as exc:
+                        _LOGGER.exception("Connection validator failed")
+                        reason = str(exc) or "Connection validator failed."
+                    if reason is not None:
+                        break
+                results.append({"node_id": candidate_id, "handle_id": candidate_handle, "handle_type": opposite_type, "reason": reason})
+        self._send_msg({"type": "connection_validation_result", "request_id": msg["request_id"], "results": results})
 
     def _handle_client_error(self, msg: dict[str, Any]) -> None:
         """Log a client-side error reported by the frontend and re-emit it.

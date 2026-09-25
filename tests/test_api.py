@@ -463,6 +463,185 @@ def _two_node_flow(**params) -> ReactFlow:
     )
 
 
+def test_connection_validator_registration_and_policy_sync() -> None:
+    """Registration controls the synced hook flag; policies remain independently configurable."""
+    policy = {"direction": True, "cycles": True, "duplicates": False, "types": True, "capacity": True}
+    flow = ReactFlow(connection_validation=policy)
+    first = lambda payload: None
+    second = lambda payload, flow: None
+
+    assert flow.has_connection_validators is False
+    assert flow._process_param_change({"connection_validation": flow.connection_validation})["connection_validation"] == policy
+    assert flow._process_param_change({"has_connection_validators": False})["has_connection_validators"] is False
+    flow.add_connection_validator(first)
+    flow.add_connection_validator(second)
+    assert flow.has_connection_validators is True
+    flow.remove_connection_validator(first)
+    assert flow.has_connection_validators is True
+    flow.remove_connection_validator(second)
+    assert flow.has_connection_validators is False
+    with pytest.raises(TypeError, match="callable"):
+        flow.add_connection_validator(None)
+
+
+def test_connection_validator_flag_syncs_to_model(document, comm) -> None:
+    """The browser receives both the registration flag and opt-in policy updates."""
+    flow = ReactFlow()
+    model = flow.get_root(document, comm=comm)
+    assert model.data.has_connection_validators is False
+    assert model.data.connection_validation == {}
+
+    def validate(payload):
+        return None
+
+    flow.add_connection_validator(validate)
+    flow.connection_validation = {"cycles": True}
+    assert model.data.has_connection_validators is True
+    assert model.data.connection_validation == {"cycles": True}
+    flow.remove_connection_validator(validate)
+    assert model.data.has_connection_validators is False
+
+
+def test_connection_validation_source_drag_includes_all_target_handles() -> None:
+    """A source drag checks target ports on every node, including itself and defaults."""
+    flow = ReactFlow(
+        nodes=[
+            Node(id="start", type="typed"),
+            {"id": "plain", "type": "panel"},
+            {"id": "empty", "type": "empty"},
+        ],
+        node_types={
+            "typed": NodeType(type="typed", inputs=["in", {"id": "other", "maxConnections": 2}]),
+            "panel": {"inputs": None, "outputs": None},
+            "empty": NodeType(type="empty", inputs=[]),
+        },
+    )
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 12, "node_id": "start", "handle_id": "out", "handle_type": "source"})
+
+    assert msgs == [
+        {
+            "type": "connection_validation_result",
+            "request_id": 12,
+            "results": [
+                {"node_id": "start", "handle_id": "in", "handle_type": "target", "reason": None},
+                {"node_id": "start", "handle_id": "other", "handle_type": "target", "reason": None},
+                {"node_id": "plain", "handle_id": None, "handle_type": "target", "reason": None},
+            ],
+        }
+    ]
+
+
+def test_connection_validation_reverse_drag_passes_oriented_payload() -> None:
+    """A target drag builds canonical source-to-target payloads for candidate outputs."""
+    flow = ReactFlow(
+        nodes=[{"id": "start", "type": "typed"}, {"id": "plain"}, {"id": "empty", "type": "empty"}],
+        node_types={"typed": NodeType(type="typed", outputs=["out", {"id": "other"}]), "empty": NodeType(type="empty", outputs=[])},
+    )
+    seen = []
+
+    def validate(payload, graph):
+        assert graph is flow
+        seen.append(payload.copy())
+        return None
+
+    flow.add_connection_validator(validate)
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 13, "node_id": "start", "handle_id": "in", "handle_type": "target"})
+
+    assert seen == [
+        {"source": "start", "target": "start", "sourceHandle": "out", "targetHandle": "in"},
+        {"source": "start", "target": "start", "sourceHandle": "other", "targetHandle": "in"},
+        {"source": "plain", "target": "start", "sourceHandle": None, "targetHandle": "in"},
+    ]
+    assert msgs == [
+        {
+            "type": "connection_validation_result",
+            "request_id": 13,
+            "results": [
+                {"node_id": "start", "handle_id": "out", "handle_type": "source", "reason": None},
+                {"node_id": "start", "handle_id": "other", "handle_type": "source", "reason": None},
+                {"node_id": "plain", "handle_id": None, "handle_type": "source", "reason": None},
+            ],
+        }
+    ]
+
+
+def test_connection_validation_rejection_and_callback_order() -> None:
+    """The first rejecting hook supplies the reason; later hooks skip only that candidate."""
+    flow = _two_node_flow()
+    seen = []
+
+    def reject_self(payload):
+        seen.append(("first", payload["target"]))
+        return "No loops" if payload["source"] == payload["target"] else None
+
+    def reject_other(payload, graph):
+        assert graph is flow
+        seen.append(("second", payload["target"]))
+        return "No n2" if payload["target"] == "n2" else None
+
+    flow.add_connection_validator(reject_self)
+    flow.add_connection_validator(reject_other)
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 14, "node_id": "n1", "handle_id": None, "handle_type": "source"})
+
+    assert seen == [("first", "n1"), ("first", "n2"), ("second", "n2")]
+    assert [result["reason"] for result in msgs[0]["results"]] == ["No loops", "No n2"]
+
+
+def test_empty_validator_reason_still_rejects() -> None:
+    flow = _two_node_flow()
+    flow.add_connection_validator(lambda payload: "")
+    msgs = _capture_msgs(flow)
+
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 18, "node_id": "n1", "handle_id": None, "handle_type": "source"})
+
+    assert all(result["reason"] == "Connection rejected." for result in msgs[0]["results"])
+
+
+def test_connection_validators_only_run_on_drag_requests() -> None:
+    """Normal edge additions do not call connection validators or emit validation replies."""
+    flow = _two_node_flow()
+    seen = []
+
+    def validate(payload):
+        seen.append(payload)
+        return "blocked"
+
+    flow.add_connection_validator(validate)
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "edge_added", "edge": {"id": "e1", "source": "n1", "target": "n2"}})
+
+    assert len(flow.edges) == 1
+    assert seen == []
+    assert msgs == []
+
+
+@pytest.mark.parametrize("error", [ValueError("broken"), ValueError("")])
+def test_connection_validation_hook_errors_fail_closed(error, caplog) -> None:
+    """An exception rejects a candidate and still produces a response for every handle."""
+    flow = _two_node_flow()
+
+    def raises(payload):
+        raise error
+
+    flow.add_connection_validator(raises)
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 15, "node_id": "n1", "handle_id": None, "handle_type": "source"})
+
+    assert [result["reason"] for result in msgs[0]["results"]] == [str(error) or "Connection validator failed."] * 2
+    assert "Connection validator failed" in caplog.text
+
+
+def test_connection_validation_no_candidates_still_replies() -> None:
+    """Empty port lists produce an empty correlated response without invoking hooks."""
+    flow = ReactFlow(nodes=[{"id": "n1", "type": "empty"}], node_types={"empty": NodeType(type="empty", inputs=[])})
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "connection_validation_requested", "request_id": 16, "node_id": "n1", "handle_id": None, "handle_type": "source"})
+    assert msgs == [{"type": "connection_validation_result", "request_id": 16, "results": []}]
+
+
 def test_node_base_param_change_patches_props() -> None:
     node = Node(id="n1", position={"x": 0, "y": 0}, label="A")
     flow = ReactFlow(nodes=[node])

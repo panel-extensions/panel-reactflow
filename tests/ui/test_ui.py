@@ -1,6 +1,10 @@
 """UI tests for ReactFlow using Playwright."""
 
 import re
+import runpy
+import threading
+import time
+from pathlib import Path
 
 import panel as pn
 import panel.models.jsoneditor  # noqa
@@ -180,6 +184,233 @@ def test_connecting_edge_updates_python(page):
 
     wait_until(_edge_added, timeout=8000)
     expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+
+def test_frontend_connection_validation_filters_targets(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="wrong", type="wrong", label="Wrong", position={"x": 260, "y": 0}).to_dict(),
+            NodeSpec(id="right", type="right", label="Right", position={"x": 260, "y": 180}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=[{"id": "out", "type": "Text"}]),
+            "wrong": NodeType(type="wrong", inputs=[{"id": "in", "type": "Number"}]),
+            "right": NodeType(type="right", inputs=[{"id": "in", "type": "text", "maxConnections": 1}]),
+        },
+        connection_validation={"direction": True, "types": True, "capacity": True},
+        width=750,
+        height=500,
+    )
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    wrong = _node_locator(page, "Wrong").locator(".react-flow__handle-left")
+    right = _node_locator(page, "Right").locator(".react-flow__handle-left")
+
+    source.drag_to(wrong)
+    expect(page.locator(".react-flow__edge")).to_have_count(0)
+    assert flow.edges == []
+
+    source.drag_to(right)
+    wait_until(lambda: len(flow.edges) == 1, timeout=8000)
+    source.drag_to(right)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+    assert len(flow.edges) == 1
+
+
+def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", type="step", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", type="step", label="B", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
+        connection_validation={"direction": True, "cycles": True, "duplicates": True},
+        width=650,
+        height=350,
+    )
+    serve_component(page, flow)
+    output_a = _node_locator(page, "A").locator(".react-flow__handle-right")
+    input_a = _node_locator(page, "A").locator(".react-flow__handle-left")
+    output_b = _node_locator(page, "B").locator(".react-flow__handle-right")
+    input_b = _node_locator(page, "B").locator(".react-flow__handle-left")
+
+    output_a.drag_to(input_b)
+    wait_until(lambda: len(flow.edges) == 1, timeout=8000)
+    output_a.drag_to(input_b)
+    output_b.drag_to(input_a)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+    assert len(flow.edges) == 1
+
+
+def test_frontend_validation_supports_multiple_ports_between_nodes(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="target", type="consumer", label="Target", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=["a", "b"]),
+            "consumer": NodeType(type="consumer", inputs=["a", "b"]),
+        },
+        connection_validation={"direction": True, "duplicates": True},
+        width=650,
+        height=350,
+    )
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    target = _node_locator(page, "Target").locator(".react-flow__handle-left")
+
+    source.nth(0).drag_to(target.nth(0))
+    wait_until(lambda: len(flow.edges) == 1, timeout=8000)
+    source.nth(1).drag_to(target.nth(1))
+    wait_until(lambda: len(flow.edges) == 2, timeout=8000)
+    assert {edge["id"] for edge in flow.edges} == {"source->target", "source->target:1"}
+
+
+def test_disabled_handle_end_is_not_highlighted_as_valid(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="sink", type="consumer", label="Sink", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=["out"], output_connectable_end=False),
+            "consumer": NodeType(type="consumer", inputs=["in"], input_connectable_end=False),
+        },
+        connection_validation={"direction": True},
+        width=650,
+        height=350,
+    )
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    sink = _node_locator(page, "Sink").locator(".react-flow__handle-left")
+
+    for origin, destination in ((source, sink), (sink, source)):
+        box = origin.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2 + 25, box["y"] + box["height"] / 2)
+        expect(destination).to_have_class(re.compile("rf-handle-invalid"))
+        hint = destination.get_attribute("title") or destination.get_attribute("data-tooltip")
+        assert hint == "Handle cannot accept connections"
+        page.mouse.up()
+
+
+def test_python_connection_validation_filters_targets(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="wrong", type="consumer", label="Wrong", position={"x": 260, "y": 0}).to_dict(),
+            NodeSpec(id="right", type="consumer", label="Right", position={"x": 260, "y": 180}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=["out"]),
+            "consumer": NodeType(type="consumer", inputs=["in"]),
+        },
+        width=750,
+        height=500,
+    )
+    flow.add_connection_validator(lambda payload, _flow: "Blocked by Python" if payload["target"] == "wrong" else None)
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    wrong = _node_locator(page, "Wrong").locator(".react-flow__handle-left")
+    right = _node_locator(page, "Right").locator(".react-flow__handle-left")
+
+    box = source.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 25, box["y"] + box["height"] / 2)
+    expect(wrong).to_have_class(re.compile("rf-handle-invalid"))
+    expect(right).to_have_class(re.compile("rf-handle-valid"))
+    expect(wrong).to_have_attribute("data-tooltip", "Blocked by Python")
+    page.mouse.up()
+
+    source.drag_to(wrong)
+    expect(page.locator(".react-flow__edge")).to_have_count(0)
+    box = right.bounding_box()
+    destination = source.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 - 25, box["y"] + box["height"] / 2)
+    expect(source).to_have_class(re.compile("rf-handle-valid"))
+    page.mouse.move(destination["x"] + destination["width"] / 2, destination["y"] + destination["height"] / 2)
+    page.mouse.up()
+    wait_until(lambda: len(flow.edges) == 1, timeout=8000)
+    assert flow.edges[0]["source"] == "source" and flow.edges[0]["target"] == "right"
+
+
+def test_late_python_validation_reply_does_not_reopen_drag(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="target", label="Target", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        width=650,
+        height=350,
+    )
+
+    completed = threading.Event()
+
+    def validate(payload):
+        if payload["target"] == "target":
+            time.sleep(3.5)
+            completed.set()
+
+    flow.add_connection_validator(validate)
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    target = _node_locator(page, "Target").locator(".react-flow__handle-left")
+    origin = source.bounding_box()
+    page.mouse.move(origin["x"] + origin["width"] / 2, origin["y"] + origin["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(origin["x"] + origin["width"] / 2 + 25, origin["y"] + origin["height"] / 2)
+    expect(page.locator(".rf-validation-status")).to_have_text("Connection validation timed out")
+    wait_until(completed.is_set, timeout=8000)
+    page.wait_for_timeout(300)
+    expect(target).to_have_attribute("title", "Connection validation timed out", timeout=8000)
+    destination = target.bounding_box()
+    page.mouse.move(destination["x"] + destination["width"] / 2, destination["y"] + destination["height"] / 2)
+    page.mouse.up()
+    expect(page.locator(".react-flow__edge")).to_have_count(0)
+    assert flow.edges == []
+
+
+def test_connection_validation_demo(page):
+    demo_path = Path(__file__).resolve().parents[2] / "examples" / "connection_validation.py"
+    demo = runpy.run_path(str(demo_path))["demo"]
+    serve_component(page, demo)
+
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    number = _node_locator(page, "Number").locator(".react-flow__handle-right")
+    transform = _node_locator(page, "Transform").locator(".react-flow__handle-left")
+    publish = _node_locator(page, "Publish").locator(".react-flow__handle-left")
+
+    def start_drag(handle):
+        box = handle.bounding_box()
+        page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        page.mouse.down()
+        page.mouse.move(box["x"] + box["width"] / 2 + 25, box["y"] + box["height"] / 2)
+
+    start_drag(number)
+    expect(transform).to_have_class(re.compile("rf-handle-invalid"))
+    assert "Type mismatch" in transform.get_attribute("data-tooltip")
+    page.mouse.up()
+
+    start_drag(source)
+    expect(publish).to_have_attribute("data-tooltip", "Publish requires text from Transform, not Source.")
+    box = publish.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.up()
+    assert demo._flow.edges == []
+
+    start_drag(source)
+    expect(transform).to_have_class(re.compile("rf-handle-valid"))
+    box = transform.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.up()
+    wait_until(lambda: len(demo._flow.edges) == 1, timeout=8000)
+    expect(page.get_by_text("Connected: source.text to transform.text")).to_be_visible()
 
 
 def test_selection_syncs_between_ui_and_python(page):

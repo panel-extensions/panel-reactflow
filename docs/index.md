@@ -62,6 +62,7 @@ flow.servable()
 - [Define Nodes & Edges](how-to/define-nodes-edges.md)
 - [Declare Node & Edge Types](how-to/declare-types.md)
 - [Control Handle Connectivity](how-to/control-handle-connectivity.md) — restrict connections
+- [Validate Connections](how-to/validate-connections.md) — check types, capacity, cycles, and application rules
 - [Define Editors](how-to/define-editors.md) — node *and* edge editors
 - [Embed Views in Nodes](how-to/embed-views-in-nodes.md)
 - [Style Nodes & Edges](how-to/style-nodes-edges.md)
