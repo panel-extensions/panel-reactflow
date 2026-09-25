@@ -22,7 +22,65 @@ const RETRY_DELAY_MS = 100;
 // How long a remounted flow must survive before its retry budget is refilled.
 const HEALTHY_RESET_MS = 5000;
 const HOVER_CLOSE_GRACE_MS = 150;
+const CONNECTION_VALIDATION_TIMEOUT_MS = 3000;
 const popupHoverState = { inside: false, closeTimers: new Set() };
+const ConnectionValidationContext = React.createContext(null);
+
+function connectionKey(nodeId, handleId, handleType) {
+  return JSON.stringify([nodeId, handleId ?? null, handleType]);
+}
+
+function getHandle(spec, direction, id) {
+  const handles = spec?.[direction === "source" ? "outputs" : "inputs"];
+  if (handles == null) return id == null ? {} : null;
+  return handles.find((handle) => (typeof handle === "string" ? handle : handle.id) === id) ?? null;
+}
+
+function localConnectionReason(connection, nodes, edges, nodeTypeSpecs, policy) {
+  if (!Object.values(policy || {}).some(Boolean)) return null;
+  const source = nodes.find((node) => node.id === connection.source);
+  const target = nodes.find((node) => node.id === connection.target);
+  if (!source || !target) return "Node not found";
+  const sourceHandle = getHandle(nodeTypeSpecs[source.type], "source", connection.sourceHandle);
+  const targetHandle = getHandle(nodeTypeSpecs[target.type], "target", connection.targetHandle);
+  if (policy.direction && (!sourceHandle || !targetHandle)) return "Connect an output to an input";
+  if (policy.cycles) {
+    if (source.id === target.id) return "Connection would create a cycle";
+    const successors = new Map();
+    edges.forEach((edge) => {
+      if (!successors.has(edge.source)) successors.set(edge.source, []);
+      successors.get(edge.source).push(edge.target);
+    });
+    const visited = new Set();
+    const queue = [target.id];
+    while (queue.length) {
+      const current = queue.pop();
+      if (current === source.id) return "Connection would create a cycle";
+      if (visited.has(current)) continue;
+      visited.add(current);
+      queue.push(...(successors.get(current) || []));
+    }
+  }
+  if (policy.duplicates && edges.some((edge) =>
+    edge.source === source.id && edge.target === target.id &&
+    (edge.sourceHandle ?? null) === (connection.sourceHandle ?? null) &&
+    (edge.targetHandle ?? null) === (connection.targetHandle ?? null)
+  )) return "Connection already exists";
+  if (policy.capacity && targetHandle && typeof targetHandle === "object") {
+    const limit = targetHandle.maxConnections;
+    if (Number.isInteger(limit) && limit > 0 &&
+      edges.filter((edge) => edge.target === target.id && (edge.targetHandle ?? null) === (connection.targetHandle ?? null)).length >= limit
+    ) return "Input already has a connection";
+  }
+  if (policy.types && sourceHandle && targetHandle && typeof sourceHandle === "object" && typeof targetHandle === "object") {
+    const sourceType = sourceHandle.type;
+    const targetType = targetHandle.type;
+    if (sourceType && targetType && String(sourceType).toLowerCase() !== String(targetType).toLowerCase()) {
+      return `Type mismatch: ${sourceType} → ${targetType}`;
+    }
+  }
+  return null;
+}
 
 function schedulePopupClose(callback) {
   const timer = setTimeout(() => {
@@ -72,6 +130,9 @@ function renderHandles(direction, handles, opts = {}) {
   const tooltipPos = direction === "input" ? "left" : "right";
   const onHandleClick = opts.onHandleClick;
   const onHandleHover = opts.onHandleHover;
+  const validation = opts.validation;
+  const cannotReceive = validation?.drag && validation.drag.handleType !== handleType &&
+    (opts.connectable === false || opts.connectableEnd === false);
 
   const makeHoverHandler = (id, eventType) =>
     onHandleHover
@@ -106,6 +167,7 @@ function renderHandles(direction, handles, opts = {}) {
   }
   // null/undefined → default handle
   if (!handles?.length) {
+    const reason = cannotReceive ? "Handle cannot accept connections" : validation?.reasonForHandle(opts.nodeId, null, handleType);
     return (
       <Handle
         type={handleType}
@@ -113,6 +175,9 @@ function renderHandles(direction, handles, opts = {}) {
         onClick={makeClickHandler(null)}
         onPointerEnter={makeHoverHandler(null, "enter")}
         onPointerLeave={makeHoverHandler(null, "leave")}
+        className={reason === "Checking connections..." ? "rf-handle-pending" : reason ? "rf-handle-invalid" : validation?.drag && validation.drag.handleType !== handleType ? "rf-handle-valid" : undefined}
+        title={reason || undefined}
+        aria-label={reason || `${handleType} handle`}
         {...handleProps}
       />
     );
@@ -123,6 +188,7 @@ function renderHandles(direction, handles, opts = {}) {
     const label = typeof handle === "object" ? handle.label : undefined;
     const dtype = typeof handle === "object" ? handle.type : undefined;
     const tooltip = label && dtype ? `${label} (${dtype})` : label || dtype;
+    const reason = cannotReceive ? "Handle cannot accept connections" : validation?.reasonForHandle(opts.nodeId, id, handleType);
     return (
       <Handle
         key={`${direction}-${id}`}
@@ -130,7 +196,9 @@ function renderHandles(direction, handles, opts = {}) {
         type={handleType}
         position={position}
         style={{ top: `${(index + 1) * spacing}%` }}
-        {...(tooltip ? {"data-tooltip": tooltip, "data-tooltip-pos": tooltipPos} : {})}
+        {...(reason || tooltip ? {"data-tooltip": reason || tooltip, "data-tooltip-pos": tooltipPos} : {})}
+        className={reason === "Checking connections..." ? "rf-handle-pending" : reason ? "rf-handle-invalid" : validation?.drag && validation.drag.handleType !== handleType ? "rf-handle-valid" : undefined}
+        aria-label={reason || tooltip || id}
         onClick={makeClickHandler(id)}
         onPointerEnter={makeHoverHandler(id, "enter")}
         onPointerLeave={makeHoverHandler(id, "leave")}
@@ -141,7 +209,8 @@ function renderHandles(direction, handles, opts = {}) {
 }
 
 function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
-  return function NodeComponent({ id, data }) {
+  return function NodeComponent({ id, data, isConnectable }) {
+    const validation = React.useContext(ConnectionValidationContext);
     const [toolbarOpen, toggleToolbar] = React.useState(false);
     const hoverTimerRef = useRef(null);
     const hoverCleanupRef = useRef(null);
@@ -330,7 +399,9 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
           </button>
         )}
         {renderHandles("input", spec.inputs, {
-          connectable: spec.inputConnectable,
+          nodeId: id,
+          validation,
+          connectable: isConnectable === false ? false : spec.inputConnectable,
           connectableStart: spec.inputConnectableStart,
           connectableEnd: spec.inputConnectableEnd,
           onHandleClick,
@@ -346,7 +417,9 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
           </div>
         )}
         {renderHandles("output", spec.outputs, {
-          connectable: spec.outputConnectable,
+          nodeId: id,
+          validation,
+          connectable: isConnectable === false ? false : spec.outputConnectable,
           connectableStart: spec.outputConnectableStart,
           connectableEnd: spec.outputConnectableEnd,
           onHandleClick,
@@ -660,11 +733,14 @@ function FlowInner({
   onPaneClick,
   defaultEdgeOptions,
   nodeTypes,
+  nodeTypeSpecs,
   edgeTypes,
   nodeEditors,
   colorMode,
   editable,
   enableConnect,
+  connectionValidation,
+  hasConnectionValidators,
   enableDelete,
   enableMultiselect,
   maxZoom,
@@ -685,10 +761,87 @@ function FlowInner({
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport } = useReactFlow();
+  const [drag, setDrag] = useState(null);
+  const [validationResults, setValidationResults] = useState(null);
+  const dragRef = useRef(null);
+  const resultsRef = useRef(null);
+  const validationTimerRef = useRef(null);
+  const requestIdRef = useRef(0);
+
+  const candidateReason = useCallback((connection) => {
+    const local = localConnectionReason(connection, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation);
+    if (local) return local;
+    if (!hasConnectionValidators) return null;
+    const current = dragRef.current;
+    if (!current) return "Connection validation unavailable";
+    const result = resultsRef.current;
+    if (!result || result.requestId !== current.requestId) return "Checking connections...";
+    if (result.error) return result.error;
+    const end = current.handleType === "source"
+      ? connectionKey(connection.target, connection.targetHandle, "target")
+      : connectionKey(connection.source, connection.sourceHandle, "source");
+    if (!result.reasons.has(end)) return "Connection not validated";
+    return result.reasons.get(end) === "" ? "Connection rejected" : result.reasons.get(end);
+  }, [connectionValidation, hasConnectionValidators, nodeTypeSpecs]);
+
+  const reasonForHandle = useCallback((nodeId, handleId, handleType) => {
+    if (!drag || drag.handleType === handleType) return null;
+    const connection = drag.handleType === "source"
+      ? { source: drag.nodeId, sourceHandle: drag.handleId, target: nodeId, targetHandle: handleId }
+      : { source: nodeId, sourceHandle: handleId, target: drag.nodeId, targetHandle: drag.handleId };
+    return candidateReason(connection);
+  }, [candidateReason, drag, validationResults]);
+
+  const onConnectStart = useCallback((_event, { nodeId, handleId, handleType }) => {
+    if (!hasConnectionValidators && !Object.values(connectionValidation || {}).some(Boolean)) return;
+    const next = { nodeId, handleId: handleId ?? null, handleType, requestId: ++requestIdRef.current };
+    dragRef.current = next;
+    resultsRef.current = null;
+    setDrag(next);
+    setValidationResults(null);
+    if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
+    if (hasConnectionValidators) {
+      model.send_msg({
+        type: "connection_validation_requested", request_id: next.requestId,
+        node_id: nodeId, handle_id: handleId ?? null, handle_type: handleType,
+      });
+      validationTimerRef.current = setTimeout(() => {
+        if (dragRef.current?.requestId !== next.requestId) return;
+        dragRef.current = { ...dragRef.current, expired: true };
+        const failure = { requestId: next.requestId, reasons: new Map(), error: "Connection validation timed out" };
+        resultsRef.current = failure;
+        setValidationResults(failure);
+      }, CONNECTION_VALIDATION_TIMEOUT_MS);
+    }
+  }, [connectionValidation, hasConnectionValidators, model]);
+
+  const onConnectEnd = useCallback(() => {
+    if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
+    validationTimerRef.current = null;
+    dragRef.current = null;
+    resultsRef.current = null;
+    setDrag(null);
+    setValidationResults(null);
+  }, []);
 
   useEffect(() => {
     const handler = (msg) => {
       if (!msg || typeof msg !== "object") {
+        return;
+      }
+      if (msg.type === "connection_validation_result") {
+        if (dragRef.current?.requestId !== msg.request_id || dragRef.current.expired) return;
+        if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
+        validationTimerRef.current = null;
+        const result = {
+          requestId: msg.request_id,
+          reasons: new Map((msg.results || []).map((entry) => [
+            connectionKey(entry.node_id, entry.handle_id, entry.handle_type), entry.reason ?? null,
+          ])),
+          error: msg.error || null,
+        };
+        resultsRef.current = result;
+        setValidationResults(result);
         return;
       }
       if (msg.type === "patch_node_data") {
@@ -749,6 +902,10 @@ function FlowInner({
       model.off("msg:custom", handler);
     };
   }, [model, setEdges, setNodes]);
+
+  useEffect(() => () => {
+    if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
+  }, []);
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -845,16 +1002,20 @@ function FlowInner({
 
   const onConnect = useCallback(
     (connection) => {
-      if (!enableConnect) {
+      if (!enableConnect || candidateReason(connection)) {
         return;
       }
-      const edgeId = connection.id || `${connection.source}->${connection.target}`;
+      const baseId = connection.id || `${connection.source}->${connection.target}`;
+      let edgeId = baseId;
+      let suffix = 1;
+      while (edgesRef.current.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
       const newEdge = { ...connection, id: edgeId };
       const updated = addEdge(newEdge, edgesRef.current);
+      if (updated === edgesRef.current) return;
       setEdges(updated);
       sendPatch({ type: "edge_added", edge: newEdge });
     },
-    [enableConnect, sendPatch, setEdges],
+    [candidateReason, enableConnect, sendPatch, setEdges],
   );
 
   const handleNodesChange = useCallback(
@@ -1027,6 +1188,8 @@ function FlowInner({
       onNodesDelete: wrap("onNodesDelete", onNodesDelete),
       onEdgesDelete: wrap("onEdgesDelete", onEdgesDelete),
       onConnect: wrap("onConnect", onConnect),
+      onConnectStart: wrap("onConnectStart", onConnectStart),
+      onConnectEnd: wrap("onConnectEnd", onConnectEnd),
       onMoveEnd: wrap("onMoveEnd", onMoveEnd),
       onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
       onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
@@ -1038,6 +1201,8 @@ function FlowInner({
   }, [
     handleNodesChange,
     onConnect,
+    onConnectStart,
+    onConnectEnd,
     onEdgeClick,
     onEdgeHover,
     onEdgeHoverEnd,
@@ -1052,7 +1217,9 @@ function FlowInner({
     reportError,
   ]);
 
+  const validationEnabled = hasConnectionValidators || Object.values(connectionValidation || {}).some(Boolean);
   return (
+    <ConnectionValidationContext.Provider value={{ drag, reasonForHandle }}>
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -1061,6 +1228,7 @@ function FlowInner({
       defaultEdgeOptions={defaultEdgeOptions}
       colorMode={colorMode}
       {...handlers}
+      isValidConnection={validationEnabled ? (connection) => !candidateReason(connection) : undefined}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
       elementsSelectable={editable}
@@ -1074,6 +1242,12 @@ function FlowInner({
       {showMinimap ? <MiniMap /> : null}
       <Background />
     </ReactFlow>
+    {drag && hasConnectionValidators && (!validationResults || validationResults.error) ? (
+      <div className="rf-validation-status" role="status" aria-live="polite">
+        {validationResults?.error || "Checking connections..."}
+      </div>
+    ) : null}
+    </ConnectionValidationContext.Provider>
   );
 }
 
@@ -1095,6 +1269,8 @@ export function render({ model, view }) {
   const [hoverDelay] = model.useState("popup_hover_delay");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
+  const [connectionValidation] = model.useState("connection_validation");
+  const [hasConnectionValidators] = model.useState("has_connection_validators");
   const [enableDelete] = model.useState("enable_delete");
   const [enableMultiselect] = model.useState("enable_multiselect");
   const [maxZoom] = model.useState("max_zoom");
@@ -1397,10 +1573,13 @@ export function render({ model, view }) {
       defaultEdgeOptions={defaultEdgeOptions}
       colorMode={colorMode}
       nodeTypes={hydratedNodeTypes}
+      nodeTypeSpecs={allNodeTypes}
       edgeTypes={hydratedEdgeTypes}
       nodeEditors={nodeEditors}
       editable={editable}
       enableConnect={enableConnect}
+      connectionValidation={connectionValidation}
+      hasConnectionValidators={hasConnectionValidators}
       enableDelete={enableDelete}
       enableMultiselect={enableMultiselect}
       maxZoom={maxZoom}

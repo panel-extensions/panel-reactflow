@@ -71,6 +71,34 @@ flow
 
 For property schemas and richer editors, provide `node_types`/`edge_types` with `PropertySpec` and handle changes via `ReactFlow.on(...)`. `.on` callbacks receive the event payload as the first argument and can optionally accept the `ReactFlow` instance as a second argument.
 
+## Connection validation
+
+Connection checks are opt-in. For frontend-only validation, set `connection_validation` with any of `direction`, `types`, `capacity`, `duplicates`, or `cycles` set to `True`. `types` compares declared handle types case-insensitively and permits unknown types; `capacity` uses `maxConnections` on input handle dictionaries, with no limit when omitted. Existing handle connectability flags still apply.
+
+```python
+from panel_reactflow import NodeType, ReactFlow
+
+flow = ReactFlow(
+    node_types={
+        "source": NodeType(type="source", outputs=[{"id": "value", "type": "str"}]),
+        "sink": NodeType(type="sink", inputs=[{"id": "value", "type": "str", "maxConnections": 1}]),
+    },
+    connection_validation={"direction": True, "types": True, "capacity": True, "cycles": True},
+)
+```
+
+For application rules, register a Python validator. On each drag start, ReactFlow requests results for every candidate port and shows the returned reasons while dragging. The callback receives an edge-shaped payload with `source`, `target`, `sourceHandle`, and `targetHandle`; return `None` to allow or a string to reject. Hooks and frontend checks can be used together. Validate again in your `edge_added` handler before accepting the connection, since the graph may have changed after drag start.
+
+```python
+def validate_connection(edge, flow):
+    if edge["source"] == edge["target"]:
+        return "A node cannot connect to itself."
+
+flow.add_connection_validator(validate_connection)
+```
+
+Run the [connection validation demo](examples/connection_validation.py) with `PYTHONPATH=src pixi run panel serve examples/connection_validation.py --show` from the repository root.
+
 ## Development
 
 ```bash
