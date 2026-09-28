@@ -1584,6 +1584,16 @@ class ReactFlow(ReactComponent):
 
     viewport = param.Dict(default=None, allow_None=True, doc="Optional persisted viewport state.")
 
+    drop_types = param.List(
+        default=[],
+        item_type=str,
+        doc="""
+        MIME types accepted when data is dropped onto the canvas, e.g. the
+        ``drag_type`` of a draggable ``panel_material_ui.MenuList``. Each
+        accepted drop emits a ``"drop"`` event; drops of other types are
+        ignored, as are all drops while ``editable`` is False.""",
+    )
+
     popup_trigger = param.ObjectSelector(
         default="click",
         objects=["click", "hover", "none"],
@@ -2458,6 +2468,17 @@ class ReactFlow(ReactComponent):
         match msg.get("type"):
             case "connection_validation_requested":
                 self._validate_connection_request(msg)
+            case "drop":
+                self._emit(
+                    "drop",
+                    {
+                        "type": "drop",
+                        "drop_type": msg.get("drop_type"),
+                        "data": msg.get("data"),
+                        "position": msg.get("position"),
+                        "target": msg.get("target"),
+                    },
+                )
             case "sync":
                 nodes = msg.get("nodes")
                 edges = msg.get("edges")
@@ -3508,6 +3529,13 @@ class ReactFlow(ReactComponent):
               ``style``, ``type``, ...) were modified
             - ``"selection_changed"``: Selection changed
             - ``"sync"``: Full graph sync from frontend
+            - ``"drop"``: Data of one of the ``drop_types`` was dropped onto
+              the canvas. Payload has the matched ``drop_type``, the dropped
+              ``data`` (parsed from JSON when possible, otherwise the raw
+              string), the drop ``position`` in flow coordinates, and a
+              ``target`` of ``{"node_id", "handle_id", "direction"}`` when
+              dropped on a node or handle (``handle_id`` and ``direction``
+              are ``None`` for a node), else ``None``.
             - ``"client_error"``: The graph view hit a rendering error in the
               browser. The payload carries ``source``, ``message``, ``stack``,
               ``component_stack``, ``attempt`` and ``mode``, or for
