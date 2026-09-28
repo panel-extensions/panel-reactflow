@@ -1,9 +1,10 @@
 """Tests for ReactFlow model creation."""
 
+import param
 from panel.pane import Markdown
 from panel.viewable import Viewer
 
-from panel_reactflow import Edge, Node, ReactFlow
+from panel_reactflow import Edge, EdgeType, Node, NodeType, ReactFlow
 
 
 def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
@@ -121,3 +122,35 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
     by_id = {node["id"]: node for node in model.data.nodes}
     assert by_id["n1"]["data"]["view_idx"] == 0
     assert by_id["n2"]["data"].get("view_idx") is None
+
+
+class _Config(param.Parameterized):
+    x = param.Integer(default=1)
+
+
+def test_updated_node_types_reach_model_as_descriptors(document, comm) -> None:
+    flow = ReactFlow()
+    model = flow.get_root(document, comm=comm)
+    synced = []
+    model.data.on_change("node_types", lambda attr, old, new: synced.append(new))
+
+    flow.node_types = {"a": NodeType(type="a", schema=_Config)}
+
+    assert synced
+    assert all(isinstance(value["a"], dict) for value in synced)
+    assert "x" in model.data.node_types["a"]["schema"]["properties"]
+
+
+def test_node_and_edge_types_updated_together(document, comm) -> None:
+    flow = ReactFlow()
+    model = flow.get_root(document, comm=comm)
+
+    flow.param.update(
+        node_types={"a": NodeType(type="a", schema=_Config)},
+        edge_types={"e": EdgeType(type="e", schema=_Config)},
+    )
+
+    assert isinstance(flow.node_types["a"], dict)
+    assert isinstance(flow.edge_types["e"], dict)
+    assert isinstance(model.data.node_types["a"], dict)
+    assert isinstance(model.data.edge_types["e"], dict)

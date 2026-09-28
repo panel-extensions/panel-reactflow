@@ -2277,8 +2277,12 @@ class ReactFlow(ReactComponent):
             params["nodes"] = nodes
         if "edges" in params:
             params["edges"] = [self._edge_payload(edge) for edge in params["edges"]]
-        # node_types / edge_types are now JSON-serializable descriptors
-        # and intentionally synced to the frontend.
+        # Panel syncs a new value before `_normalize_specs` replaces it, so
+        # schema classes must be coerced here to stay out of the payload.
+        if "node_types" in params:
+            params["node_types"] = _coerce_spec_map(params["node_types"])
+        if "edge_types" in params:
+            params["edge_types"] = _coerce_spec_map(params["edge_types"], edge=True)
         # Pop Python-only editor registries and internal state.
         params.pop("node_editors", None)
         params.pop("edge_editors", None)
@@ -3642,11 +3646,11 @@ class ReactFlow(ReactComponent):
                 {"type": "selection_changed", "nodes": selection["nodes"], "edges": selection["edges"]},
             )
 
-    def _normalize_specs(self, event: param.parameterized.Event) -> None:
-        is_edge = event.name == "edge_types"
-        normalized = _coerce_spec_map(event.new, edge=is_edge)
-        if normalized != event.new:
-            setattr(self, event.name, normalized)
+    def _normalize_specs(self, *events: param.parameterized.Event) -> None:
+        for event in events:
+            normalized = _coerce_spec_map(event.new, edge=event.name == "edge_types")
+            if normalized != event.new:
+                setattr(self, event.name, normalized)
 
     def _normalize_nodes(self, event: param.parameterized.Event) -> None:
         """Normalize nodes list by converting NodeSpec objects to dicts."""

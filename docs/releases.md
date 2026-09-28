@@ -73,6 +73,14 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `nodes` and `edges` once
   ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
 
+- **Serialization error when updating `node_types`** — assigning
+  `NodeType` or `EdgeType` descriptors with a `schema` class after
+  construction synced them to the browser before they were converted to
+  JSON descriptors, so the server failed with `can't serialize
+  ParameterizedMetaclass`. They are now converted before syncing, and
+  updating `node_types` and `edge_types` together no longer raises a
+  `TypeError`.
+
 ## Version 0.4.1
 
 A small enhancement release adding viewport zoom controls.
