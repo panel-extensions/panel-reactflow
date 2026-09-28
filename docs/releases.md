@@ -79,7 +79,8 @@ an error boundary keeps a malformed graph from blanking the canvas.
   JSON descriptors, so the server failed with `can't serialize
   ParameterizedMetaclass`. They are now converted before syncing, and
   updating `node_types` and `edge_types` together no longer raises a
-  `TypeError`.
+  `TypeError`
+  ([#76](https://github.com/panel-extensions/panel-reactflow/pull/76)).
 
 ## Version 0.4.1
 
