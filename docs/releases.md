@@ -68,7 +68,8 @@ an error boundary keeps a malformed graph from blanking the canvas.
   dropped data, its flow position, and the node or handle under the
   pointer, so a handler can add and wire what was dropped. Draggable
   `panel_material_ui.MenuList` items work as a source; see
-  [React to Events](how-to/react-to-events.md#handle-drops-onto-the-canvas).
+  [React to Events](how-to/react-to-events.md#handle-drops-onto-the-canvas)
+  ([#77](https://github.com/panel-extensions/panel-reactflow/pull/77)).
 
 ### Bug fixes
 
@@ -76,7 +77,8 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `node_types` rebuilt the component for every node type, so React
   remounted every node and detached its embedded view, which could leave
   Bokeh plots blank. Each type's component is now reused until its own
-  spec or the popup settings change.
+  spec or the popup settings change
+  ([#77](https://github.com/panel-extensions/panel-reactflow/pull/77)).
 
 - **Progressive re-render when deleting multiple elements** — deleting a
   multi-node selection removed the nodes one at a time, syncing an
