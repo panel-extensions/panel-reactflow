@@ -1050,3 +1050,195 @@ def test_multi_select_delete_does_not_render_intermediate_graphs(page):
     expect(page.locator(".react-flow__node")).to_have_count(2)
     counts = _recorded_node_counts(page)
     assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
+
+
+def _drop(locator, data_by_type, offset=None):
+    """Dispatch dragover and drop on *locator*, returning whether the drop was accepted."""
+    box = locator.bounding_box()
+    x, y = offset or (box["width"] / 2, box["height"] / 2)
+    return locator.evaluate(
+        """(el, [data, x, y]) => {
+          const rect = el.getBoundingClientRect()
+          const init = (dt) => ({
+            dataTransfer: dt, bubbles: true, cancelable: true, composed: true,
+            clientX: rect.left + x, clientY: rect.top + y,
+          })
+          const dt = new DataTransfer()
+          for (const [type, value] of Object.entries(data)) dt.setData(type, value)
+          const over = new DragEvent("dragover", init(dt))
+          el.dispatchEvent(over)
+          el.dispatchEvent(new DragEvent("drop", init(dt)))
+          return over.defaultPrevented
+        }""",
+        [data_by_type, x, y],
+    )
+
+
+def _drop_flow(**params):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="n1", type="step", label="Step", position={"x": 0, "y": 0}).to_dict()],
+        node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
+        drop_types=["application/x-test"],
+        width=600,
+        height=400,
+        **params,
+    )
+    drops = []
+    flow.on("drop", drops.append)
+    return flow, drops
+
+
+def test_drop_on_pane_emits_payload_and_flow_position(page):
+    flow, drops = _drop_flow()
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    assert _drop(pane, {"application/x-test": '{"path": [0, 2]}'}, offset=(20, 30))
+    wait_until(lambda: len(drops) == 1, timeout=8000)
+    drop = drops[0]
+    assert drop["drop_type"] == "application/x-test"
+    assert drop["data"] == {"path": [0, 2]}
+    assert drop["target"] is None
+
+    viewport = flow.viewport or {"x": 0, "y": 0, "zoom": 1}
+    zoom = viewport.get("zoom", 1)
+    expected_x = (20 - viewport.get("x", 0)) / zoom
+    expected_y = (30 - viewport.get("y", 0)) / zoom
+    assert drop["position"]["x"] == pytest.approx(expected_x, abs=2)
+    assert drop["position"]["y"] == pytest.approx(expected_y, abs=2)
+
+
+def test_drop_of_unaccepted_type_is_ignored(page):
+    flow, drops = _drop_flow()
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    assert not _drop(pane, {"text/plain": "hello"})
+    page.wait_for_timeout(300)
+    assert drops == []
+
+
+def test_drop_on_handle_reports_target(page):
+    flow, drops = _drop_flow()
+    serve_component(page, flow)
+    handle = page.locator(".react-flow__handle-left")
+    expect(handle).to_be_visible()
+
+    assert _drop(handle, {"application/x-test": "plain"})
+    wait_until(lambda: len(drops) == 1, timeout=8000)
+    assert drops[0]["data"] == "plain"
+    assert drops[0]["target"] == {"node_id": "n1", "handle_id": "in", "direction": "input"}
+
+
+def test_drop_on_node_reports_node_target(page):
+    flow, drops = _drop_flow()
+    serve_component(page, flow)
+    node = page.locator(".react-flow__node")
+    expect(node).to_be_visible()
+
+    assert _drop(node, {"application/x-test": "{}"})
+    wait_until(lambda: len(drops) == 1, timeout=8000)
+    assert drops[0]["target"] == {"node_id": "n1", "handle_id": None, "direction": None}
+
+
+def test_drop_ignored_when_not_editable(page):
+    flow, drops = _drop_flow(editable=False)
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    assert not _drop(pane, {"application/x-test": "{}"})
+    page.wait_for_timeout(300)
+    assert drops == []
+
+
+def test_drop_from_menu_demo(page):
+    pmui = pytest.importorskip("panel_material_ui")
+    if "draggable" not in pmui.MenuList.param:
+        pytest.skip("panel-material-ui MenuList does not support draggable items")
+    namespace = runpy.run_path(str(Path(__file__).resolve().parents[2] / "examples" / "drop_from_menu.py"))
+    flow = namespace["flow"]
+    serve_component(page, namespace["demo"])
+
+    items = page.locator(".MuiListItemButton-root")
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    items.filter(has_text="CSV file").drag_to(pane, target_position={"x": 80, "y": 80})
+    wait_until(lambda: [n["label"] for n in flow.nodes] == ["Sink", "CSV file"], timeout=8000)
+
+    items.filter(has_text="Database").drag_to(page.locator(".react-flow__node[data-id='sink'] .react-flow__handle-left"))
+    wait_until(lambda: len(flow.edges) == 1, timeout=8000)
+    database = next(n for n in flow.nodes if n["label"] == "Database")
+    assert flow.edges[0]["source"] == database["id"]
+    assert flow.edges[0]["target"] == "sink"
+    assert database["position"]["x"] < 400
+
+    items.filter(has_text="Sources").first.drag_to(pane, target_position={"x": 200, "y": 300})
+    page.wait_for_timeout(500)
+    assert len(flow.nodes) == 3
+
+
+# Canvases inside an element, including its descendants' shadow roots, where Bokeh renders.
+_DEEP_CANVASES = """el => {
+  const count = (node) => {
+    let n = node.tagName === "CANVAS" ? 1 : 0
+    if (node.shadowRoot) n += count(node.shadowRoot)
+    for (const child of node.children || []) n += count(child)
+    return n
+  }
+  return count(el)
+}"""
+
+
+def test_adding_node_type_keeps_other_nodes_mounted(page):
+    from bokeh.plotting import figure
+
+    fig = figure(width=200, height=120)
+    fig.line([0, 1, 2], [0, 1, 0])
+    flow = ReactFlow(
+        nodes=[
+            {
+                "id": "n1",
+                "type": "step",
+                "label": "Step",
+                "position": {"x": 0, "y": 0},
+                "data": {},
+                "view": pn.pane.Bokeh(fig),
+            }
+        ],
+        node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
+        width=700,
+        height=400,
+    )
+
+    # Mutate from a server callback, the way lazily loaded component types arrive.
+    def add_type(_):
+        flow.node_types = {**flow.node_types, "other": NodeType(type="other", inputs=["in"])}
+        flow.add_node(
+            {
+                "id": "n2",
+                "type": "other",
+                "label": "Other",
+                "position": {"x": 350, "y": 0},
+                "data": {},
+                "view": pn.pane.Markdown("OTHER-VIEW"),
+            }
+        )
+
+    button = pn.widgets.Button(label="Add type")
+    button.on_click(add_type)
+    serve_component(page, pn.Column(button, flow))
+
+    wrapper = page.locator(".react-flow__node[data-id='n1'] .rf-node-view-wrapper")
+    wait_until(lambda: wrapper.evaluate(_DEEP_CANVASES) > 0, timeout=8000)
+    wrapper.evaluate("el => { el.__marker = true }")
+
+    page.get_by_role("button", name="Add type").click()
+    expect(page.locator(".react-flow__node[data-id='n2']", has_text="OTHER-VIEW")).to_have_count(1)
+
+    # The same element proves the node was not remounted, so its view was never detached.
+    assert wrapper.evaluate("el => el.__marker === true")
+    assert wrapper.evaluate(_DEEP_CANVASES) > 0

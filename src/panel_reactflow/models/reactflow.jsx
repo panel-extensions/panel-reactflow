@@ -124,6 +124,20 @@ function popupCloseDistance(event) {
   return Math.max(48, Math.min(frame?.width ?? 0, frame?.height ?? 0) * 0.1);
 }
 
+// Resolve the node or handle under a drop so a handler can wire what was dropped.
+function dropTarget(element) {
+  const handle = element?.closest?.(".react-flow__handle");
+  if (handle) {
+    return {
+      node_id: handle.dataset.nodeid,
+      handle_id: handle.dataset.handleid || null,
+      direction: handle.classList.contains("target") ? "input" : "output",
+    };
+  }
+  const node = element?.closest?.(".react-flow__node");
+  return node ? { node_id: node.dataset.id, handle_id: null, direction: null } : null;
+}
+
 function renderHandles(direction, handles, opts = {}) {
   const handleType = direction === "input" ? "target" : "source";
   const position = direction === "input" ? Position.Left : Position.Right;
@@ -751,6 +765,7 @@ function FlowInner({
   viewport,
   valuePopupTrigger,
   hoverDelay,
+  dropTypes,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -760,7 +775,7 @@ function FlowInner({
   const edgeHydrationFrameRef = useRef(null);
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null });
   const lastViewportSig = useRef(null);
-  const { setViewport: setRfViewport } = useReactFlow();
+  const { setViewport: setRfViewport, screenToFlowPosition } = useReactFlow();
   const [drag, setDrag] = useState(null);
   const [validationResults, setValidationResults] = useState(null);
   const dragRef = useRef(null);
@@ -814,6 +829,38 @@ function FlowInner({
       }, CONNECTION_VALIDATION_TIMEOUT_MS);
     }
   }, [connectionValidation, hasConnectionValidators, model]);
+
+  const acceptedDropType = useCallback((event) => {
+    if (!editable || !dropTypes?.length) return null;
+    const types = Array.from(event.dataTransfer?.types || []);
+    return dropTypes.find((type) => types.includes(type)) ?? null;
+  }, [dropTypes, editable]);
+
+  const onDragOver = useCallback((event) => {
+    if (!acceptedDropType(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }, [acceptedDropType]);
+
+  const onDrop = useCallback((event) => {
+    const dropType = acceptedDropType(event);
+    if (!dropType) return;
+    event.preventDefault();
+    const raw = event.dataTransfer.getData(dropType);
+    let data = raw;
+    try {
+      data = JSON.parse(raw);
+    } catch (_error) {
+      // Not JSON, so hand the handler the raw string.
+    }
+    model.send_msg({
+      type: "drop",
+      drop_type: dropType,
+      data,
+      position: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+      target: dropTarget(event.target),
+    });
+  }, [acceptedDropType, model, screenToFlowPosition]);
 
   const onConnectEnd = useCallback(() => {
     if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
@@ -1197,6 +1244,8 @@ function FlowInner({
       onEdgeMouseEnter: wrap("onEdgeMouseEnter", onEdgeHover),
       onEdgeMouseLeave: wrap("onEdgeMouseLeave", onEdgeHoverEnd),
       onPaneClick: wrap("onPaneClick", onPaneClick),
+      onDragOver: wrap("onDragOver", onDragOver),
+      onDrop: wrap("onDrop", onDrop),
     };
   }, [
     handleNodesChange,
@@ -1212,6 +1261,8 @@ function FlowInner({
     onNodeContextMenu,
     onNodeDoubleClick,
     onNodesDelete,
+    onDragOver,
+    onDrop,
     onPaneClick,
     onSelectionChange,
     reportError,
@@ -1266,6 +1317,7 @@ export function render({ model, view }) {
   const [editable] = model.useState("editable");
   const [editorMode] = model.useState("editor_mode");
   const [valuePopupTrigger] = model.useState("popup_trigger");
+  const [dropTypes] = model.useState("drop_types");
   const [hoverDelay] = model.useState("popup_hover_delay");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
@@ -1485,13 +1537,25 @@ export function render({ model, view }) {
     });
   }, [pyEdges]);
 
+  // A new component function makes React remount every node of that type,
+  // and re-attached Bokeh views stay blank. Reuse each type's component until
+  // its own spec or the popup settings change, so adding a type leaves the
+  // nodes of other types, and their embedded views, mounted.
+  const nodeComponentCache = useRef(new Map());
   const hydratedNodeTypes = useMemo(() => {
     const mapping = {};
+    const cache = nodeComponentCache.current;
+    const next = new Map();
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
-      mapping[typeName] = makeNodeComponent(
-        typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay,
-      );
+      const key = JSON.stringify([spec, editorMode, valuePopupTrigger, hoverDelay]);
+      const cached = cache.get(typeName);
+      const component = cached?.key === key
+        ? cached.component
+        : makeNodeComponent(typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay);
+      next.set(typeName, { key, component });
+      mapping[typeName] = component;
     });
+    nodeComponentCache.current = next;
     return mapping;
   }, [editorMode, pyNodeTypes, model, valuePopupTrigger, hoverDelay]);
 
@@ -1590,6 +1654,7 @@ export function render({ model, view }) {
       viewport={viewport}
       valuePopupTrigger={valuePopupTrigger}
       hoverDelay={hoverDelay}
+      dropTypes={dropTypes}
     />
   );
 

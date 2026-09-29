@@ -1854,3 +1854,31 @@ def test_remove_node_without_arguments_is_a_noop() -> None:
     assert len(flow.nodes) == 5
     assert len(flow.edges) == 4
     assert messages == []
+
+
+def test_drop_message_emits_drop_event() -> None:
+    flow = ReactFlow(drop_types=["application/x-test"])
+    received = []
+    flow.on("drop", lambda payload, flow: received.append((payload, flow)))
+    wildcard = []
+    flow.on("*", wildcard.append)
+
+    flow._handle_msg(
+        {
+            "type": "drop",
+            "drop_type": "application/x-test",
+            "data": {"path": [1]},
+            "position": {"x": 10.5, "y": 20},
+            "target": {"node_id": "n1", "handle_id": "in", "direction": "input"},
+        }
+    )
+
+    payload = {
+        "type": "drop",
+        "drop_type": "application/x-test",
+        "data": {"path": [1]},
+        "position": {"x": 10.5, "y": 20},
+        "target": {"node_id": "n1", "handle_id": "in", "direction": "input"},
+    }
+    assert received == [(payload, flow)]
+    assert wildcard == [payload]

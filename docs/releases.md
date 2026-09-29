@@ -63,7 +63,22 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `pn.io.hold()` to render them at once
   ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
 
+- **Drop data onto the canvas** — `drop_types` lists MIME types the canvas
+  accepts, and each drop of one of them emits a `drop` event with the
+  dropped data, its flow position, and the node or handle under the
+  pointer, so a handler can add and wire what was dropped. Draggable
+  `panel_material_ui.MenuList` items work as a source; see
+  [React to Events](how-to/react-to-events.md#handle-drops-onto-the-canvas)
+  ([#77](https://github.com/panel-extensions/panel-reactflow/pull/77)).
+
 ### Bug fixes
+
+- **Nodes remounted when node types change** — any change to
+  `node_types` rebuilt the component for every node type, so React
+  remounted every node and detached its embedded view, which could leave
+  Bokeh plots blank. Each type's component is now reused until its own
+  spec or the popup settings change
+  ([#77](https://github.com/panel-extensions/panel-reactflow/pull/77)).
 
 - **Progressive re-render when deleting multiple elements** — deleting a
   multi-node selection removed the nodes one at a time, syncing an

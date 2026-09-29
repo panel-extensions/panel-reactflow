@@ -30,6 +30,7 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `edge_data_changed`  | Edge data is patched (via API, editor patch, or parameter-driven sync). | `edge_id`, `patch` |
 | `selection_changed`  | The active selection changes. | `nodes`, `edges` |
 | `sync`               | A batch sync from the frontend. | *(varies)* |
+| `drop`               | Data of one of the `drop_types` is dropped onto the canvas. See [Handle drops](#handle-drops-onto-the-canvas). | `drop_type`, `data`, `position`, `target` |
 | `client_error`       | The graph view hit a rendering error in the browser. See [Recover from Rendering Errors](recover-from-errors.md). | `source`, `message`, `stack`, `component_stack`, `attempt`, `mode` |
 
 ---
@@ -148,6 +149,37 @@ def on_selection(payload, flow):
 
 flow.on("selection_changed", on_selection)
 ```
+
+---
+
+## Handle drops onto the canvas
+
+Set `drop_types` to the MIME types the canvas accepts, and each drop of one
+of them emits `drop`. Anything that sets data under that type when a drag
+starts can be the source; a `panel_material_ui.MenuList` with
+`draggable=True` sends `{"path": [...], "label": ...}` under its
+`drag_type`. The payload's `position` is in flow coordinates, and `target`
+names the node, and handle when there is one, under the pointer, so a
+handler can add the dropped item there or wire it to the handle it landed
+on. Drops are ignored while `editable` is False.
+
+```python
+palette = pmui.MenuList(items=[{"label": "CSV file"}, {"label": "Database"}], draggable=True)
+flow = ReactFlow(drop_types=[palette.drag_type])
+
+def on_drop(payload, flow):
+    item = palette.items[payload["data"]["path"][0]]
+    node_id = f"node-{len(flow.nodes)}"
+    flow.add_node({"id": node_id, "label": item["label"], "position": payload["position"], "data": {}})
+    target = payload["target"]
+    if target and target["direction"] == "input":
+        flow.add_edge({"source": node_id, "target": target["node_id"], "targetHandle": target["handle_id"]})
+
+flow.on("drop", on_drop)
+```
+
+`examples/drop_from_menu.py` extends this with a grouped palette and places
+a node dropped on an input handle beside the node it feeds.
 
 ---
 
