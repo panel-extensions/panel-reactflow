@@ -1,5 +1,13 @@
 # Release Notes
 
+## Version 0.5.1
+
+A small enhancement release that lets the canvas accept files dragged in from the operating system.
+
+### Enhancements
+
+- **Drop files onto the canvas**: add `"Files"` to `drop_types` to accept files dragged in from the operating system. The `drop` event's `data` lists each file's `name`, `type`, `size` and text `content`, so a handler can, for example, load a graph saved as JSON. See [React to Events](how-to/react-to-events.md#handle-drops-onto-the-canvas) ([#79](https://github.com/panel-extensions/panel-reactflow/pull/79)).
+
 ## Version 0.5.0
 
 This release adds port and edge value inspection, connection checks

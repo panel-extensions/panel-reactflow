@@ -181,6 +181,20 @@ flow.on("drop", on_drop)
 `examples/drop_from_menu.py` extends this with a grouped palette and places
 a node dropped on an input handle beside the node it feeds.
 
+To accept files dragged in from the operating system, add `"Files"` to `drop_types`. The payload's `data` is then a list with one `{"name", "type", "size", "content"}` entry per file, each read as text:
+
+```python
+flow = ReactFlow(drop_types=["Files"])
+
+def on_file_drop(payload, flow):
+    for file in payload["data"]:
+        if file["name"].endswith(".json"):
+            graph = json.loads(file["content"])
+            flow.param.update(nodes=graph["nodes"], edges=graph["edges"])
+
+flow.on("drop", on_file_drop)
+```
+
 ---
 
 ## Register multiple handlers

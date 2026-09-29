@@ -1589,8 +1589,9 @@ class ReactFlow(ReactComponent):
         item_type=str,
         doc="""
         MIME types accepted when data is dropped onto the canvas, e.g. the
-        ``drag_type`` of a draggable ``panel_material_ui.MenuList``. Each
-        accepted drop emits a ``"drop"`` event; drops of other types are
+        ``drag_type`` of a draggable ``panel_material_ui.MenuList``. Include
+        ``"Files"`` to accept files dragged in from the operating system.
+        Each accepted drop emits a ``"drop"`` event; drops of other types are
         ignored, as are all drops while ``editable`` is False.""",
     )
 
@@ -3532,7 +3533,9 @@ class ReactFlow(ReactComponent):
             - ``"drop"``: Data of one of the ``drop_types`` was dropped onto
               the canvas. Payload has the matched ``drop_type``, the dropped
               ``data`` (parsed from JSON when possible, otherwise the raw
-              string), the drop ``position`` in flow coordinates, and a
+              string; for ``"Files"`` a list of ``{"name", "type", "size",
+              "content"}`` with each file read as text), the drop
+              ``position`` in flow coordinates, and a
               ``target`` of ``{"node_id", "handle_id", "direction"}`` when
               dropped on a node or handle (``handle_id`` and ``direction``
               are ``None`` for a node), else ``None``.
