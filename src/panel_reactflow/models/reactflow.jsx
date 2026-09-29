@@ -124,6 +124,19 @@ function popupCloseDistance(event) {
   return Math.max(48, Math.min(frame?.width ?? 0, frame?.height ?? 0) * 0.1);
 }
 
+// The DataTransfer type browsers report for files dragged in from the OS.
+const FILES_DROP_TYPE = "Files";
+
+// Files carry no string payload, so their contents have to be read explicitly.
+function readDroppedFiles(files) {
+  return Promise.all(Array.from(files, async (file) => ({
+    name: file.name,
+    type: file.type,
+    size: file.size,
+    content: await file.text(),
+  })));
+}
+
 // Resolve the node or handle under a drop so a handler can wire what was dropped.
 function dropTarget(element) {
   const handle = element?.closest?.(".react-flow__handle");
@@ -842,25 +855,32 @@ function FlowInner({
     event.dataTransfer.dropEffect = "copy";
   }, [acceptedDropType]);
 
-  const onDrop = useCallback((event) => {
+  const onDrop = useCallback(async (event) => {
     const dropType = acceptedDropType(event);
     if (!dropType) return;
     event.preventDefault();
-    const raw = event.dataTransfer.getData(dropType);
-    let data = raw;
-    try {
-      data = JSON.parse(raw);
-    } catch (_error) {
-      // Not JSON, so hand the handler the raw string.
+    // The event is recycled once the handler yields, so read it before awaiting files.
+    const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    const target = dropTarget(event.target);
+    let data;
+    if (dropType === FILES_DROP_TYPE) {
+      try {
+        data = await readDroppedFiles(event.dataTransfer.files);
+      } catch (error) {
+        reportError(error, null, { source: "handler", handler: "onDrop" });
+        return;
+      }
+    } else {
+      const raw = event.dataTransfer.getData(dropType);
+      data = raw;
+      try {
+        data = JSON.parse(raw);
+      } catch (_error) {
+        // Not JSON, so hand the handler the raw string.
+      }
     }
-    model.send_msg({
-      type: "drop",
-      drop_type: dropType,
-      data,
-      position: screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-      target: dropTarget(event.target),
-    });
-  }, [acceptedDropType, model, screenToFlowPosition]);
+    model.send_msg({ type: "drop", drop_type: dropType, data, position, target });
+  }, [acceptedDropType, model, reportError, screenToFlowPosition]);
 
   const onConnectEnd = useCallback(() => {
     if (validationTimerRef.current) clearTimeout(validationTimerRef.current);

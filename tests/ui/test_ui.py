@@ -1052,12 +1052,15 @@ def test_multi_select_delete_does_not_render_intermediate_graphs(page):
     assert set(counts) <= {6, 2}, f"intermediate graphs were rendered: {counts}"
 
 
-def _drop(locator, data_by_type, offset=None):
-    """Dispatch dragover and drop on *locator*, returning whether the drop was accepted."""
+def _drop(locator, data_by_type, offset=None, files=()):
+    """Dispatch dragover and drop on *locator*, returning whether the drop was accepted.
+
+    *files* are ``(name, mime_type, content)`` tuples added as OS files.
+    """
     box = locator.bounding_box()
     x, y = offset or (box["width"] / 2, box["height"] / 2)
     return locator.evaluate(
-        """(el, [data, x, y]) => {
+        """(el, [data, files, x, y]) => {
           const rect = el.getBoundingClientRect()
           const init = (dt) => ({
             dataTransfer: dt, bubbles: true, cancelable: true, composed: true,
@@ -1065,20 +1068,21 @@ def _drop(locator, data_by_type, offset=None):
           })
           const dt = new DataTransfer()
           for (const [type, value] of Object.entries(data)) dt.setData(type, value)
+          for (const [name, type, content] of files) dt.items.add(new File([content], name, { type }))
           const over = new DragEvent("dragover", init(dt))
           el.dispatchEvent(over)
           el.dispatchEvent(new DragEvent("drop", init(dt)))
           return over.defaultPrevented
         }""",
-        [data_by_type, x, y],
+        [data_by_type, [list(f) for f in files], x, y],
     )
 
 
 def _drop_flow(**params):
+    params.setdefault("drop_types", ["application/x-test"])
     flow = ReactFlow(
         nodes=[NodeSpec(id="n1", type="step", label="Step", position={"x": 0, "y": 0}).to_dict()],
         node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
-        drop_types=["application/x-test"],
         width=600,
         height=400,
         **params,
@@ -1141,6 +1145,34 @@ def test_drop_on_node_reports_node_target(page):
     assert _drop(node, {"application/x-test": "{}"})
     wait_until(lambda: len(drops) == 1, timeout=8000)
     assert drops[0]["target"] == {"node_id": "n1", "handle_id": None, "direction": None}
+
+
+def test_drop_of_files_sends_their_contents(page):
+    flow, drops = _drop_flow(drop_types=["Files"])
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    files = [("graph.json", "application/json", '{"nodes": []}'), ("notes.txt", "text/plain", "hi")]
+    assert _drop(pane, {}, files=files)
+    wait_until(lambda: len(drops) == 1, timeout=8000)
+    assert drops[0]["drop_type"] == "Files"
+    assert drops[0]["data"] == [
+        {"name": "graph.json", "type": "application/json", "size": 13, "content": '{"nodes": []}'},
+        {"name": "notes.txt", "type": "text/plain", "size": 2, "content": "hi"},
+    ]
+    assert drops[0]["target"] is None
+
+
+def test_file_drop_ignored_unless_files_accepted(page):
+    flow, drops = _drop_flow()
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    assert not _drop(pane, {}, files=[("graph.json", "application/json", "{}")])
+    page.wait_for_timeout(300)
+    assert drops == []
 
 
 def test_drop_ignored_when_not_editable(page):
