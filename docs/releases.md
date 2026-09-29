@@ -2,8 +2,8 @@
 
 ## Version 0.5.0
 
-This release adds port and edge value inspection and connection checks
-for interactive graph editing. `Node` and `Edge` properties now sync to
+This release adds port and edge value inspection, connection checks
+and canvas drops for interactive graph editing. `Node` and `Edge` properties now sync to
 the browser in place, batches of changes render as a single update, and
 an error boundary keeps a malformed graph from blanking the canvas.
 
@@ -26,7 +26,7 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `examples/connection_validation.py`
   ([#75](https://github.com/panel-extensions/panel-reactflow/pull/75)).
 
-- **Error recovery** — the canvas is now wrapped in an error boundary,
+- **Error recovery**: the canvas is now wrapped in an error boundary,
   controlled by the new `error_recovery` parameter (`"auto"` by default,
   or `"manual"` / `"off"`). In `"auto"` mode a React render error
   remounts the canvas, then remounts again in a view-only safe mode that
@@ -39,7 +39,7 @@ an error boundary keeps a malformed graph from blanking the canvas.
   to the server
   ([#70](https://github.com/panel-extensions/panel-reactflow/pull/70)).
 
-- **Base property sync** — the top-level React Flow fields on `Node` and
+- **Base property sync**: the top-level React Flow fields on `Node` and
   `Edge` (`label`, `type`, `style`, `className`, `draggable`,
   `connectable`, `deletable`, ...) are now synced to the frontend, so
   assigning `node.label = "Start (running)"` patches the browser in place
@@ -55,7 +55,7 @@ an error boundary keeps a malformed graph from blanking the canvas.
 
 ### Enhancements
 
-- **Batch removal** — `remove_node()` and `remove_edge()` now accept
+- **Batch removal**: `remove_node()` and `remove_edge()` now accept
   several ids, either as separate arguments
   (`flow.remove_node("n1", "n2")`) or as a sequence
   (`flow.remove_node(["n1", "n2"])`), and remove them in a single update.
@@ -63,7 +63,7 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `pn.io.hold()` to render them at once
   ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
 
-- **Drop data onto the canvas** — `drop_types` lists MIME types the canvas
+- **Drop data onto the canvas**: `drop_types` lists MIME types the canvas
   accepts, and each drop of one of them emits a `drop` event with the
   dropped data, its flow position, and the node or handle under the
   pointer, so a handler can add and wire what was dropped. Draggable
@@ -73,14 +73,14 @@ an error boundary keeps a malformed graph from blanking the canvas.
 
 ### Bug fixes
 
-- **Nodes remounted when node types change** — any change to
+- **Nodes remounted when node types change**: any change to
   `node_types` rebuilt the component for every node type, so React
   remounted every node and detached its embedded view, which could leave
   Bokeh plots blank. Each type's component is now reused until its own
   spec or the popup settings change
   ([#77](https://github.com/panel-extensions/panel-reactflow/pull/77)).
 
-- **Progressive re-render when deleting multiple elements** — deleting a
+- **Progressive re-render when deleting multiple elements**: deleting a
   multi-node selection removed the nodes one at a time, syncing an
   intermediate graph to the browser per node so the nodes visibly
   disappeared one by one. Updates triggered by a frontend message are now
@@ -88,7 +88,7 @@ an error boundary keeps a malformed graph from blanking the canvas.
   `nodes` and `edges` once
   ([#72](https://github.com/panel-extensions/panel-reactflow/pull/72)).
 
-- **Serialization error when updating `node_types`** — assigning
+- **Serialization error when updating `node_types`**: assigning
   `NodeType` or `EdgeType` descriptors with a `schema` class after
   construction synced them to the browser before they were converted to
   JSON descriptors, so the server failed with `can't serialize
