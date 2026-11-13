@@ -1516,3 +1516,74 @@ def test_fit_view_waits_for_requested_node_revision(page):
 
     wait_until(lambda: flow.viewport["x"] < -1000, page=page, timeout=8000)
     assert _inside(_node_locator(page, "Far").bounding_box(), _pane_locator(page).bounding_box())
+
+
+@pytest.mark.parametrize("editable", [True, False])
+def test_node_click_emits_event(page, editable):
+    flow = _make_flow()
+    flow.editable = editable
+    events = []
+    flow.on("node_clicked", events.append)
+    serve_component(page, flow)
+
+    _node_locator(page, "End").locator(".rf-node-label").click()
+
+    wait_until(lambda: len(events) == 1, timeout=8000)
+    assert events[0]["node_id"] == "n2"
+    assert set(events[0]["position"]) == {"x", "y"}
+
+
+def test_node_drag_does_not_emit_click(page):
+    flow = _make_flow()
+    clicks, moves = [], []
+    flow.on("node_clicked", clicks.append)
+    flow.on("node_moved", moves.append)
+    serve_component(page, flow)
+
+    box = _node_locator(page, "End").locator(".rf-node-label").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 60, box["y"] + box["height"] / 2 + 40, steps=5)
+    page.mouse.up()
+
+    wait_until(lambda: len(moves) > 0, timeout=8000)
+    time.sleep(0.5)
+    assert clicks == []
+
+
+def test_click_inside_node_view_does_not_emit_node_click(page):
+    button = pn.widgets.Button(label="Inside")
+    pressed = []
+    button.on_click(pressed.append)
+    flow = ReactFlow(
+        nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "label": "Holder", "data": {}, "view": button}],
+        width=900,
+        height=600,
+    )
+    clicks = []
+    flow.on("node_clicked", clicks.append)
+    serve_component(page, flow)
+
+    page.locator(".react-flow__node[data-id='n1'] .rf-node-view-wrapper").get_by_role("button", name="Inside").click()
+    wait_until(lambda: len(pressed) == 1, timeout=8000)
+
+    _node_locator(page, "Holder").locator(".rf-node-label").click()
+    wait_until(lambda: len(clicks) >= 1, timeout=8000)
+    time.sleep(0.5)
+    assert len(clicks) == 1
+
+
+def test_click_inside_toolbar_editor_does_not_emit_node_click(page):
+    flow = _make_flow(editor_mode="toolbar")
+    clicks = []
+    flow.on("node_clicked", clicks.append)
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").get_by_label("Show node toolbar").click()
+    editor = page.locator(".react-flow__node-toolbar .jsoneditor").first
+    expect(editor).to_be_visible()
+    editor.click()
+
+    _node_locator(page, "End").locator(".rf-node-label").click()
+    wait_until(lambda: len(clicks) == 1, timeout=8000)
+    assert clicks[0]["node_id"] == "n2"

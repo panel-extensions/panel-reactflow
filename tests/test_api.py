@@ -1039,6 +1039,40 @@ def test_handle_msg_node_clicked_emits_once() -> None:
     assert events[0]["node_id"] == "n1"
 
 
+def test_handle_msg_node_clicked_requires_node_id() -> None:
+    flow = ReactFlow()
+    events: list[dict] = []
+    flow.on("node_clicked", events.append)
+    flow._handle_msg({"type": "node_clicked", "position": {"x": 1, "y": 2}})
+    assert events == []
+
+
+@pytest.mark.parametrize("popup_trigger", ["click", "hover", "none"])
+def test_handle_msg_node_clicked_ignores_popup_trigger(popup_trigger) -> None:
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}], popup_trigger=popup_trigger, editable=False)
+    events: list[dict] = []
+    flow.on("node_clicked", events.append)
+    flow._handle_msg({"type": "node_clicked", "node_id": "n1", "position": {"x": 3, "y": 4}})
+    assert events == [{"type": "node_clicked", "node_id": "n1", "position": {"x": 3, "y": 4}}]
+
+
+def test_handle_msg_node_clicked_invokes_node_hook() -> None:
+    class _ClickNode(Node):
+        def __init__(self, **params):
+            super().__init__(**params)
+            self.clicks = []
+
+        def on_click(self, payload, flow):
+            self.clicks.append(payload["position"])
+
+    node = _ClickNode(id="n1", position={"x": 0, "y": 0}, data={})
+    other = _ClickNode(id="n2", position={"x": 0, "y": 0}, data={})
+    flow = ReactFlow(nodes=[node, other])
+    flow._handle_msg({"type": "node_clicked", "node_id": "n1", "position": {"x": 3, "y": 4}})
+    assert node.clicks == [{"x": 3, "y": 4}]
+    assert other.clicks == []
+
+
 def test_hover_events_emit_only_in_hover_mode() -> None:
     flow = ReactFlow(popup_trigger="hover")
     events: list[dict] = []

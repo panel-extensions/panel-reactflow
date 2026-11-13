@@ -22,7 +22,7 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `node_added`         | A node is added to the graph. | `node` |
 | `node_deleted`       | A node is removed. | `node_id` |
 | `node_moved`         | A node is dragged to a new position. | `node_id`, `position` |
-| `node_clicked`       | A node is clicked (single click). | `node_id` |
+| `node_clicked`       | A node is clicked (single click), also when `editable=False`. Clicks that end a drag, or land on the node's embedded view or editor, are not reported. | `node_id`, `position` |
 | `node_context_menu`  | A node is right-clicked. | `node_id`, `position` |
 | `node_data_changed`  | Node data is patched (via API, editor patch, or parameter-driven sync). | `node_id`, `patch` |
 | `edge_added`         | An edge is created (UI connect or API). | `edge` |

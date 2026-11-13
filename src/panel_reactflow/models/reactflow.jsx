@@ -445,7 +445,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
         {(showView || showInlineEditor) && (
           <div>
             {showView ? <div className={viewWrapperClassName} style={viewWrapperStyle}>{data.view}</div> : null}
-            {showInlineEditor ? data.editor : null}
+            {showInlineEditor ? <div className="rf-node-inline-editor">{data.editor}</div> : null}
           </div>
         )}
         {renderHandles("output", spec.outputs, {
@@ -1392,6 +1392,28 @@ function FlowInner({
     [],
   );
 
+  const onNodeClick = useCallback(
+    (event, node) => {
+      // Interacting with an embedded view or editor (a button, an input, a
+      // plot) is not a click on the node itself. The toolbar editor is
+      // portaled outside the node's DOM but its clicks still bubble here
+      // through the React tree.
+      const target = event.target;
+      if (
+        !event.currentTarget?.contains?.(target) ||
+        target?.closest?.(".rf-node-view-wrapper, .rf-node-inline-editor")
+      ) {
+        return;
+      }
+      sendPatch({
+        type: "node_clicked",
+        node_id: node.id,
+        position: { x: event.clientX, y: event.clientY },
+      });
+    },
+    [sendPatch],
+  );
+
   const onEdgeClick = useCallback(
     (event, edge) => {
       sendPatch({
@@ -1437,6 +1459,7 @@ function FlowInner({
       onConnectStart: wrap("onConnectStart", onConnectStart),
       onConnectEnd: wrap("onConnectEnd", onConnectEnd),
       onMoveEnd: wrap("onMoveEnd", onMoveEnd),
+      onNodeClick: wrap("onNodeClick", onNodeClick),
       onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
       onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
       onEdgeClick: wrap("onEdgeClick", onEdgeClick),
@@ -1457,6 +1480,7 @@ function FlowInner({
     onEdgesChange,
     onEdgesDelete,
     onMoveEnd,
+    onNodeClick,
     onNodeContextMenu,
     onNodeDoubleClick,
     onNodesDelete,
