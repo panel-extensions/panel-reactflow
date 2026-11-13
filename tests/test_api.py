@@ -1392,14 +1392,70 @@ def test_editor_resolution_default_node_editor() -> None:
 # --- Edge editor resolution tests ---
 
 
-def test_edge_editor_resolution_default() -> None:
-    """Without edge_editors, the fallback is SchemaEditor."""
+def test_edge_editor_resolution_default_without_schema() -> None:
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
     edge_id = flow.edges[0]["id"]
+    assert flow._edge_editors[edge_id] is None
+
+
+def test_edge_editor_resolution_default_with_schema() -> None:
+    flow = ReactFlow(edge_types={"pipe": EdgeType(type="pipe", schema={"type": "object", "properties": {"w": {"type": "number"}}})})
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
     assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+
+
+def test_edge_editor_created_when_schema_added_later() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    assert flow._edge_editors[edge_id] is None
+    flow.edge_types = {"pipe": EdgeType(type="pipe", schema={"type": "object", "properties": {"w": {"type": "number"}}})}
+    assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+
+
+def test_selecting_edge_without_editor_shows_no_editor() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow.selection["edges"] == [edge_id]
+    assert flow._selected_editor is None
+
+
+def test_selecting_edge_with_editor_shows_editor() -> None:
+    flow = ReactFlow(default_edge_editor=JsonEditor)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow._selected_editor is not None
+
+
+def test_selected_editor_hidden_when_not_editable() -> None:
+    flow = ReactFlow(default_edge_editor=JsonEditor, editor_mode="side")
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"a": 1}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow._selected_editor is not None
+    flow.editable = False
+    assert flow._selected_editor is None
+    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
+    assert flow._selected_editor is None
+    flow.editable = True
+    assert flow._selected_editor is not None
 
 
 def test_edge_editor_resolution_custom() -> None:
@@ -1426,7 +1482,7 @@ def test_edge_editor_resolution_default_edge_editor() -> None:
 
 
 def test_edge_editor_on_patch_calls_patch_edge_data() -> None:
-    flow = ReactFlow()
+    flow = ReactFlow(default_edge_editor=SchemaEditor)
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 0}})

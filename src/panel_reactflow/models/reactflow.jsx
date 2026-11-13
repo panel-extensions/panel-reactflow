@@ -1547,7 +1547,7 @@ export function render({ model, view }) {
       const editorView = nodeEditors[idx];
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(dataWithoutViewIdx);
-      const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
+      const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
       return {
         ...node,
         // Keep the declared class around so a later className/type patch can
@@ -1564,7 +1564,7 @@ export function render({ model, view }) {
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes]);
+  }, [pyNodes, nodeEditors, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {

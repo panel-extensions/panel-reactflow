@@ -678,6 +678,35 @@ def test_editor_renders_in_side_mode(page):
     expect(page.locator(".jsoneditor").nth(0)).to_be_visible()
 
 
+def test_selecting_edge_without_editor_does_not_open_editor(page):
+    flow = _make_flow()
+    serve_component(page, flow)
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
+    page.wait_for_timeout(300)
+    expect(page.locator(".jsoneditor:visible")).to_have_count(0)
+
+
+def test_selecting_edge_with_default_editor_opens_editor(page):
+    flow = _make_flow()
+    flow.default_edge_editor = JsonEditor
+    serve_component(page, flow)
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
+    expect(page.locator(".jsoneditor:visible")).to_have_count(1)
+
+
+def test_node_toolbar_hidden_when_not_editable(page):
+    flow = _make_flow(editor_mode="toolbar")
+    flow.editable = False
+    serve_component(page, flow)
+
+    expect(_node_locator(page, "Start")).to_have_count(1)
+    expect(_node_locator(page, "Start").get_by_label("Show node toolbar")).to_have_count(0)
+
+
 def test_delete_node_does_not_rerender_surviving_node_views(page):
     view_a = ReactChild(child=pn.pane.Markdown("View A"))
     view_b = ReactChild(child=pn.pane.Markdown("View B"))

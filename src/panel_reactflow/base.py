@@ -1363,7 +1363,10 @@ class ReactFlow(ReactComponent):
         Defaults to :class:`SchemaEditor`.
     default_edge_editor : type or callable, optional
         Default editor factory used for edges without a specific editor.
-        Defaults to :class:`SchemaEditor`.
+        When unset, a :class:`SchemaEditor` is shown only for edge types
+        that declare a schema; other edges are selectable without opening
+        an editor. Set to :class:`SchemaEditor` or :class:`JsonEditor` to
+        give every edge an editor.
     debounce_ms : int, default 150
         Debounce delay in milliseconds when ``sync_mode='debounce'``.
         Controls how often updates are sent from JavaScript to Python.
@@ -1372,7 +1375,8 @@ class ReactFlow(ReactComponent):
         ``type``). See React Flow documentation for available options.
     editable : bool, default True
         Enable interactive editing on the canvas (drag, connect, delete).
-        Set to ``False`` for read-only visualization.
+        Set to ``False`` for read-only visualization; node and edge
+        editors are then hidden.
     editor_mode : {"toolbar", "node", "side"}, default "toolbar"
         Where to render node editors:
 
@@ -1673,11 +1677,11 @@ class ReactFlow(ReactComponent):
         )
         self.param.watch(
             self._update_edge_editors,
-            ["edges", "edge_editors", "default_edge_editor"],
+            ["edges", "edge_types", "edge_editors", "default_edge_editor"],
         )
         self.param.watch(
             self._update_selected_editor,
-            ["selection", "editor_mode", "nodes", "edges"],
+            ["selection", "editor_mode", "editable", "nodes", "edges"],
         )
         self.param.watch(self._update_views, ["nodes"])
         self._sync_instance_flow_refs()
@@ -2157,7 +2161,7 @@ class ReactFlow(ReactComponent):
     def _update_edge_editors(self, *events: tuple[param.parameterized.Event]) -> None:
         edge_ids = [self._edge_id(edge) for edge in self.edges]
         edge_ids = [edge_id for edge_id in edge_ids if edge_id is not None]
-        config_changed = any(event.name in ("edge_editors", "default_edge_editor") for event in events)
+        config_changed = any(event.name in ("edge_types", "edge_editors", "default_edge_editor") for event in events)
         if edge_ids == self._edge_ids and not config_changed:
             return
         self._edge_ids = edge_ids
@@ -2175,8 +2179,16 @@ class ReactFlow(ReactComponent):
             if isinstance(edge, Edge) and type(edge).editor is not Edge.editor:
                 editor_factory = edge.editor
             if editor_factory is None:
-                editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor or SchemaEditor
+                editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor
             schema = self._get_edge_schema(edge_type) if edge_type else None
+            if editor_factory is None:
+                # Edges are usually selected for their own sake, so unlike
+                # nodes (whose editor sits behind a toolbar toggle) only pop
+                # up an editor when there is a schema to build a form from.
+                if not (schema and schema.get("properties")):
+                    editors[edge_id] = None
+                    continue
+                editor_factory = SchemaEditor
             data = self._edge_data(edge)
             if callable(editor_factory):
                 editor = self._create_editor(
@@ -2196,15 +2208,11 @@ class ReactFlow(ReactComponent):
         selected_nodes = self.selection.get("nodes", [])
         selected_edges = self.selection.get("edges", [])
         editor = None
-        if selected_nodes and self.editor_mode == "side":
+        if self.editable and selected_nodes and self.editor_mode == "side":
             editor = self._node_editors.get(selected_nodes[0])
-        elif selected_edges and not selected_nodes:
+        elif self.editable and selected_edges and not selected_nodes:
             editor = self._edge_editors.get(selected_edges[0])
-        if editor is not None:
-            view = self._resolve_editor_view(editor)
-        else:
-            view = None
-        self._selected_editor = view
+        self._selected_editor = None if editor is None else self._resolve_editor_view(editor)
 
     @staticmethod
     def _resolve_editor_view(editor: Any) -> Any:

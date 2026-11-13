@@ -10,9 +10,11 @@ can build a node editor, you already know how to build an edge editor.
 
 When a user selects a node (or an edge), Panel-ReactFlow looks up the
 matching editor, creates the view, and displays it in the configured panel.
-If no editor is registered for a type, the built-in `SchemaEditor` is
+If no editor is registered for a node type, the built-in `SchemaEditor` is
 used: it auto-generates a form from the JSON Schema if one is present,
-or falls back to a raw JSON editor.
+or falls back to a raw JSON editor. Edges only get the `SchemaEditor`
+fallback when their type declares a schema, so selecting a plain edge does
+not open an editor. Editors are hidden entirely while `editable=False`.
 
 ![Screenshot: a node with schema-driven form editor open in the side panel](../assets/screenshots/define-editors-node.png)
 
@@ -102,7 +104,7 @@ Panel-ReactFlow ships two built-in editor classes:
 
 | Class              | Behavior |
 |--------------------|----------|
-| `SchemaEditor` | Renders a form generated from the JSON Schema. Falls back to a raw JSON editor when no schema is available. **This is the default.** |
+| `SchemaEditor` | Renders a form generated from the JSON Schema. Falls back to a raw JSON editor when no schema is available. **This is the default** (for edges, only when the edge type has a schema). |
 | `JsonEditor`   | Always renders a raw JSON editor (powered by `panel.pane.JSON`). |
 
 ```python
@@ -162,6 +164,16 @@ flow = ReactFlow(
 
 Edge editors work identically.  Register them via `edge_editors` (keyed by
 edge type) or `default_edge_editor` for a blanket default.
+
+Unlike nodes, an edge without a registered editor and without a schema
+has no editor: selecting it only updates `selection`. To give every edge
+an editor, including a raw JSON fallback, set `default_edge_editor`:
+
+```python
+from panel_reactflow import ReactFlow, SchemaEditor
+
+flow = ReactFlow(nodes=nodes, edges=edges, default_edge_editor=SchemaEditor)
+```
 
 ![Screenshot: an edge editor open in the side panel](../assets/screenshots/define-editors-edge.png)
 
