@@ -788,7 +788,10 @@ function FlowInner({
   const edgeHydrationFrameRef = useRef(null);
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null });
   const lastViewportSig = useRef(null);
-  const { setViewport: setRfViewport, screenToFlowPosition } = useReactFlow();
+  const { setViewport: setRfViewport, screenToFlowPosition, fitView } = useReactFlow();
+  const [hydratedRevision, setHydratedRevision] = useState(null);
+  const pendingFitRef = useRef(null);
+  const [fitRequest, setFitRequest] = useState(0);
   const [drag, setDrag] = useState(null);
   const [validationResults, setValidationResults] = useState(null);
   const dragRef = useRef(null);
@@ -911,6 +914,11 @@ function FlowInner({
         setValidationResults(result);
         return;
       }
+      if (msg.type === "fit_view") {
+        pendingFitRef.current = { revision: msg.node_revision ?? 0, options: msg.options || {} };
+        setFitRequest((count) => count + 1);
+        return;
+      }
       if (msg.type === "patch_node_data") {
         setNodes((current) =>
           current.map((node) => {
@@ -1027,6 +1035,7 @@ function FlowInner({
       });
       lastHydrated.current.nodeRevision = nodeUpdateCount;
       lastHydrated.current.nodesSig = nodesSig;
+      setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
   }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors, nodeUpdateCount]);
@@ -1044,6 +1053,17 @@ function FlowInner({
       });
     }
   }, [hydratedEdges, setEdges]);
+
+  // Runs after the commit that hands the hydrated nodes to React Flow, whose
+  // fitView then waits until those nodes are measured.
+  useEffect(() => {
+    const pending = pendingFitRef.current;
+    if (!pending || hydratedRevision === null || hydratedRevision < pending.revision) {
+      return;
+    }
+    pendingFitRef.current = null;
+    fitView(pending.options).catch((error) => reportError(error, null, { source: "handler", handler: "fitView" }));
+  }, [fitRequest, fitView, hydratedRevision, reportError]);
 
   useEffect(() => {
     if (viewport) {

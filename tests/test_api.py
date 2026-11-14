@@ -1882,3 +1882,69 @@ def test_drop_message_emits_drop_event() -> None:
     }
     assert received == [(payload, flow)]
     assert wildcard == [payload]
+
+
+def test_fit_view_sends_default_options() -> None:
+    flow = _two_node_flow()
+    msgs = _capture_msgs(flow)
+
+    flow.fit_view()
+
+    assert msgs == [{"type": "fit_view", "node_revision": flow._node_update_count, "options": {}}]
+
+
+def test_fit_view_sends_react_flow_options() -> None:
+    flow = _two_node_flow()
+    msgs = _capture_msgs(flow)
+
+    flow.fit_view("n1", ["n2"], padding=0.2, duration=300, min_zoom=0.25, max_zoom=4, include_hidden_nodes=True)
+
+    assert msgs[0]["options"] == {
+        "nodes": [{"id": "n1"}, {"id": "n2"}],
+        "padding": 0.2,
+        "duration": 300,
+        "minZoom": 0.25,
+        "maxZoom": 4,
+        "includeHiddenNodes": True,
+    }
+
+
+def test_fit_view_waits_for_latest_node_revision() -> None:
+    flow = _two_node_flow()
+    msgs = _capture_msgs(flow)
+    before = flow._node_update_count
+
+    flow.nodes = [{"id": "n3", "position": {"x": 500, "y": 500}, "data": {}}]
+    flow.fit_view("n3")
+
+    assert msgs[-1]["node_revision"] == flow._node_update_count > before
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"padding": -0.1}, {"duration": -1}, {"min_zoom": 0}, {"max_zoom": -2}],
+)
+def test_fit_view_rejects_out_of_range_options(kwargs) -> None:
+    flow = _two_node_flow()
+    msgs = _capture_msgs(flow)
+
+    with pytest.raises(ValueError):
+        flow.fit_view(**kwargs)
+    assert msgs == []
+
+
+def test_fit_view_rejects_unknown_node_ids() -> None:
+    flow = _two_node_flow()
+    msgs = _capture_msgs(flow)
+
+    with pytest.raises(ValueError, match="missing"):
+        flow.fit_view("n1", "missing")
+    assert msgs == []
+
+
+def test_fit_view_before_render_is_a_noop() -> None:
+    flow = _two_node_flow()
+
+    flow.fit_view()
+
+    assert flow.viewport is None

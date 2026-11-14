@@ -1274,3 +1274,71 @@ def test_adding_node_type_keeps_other_nodes_mounted(page):
     # The same element proves the node was not remounted, so its view was never detached.
     assert wrapper.evaluate("el => el.__marker === true")
     assert wrapper.evaluate(_DEEP_CANVASES) > 0
+
+
+def _inside(inner, outer):
+    return (
+        inner["x"] >= outer["x"]
+        and inner["y"] >= outer["y"]
+        and inner["x"] + inner["width"] <= outer["x"] + outer["width"]
+        and inner["y"] + inner["height"] <= outer["y"] + outer["height"]
+    )
+
+
+def test_fit_view_fits_replaced_nodes(page):
+    flow = _plain_flow(count=2)
+    serve_component(page, flow)
+    expect(_node_locator(page, "N0")).to_have_count(1)
+    initial = flow.viewport
+
+    # The held nodes change reaches the browser after the fit request, which
+    # must still wait for the new graph instead of fitting the old one.
+    with pn.io.hold(_flow_document(flow)):
+        flow.nodes = [
+            NodeSpec(id="far1", position={"x": 5000, "y": 4000}, label="Far 1").to_dict(),
+            NodeSpec(id="far2", position={"x": 5600, "y": 4300}, label="Far 2").to_dict(),
+        ]
+        flow.fit_view()
+
+    pane = _pane_locator(page)
+    for label in ("Far 1", "Far 2"):
+        expect(_node_locator(page, label)).to_have_count(1)
+        wait_until(lambda label=label: _inside(_node_locator(page, label).bounding_box(), pane.bounding_box()), page=page, timeout=8000)
+    wait_until(lambda: flow.viewport is not None and flow.viewport != initial and flow.viewport["x"] < -1000, page=page, timeout=8000)
+
+
+def test_fit_view_to_node_subset(page):
+    flow = _plain_flow(count=6)
+    flow.viewport = {"x": 0, "y": 0, "zoom": 1}
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__node")).to_have_count(6)
+
+    flow.fit_view("n5", max_zoom=2, duration=200)
+
+    def _zoomed_to_last_node():
+        viewport = flow.viewport or {}
+        return viewport.get("zoom") == 2 and viewport.get("x", 0) < -1000
+
+    wait_until(_zoomed_to_last_node, page=page, timeout=8000)
+    pane_box = _pane_locator(page).bounding_box()
+    assert _inside(_node_locator(page, "N5").bounding_box(), pane_box)
+    assert not _inside(_node_locator(page, "N0").bounding_box(), pane_box)
+
+
+def test_fit_view_waits_for_requested_node_revision(page):
+    flow = _plain_flow(count=2)
+    serve_component(page, flow)
+    expect(_node_locator(page, "N0")).to_have_count(1)
+    wait_until(lambda: flow.viewport is not None, page=page, timeout=8000)
+    page.wait_for_timeout(300)
+    before = flow.viewport
+
+    # Simulates a fit request overtaking the nodes change it depends on.
+    flow._send_msg({"type": "fit_view", "node_revision": flow._node_update_count + 1, "options": {"padding": 0.5}})
+    page.wait_for_timeout(500)
+    assert flow.viewport == before
+
+    flow.nodes = [NodeSpec(id="far", position={"x": 5000, "y": 4000}, label="Far").to_dict()]
+
+    wait_until(lambda: flow.viewport["x"] < -1000, page=page, timeout=8000)
+    assert _inside(_node_locator(page, "Far").bounding_box(), _pane_locator(page).bounding_box())
