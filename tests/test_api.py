@@ -1047,15 +1047,6 @@ def test_selection_cleared_when_selectable_disabled() -> None:
     assert len(events) == 1
 
 
-def test_repeated_selection_changed_emits_once() -> None:
-    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
-    events: list[dict] = []
-    flow.on("selection_changed", events.append)
-    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
-    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
-    assert len(events) == 1
-
-
 @pytest.mark.parametrize("selection", [{"nodes": ["n1"], "edges": []}, {"nodes": [], "edges": ["e1"]}])
 def test_selected_editor_hidden_when_not_editable(selection) -> None:
     flow = ReactFlow(

@@ -2535,10 +2535,7 @@ class ReactFlow(ReactComponent):
                     self._node_set_selected(node, self._node_id(node) in node_ids)
                 for edge in self.edges:
                     self._edge_set_selected(edge, self._edge_id(edge) in edge_ids)
-                selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
-                if selection == self.selection:
-                    return
-                self.selection = selection
+                self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
                 self._update_selected_editor()
                 self._emit("selection_changed", msg)
             case "edge_added":

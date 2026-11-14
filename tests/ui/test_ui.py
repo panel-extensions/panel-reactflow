@@ -698,6 +698,20 @@ def test_disabling_selectable_clears_selection(page):
     assert len(events) == 2
 
 
+def test_selection_changed_emitted_in_debounce_mode(page):
+    flow = _make_flow()
+    flow.sync_mode = "debounce"
+    events = []
+    flow.on("selection_changed", events.append)
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: len(events) == 1, timeout=8000)
+    _node_locator(page, "End").click(force=True)
+    wait_until(lambda: len(events) == 2, timeout=8000)
+    assert [event["nodes"] for event in events] == [["n1"], ["n2"]]
+
+
 def test_patch_node_and_edge_labels_update_ui(page):
     flow = _make_flow()
     serve_component(page, flow)
