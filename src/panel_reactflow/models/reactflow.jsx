@@ -309,6 +309,11 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
     const zoom = useStore((s) => s.transform?.[2] ?? 1);
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
+    useEffect(() => {
+      if (!hasEditor) {
+        toggleToolbar(false);
+      }
+    }, [hasEditor]);
     const showGear = editorMode === "toolbar" && hasEditor;
     const showToolbar = editorMode === "toolbar" && toolbarOpen && hasEditor;
     const showInlineEditor = editorMode === "node" && hasEditor;
@@ -786,7 +791,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
   const lastViewportSig = useRef(null);
   const { setViewport: setRfViewport, screenToFlowPosition, fitView } = useReactFlow();
   const [hydratedRevision, setHydratedRevision] = useState(null);
@@ -1005,9 +1010,12 @@ function FlowInner({
 
   useEffect(() => {
     const nodesSig = signature(hydratedNodes);
+    // Nodes carrying views or editors do not stringify, so the signature
+    // alone cannot detect an editable toggle hiding their editors.
     if (
       nodeUpdateCount === lastHydrated.current.nodeRevision &&
-      nodesSig === lastHydrated.current.nodesSig
+      nodesSig === lastHydrated.current.nodesSig &&
+      editable === lastHydrated.current.editable
     ) {
       return;
     }
@@ -1035,10 +1043,11 @@ function FlowInner({
       });
       lastHydrated.current.nodeRevision = nodeUpdateCount;
       lastHydrated.current.nodesSig = nodesSig;
+      lastHydrated.current.editable = editable;
       setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
-  }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors, nodeUpdateCount]);
+  }, [hydratedNodes, pyNodes, setNodes, views, nodeEditors, nodeUpdateCount, editable]);
 
   useEffect(() => {
     const edgesSig = signature(hydratedEdges);
@@ -1547,7 +1556,7 @@ export function render({ model, view }) {
       const editorView = nodeEditors[idx];
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(dataWithoutViewIdx);
-      const hasEditor = realKeys.length > 0 || !!typeSpec.schema;
+      const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
       return {
         ...node,
         // Keep the declared class around so a later className/type patch can
@@ -1564,7 +1573,7 @@ export function render({ model, view }) {
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editorMode, allNodeTypes]);
+  }, [pyNodes, nodeEditors, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {

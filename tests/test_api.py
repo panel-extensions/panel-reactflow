@@ -1392,14 +1392,70 @@ def test_editor_resolution_default_node_editor() -> None:
 # --- Edge editor resolution tests ---
 
 
-def test_edge_editor_resolution_default() -> None:
-    """Without edge_editors, the fallback is SchemaEditor."""
+def test_edge_editor_resolution_default_without_schema() -> None:
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
     edge_id = flow.edges[0]["id"]
+    assert flow._edge_editors[edge_id] is None
+
+
+def test_edge_editor_resolution_default_with_schema() -> None:
+    flow = ReactFlow(edge_types={"pipe": EdgeType(type="pipe", schema={"type": "object", "properties": {"w": {"type": "number"}}})})
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
     assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+
+
+def test_edge_editor_created_when_schema_added_later() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    assert flow._edge_editors[edge_id] is None
+    flow.edge_types = {"pipe": EdgeType(type="pipe", schema={"type": "object", "properties": {"w": {"type": "number"}}})}
+    assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+
+
+def test_selecting_edge_without_editor_shows_no_editor() -> None:
+    flow = ReactFlow()
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow.selection["edges"] == [edge_id]
+    assert flow._selected_editor is None
+
+
+def test_selecting_edge_with_editor_shows_editor() -> None:
+    flow = ReactFlow(default_edge_editor=JsonEditor)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow._selected_editor is not None
+
+
+def test_selected_editor_hidden_when_not_editable() -> None:
+    flow = ReactFlow(default_edge_editor=JsonEditor, editor_mode="side")
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"a": 1}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
+    edge_id = flow.edges[0]["id"]
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": [edge_id]})
+    assert flow._selected_editor is not None
+    flow.editable = False
+    assert flow._selected_editor is None
+    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
+    assert flow._selected_editor is None
+    flow.editable = True
+    assert flow._selected_editor is not None
 
 
 def test_edge_editor_resolution_custom() -> None:
@@ -1425,8 +1481,76 @@ def test_edge_editor_resolution_default_edge_editor() -> None:
     assert isinstance(flow._edge_editors[edge_id], JsonEditor)
 
 
+class _UntypedDataEdge(Edge):
+    weight = param.Number(default=1.0, precedence=0)
+
+
+def _two_node_flow(**kwargs) -> ReactFlow:
+    flow = ReactFlow(**kwargs)
+    flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
+    flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
+    return flow
+
+
+_PIPE_SCHEMA = {"type": "object", "properties": {"w": {"type": "number"}}}
+
+
+def test_untyped_edge_subclass_with_data_params_gets_schema_editor() -> None:
+    flow = _two_node_flow()
+    flow.add_edge(_UntypedDataEdge(id="e1", source="n1", target="n2"))
+    editor = flow._edge_editors["e1"]
+    assert isinstance(editor, SchemaEditor)
+    assert "weight" in editor._schema["properties"]
+
+
+def test_selected_edge_editor_appears_when_schema_added() -> None:
+    flow = _two_node_flow()
+    flow.add_edge({"id": "e1", "source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": ["e1"]})
+    assert flow._selected_editor is None
+    flow.edge_types = {"pipe": EdgeType(type="pipe", schema=_PIPE_SCHEMA)}
+    assert flow._selected_editor is not None
+
+
+def test_selected_edge_editor_disappears_when_default_removed() -> None:
+    flow = _two_node_flow(default_edge_editor=JsonEditor)
+    flow.add_edge({"id": "e1", "source": "n1", "target": "n2", "data": {"w": 1}})
+    flow._handle_msg({"type": "selection_changed", "nodes": [], "edges": ["e1"]})
+    assert flow._selected_editor is not None
+    flow.default_edge_editor = None
+    assert flow._selected_editor is None
+
+
+def test_selected_node_editor_refreshes_when_editors_change() -> None:
+    flow = _two_node_flow(editor_mode="side")
+    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
+    before = flow._selected_editor
+    flow.node_editors = {"panel": lambda data, schema, **kw: pn.pane.Markdown("custom")}
+    assert flow._selected_editor is not before
+    assert flow._selected_editor.object == "custom"
+
+
+def test_edge_editor_re_resolved_on_type_change() -> None:
+    flow = _two_node_flow(edge_types={"pipe": EdgeType(type="pipe", schema=_PIPE_SCHEMA)})
+    flow.add_edge({"id": "e1", "source": "n1", "target": "n2", "data": {"w": 1}})
+    assert flow._edge_editors["e1"] is None
+    flow.patch_edge_props("e1", {"type": "pipe"})
+    assert isinstance(flow._edge_editors["e1"], SchemaEditor)
+    flow.patch_edge_props("e1", {"type": None})
+    assert flow._edge_editors["e1"] is None
+
+
+def test_edge_instance_editor_re_resolved_on_type_change() -> None:
+    flow = _two_node_flow(edge_types={"pipe": EdgeType(type="pipe", schema=_PIPE_SCHEMA)})
+    edge = Edge(id="e1", source="n1", target="n2", data={"w": 1})
+    flow.add_edge(edge)
+    assert flow._edge_editors["e1"] is None
+    edge.type = "pipe"
+    assert isinstance(flow._edge_editors["e1"], SchemaEditor)
+
+
 def test_edge_editor_on_patch_calls_patch_edge_data() -> None:
-    flow = ReactFlow()
+    flow = ReactFlow(default_edge_editor=SchemaEditor)
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 0}})
