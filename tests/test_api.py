@@ -1049,7 +1049,7 @@ def test_handle_msg_node_clicked_requires_node_id() -> None:
 
 @pytest.mark.parametrize("popup_trigger", ["click", "hover", "none"])
 def test_handle_msg_node_clicked_ignores_popup_trigger(popup_trigger) -> None:
-    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}], popup_trigger=popup_trigger, editable=False)
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}], popup_trigger=popup_trigger)
     events: list[dict] = []
     flow.on("node_clicked", events.append)
     flow._handle_msg({"type": "node_clicked", "node_id": "n1", "position": {"x": 3, "y": 4}})

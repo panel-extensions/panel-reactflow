@@ -1587,3 +1587,57 @@ def test_click_inside_toolbar_editor_does_not_emit_node_click(page):
     _node_locator(page, "End").locator(".rf-node-label").click()
     wait_until(lambda: len(clicks) == 1, timeout=8000)
     assert clicks[0]["node_id"] == "n2"
+
+
+def test_read_only_drag_across_node_does_not_emit_click(page):
+    flow = _make_flow()
+    flow.editable = False
+    clicks = []
+    flow.on("node_clicked", clicks.append)
+    serve_component(page, flow)
+
+    node = _node_locator(page, "End")
+    start = node.bounding_box()
+    box = node.locator(".rf-node-label").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 80, box["y"] + box["height"] / 2 + 50, steps=5)
+    page.mouse.up()
+
+    # Read-only nodes currently still drag (every node is sent with
+    # draggable=True); once they pan instead, the node also moves on screen.
+    wait_until(lambda: abs(node.bounding_box()["x"] - start["x"]) > 20, timeout=8000)
+    time.sleep(0.5)
+    assert clicks == []
+
+
+def test_read_only_node_view_widgets_are_interactive(page):
+    button = pn.widgets.Button(label="Inside")
+    pressed = []
+    button.on_click(pressed.append)
+    flow = ReactFlow(
+        nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "label": "Holder", "data": {}, "view": button}],
+        editable=False,
+        width=900,
+        height=600,
+    )
+    serve_component(page, flow)
+
+    page.locator(".react-flow__node[data-id='n1'] .rf-node-view-wrapper").get_by_role("button", name="Inside").click()
+    wait_until(lambda: len(pressed) == 1, timeout=8000)
+
+
+def test_click_inside_inline_editor_does_not_emit_node_click(page):
+    flow = _make_flow(editor_mode="node")
+    clicks = []
+    flow.on("node_clicked", clicks.append)
+    serve_component(page, flow)
+
+    editor = _node_locator(page, "Start").locator(".rf-node-inline-editor .jsoneditor").first
+    expect(editor).to_be_visible()
+    editor.click()
+
+    _node_locator(page, "End").locator(".rf-node-label").click()
+    wait_until(lambda: len(clicks) >= 1, timeout=8000)
+    time.sleep(0.5)
+    assert [event["node_id"] for event in clicks] == ["n2"]

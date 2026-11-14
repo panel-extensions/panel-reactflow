@@ -445,7 +445,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
         {(showView || showInlineEditor) && (
           <div>
             {showView ? <div className={viewWrapperClassName} style={viewWrapperStyle}>{data.view}</div> : null}
-            {showInlineEditor ? <div className="rf-node-inline-editor">{data.editor}</div> : null}
+            {showInlineEditor ? <div className="rf-node-inline-editor nodrag">{data.editor}</div> : null}
           </div>
         )}
         {renderHandles("output", spec.outputs, {
