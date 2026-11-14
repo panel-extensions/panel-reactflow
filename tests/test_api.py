@@ -1055,6 +1055,7 @@ def test_selected_editor_hidden_when_not_editable(selection) -> None:
             {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
         ],
         edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {"w": 1}}],
+        default_edge_editor=JsonEditor,
         editor_mode="side",
     )
     flow.selection = selection
