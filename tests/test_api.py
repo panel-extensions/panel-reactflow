@@ -1029,20 +1029,22 @@ def test_handle_msg_selection_changed_emits_once() -> None:
     assert flow.selection == {"nodes": ["n1"], "edges": ["e1"]}
 
 
-def test_selection_changed_when_not_editable() -> None:
+def test_selection_cleared_when_selectable_disabled() -> None:
     flow = ReactFlow(
         nodes=[
             {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
             {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
         ],
-        editable=False,
+        edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {}}],
     )
+    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": ["e1"]})
     events: list[dict] = []
     flow.on("selection_changed", events.append)
-    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
-    assert flow.selectable
+    flow.selectable = False
+    assert flow.selection == {"nodes": [], "edges": []}
+    assert not any(node.get("selected") for node in flow.nodes)
+    assert not any(edge.get("selected") for edge in flow.edges)
     assert len(events) == 1
-    assert flow.selection == {"nodes": ["n1"], "edges": []}
 
 
 @pytest.mark.parametrize("selection", [{"nodes": ["n1"], "edges": []}, {"nodes": [], "edges": ["e1"]}])

@@ -581,6 +581,61 @@ def test_selection_works_when_not_editable(page):
     expect(page.locator(".jsoneditor")).to_have_count(0)
 
 
+def _readonly_spec_flow():
+    return ReactFlow(
+        nodes=[
+            NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Start").to_dict(),
+            NodeSpec(id="n2", position={"x": 260, "y": 60}, label="End").to_dict(),
+        ],
+        edges=[EdgeSpec(id="e1", source="n1", target="n2").to_dict()],
+        editable=False,
+        width=900,
+        height=600,
+    )
+
+
+def _node_transforms(page):
+    return [page.locator(f'.react-flow__node[data-id="{node_id}"]').evaluate("el => el.style.transform") for node_id in ("n1", "n2")]
+
+
+def _python_positions(flow):
+    return [dict(node["position"]) for node in flow.nodes]
+
+
+def test_not_editable_spec_nodes_do_not_move(page):
+    flow = _readonly_spec_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__controls-interactive")).to_have_count(0)
+    start = _node_locator(page, "Start")
+    transforms, positions = _node_transforms(page), _python_positions(flow)
+
+    start.click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    for _ in range(5):
+        page.keyboard.press("ArrowRight")
+
+    pane = page.locator(".react-flow__pane").bounding_box()
+    page.keyboard.down("Shift")
+    page.mouse.move(pane["x"] + 5, pane["y"] + 5)
+    page.mouse.down()
+    page.mouse.move(pane["x"] + pane["width"] - 5, pane["y"] + pane["height"] - 5, steps=10)
+    page.mouse.up()
+    page.keyboard.up("Shift")
+    wait_until(lambda: flow.selection["nodes"] == ["n1", "n2"], timeout=8000)
+    for _ in range(5):
+        page.keyboard.press("ArrowDown")
+
+    box = start.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 150, box["y"] + 150, steps=10)
+    page.mouse.up()
+
+    page.wait_for_timeout(500)
+    assert _node_transforms(page) == transforms
+    assert _python_positions(flow) == positions
+
+
 def test_selection_disabled_when_not_selectable(page):
     flow = _make_flow()
     flow.selectable = False
@@ -590,6 +645,17 @@ def test_selection_disabled_when_not_selectable(page):
     page.wait_for_timeout(300)
     assert flow.selection["nodes"] == []
     expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+
+
+def test_disabling_selectable_clears_selection(page):
+    flow = _make_flow()
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    flow.selectable = False
+    expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+    assert flow.selection == {"nodes": [], "edges": []}
 
 
 def test_patch_node_and_edge_labels_update_ui(page):

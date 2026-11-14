@@ -1249,7 +1249,7 @@ function FlowInner({
 
   const onConnect = useCallback(
     (connection) => {
-      if (!enableConnect || candidateReason(connection)) {
+      if (!editable || !enableConnect || candidateReason(connection)) {
         return;
       }
       const baseId = connection.id || `${connection.source}->${connection.target}`;
@@ -1262,14 +1262,14 @@ function FlowInner({
       setEdges(updated);
       sendPatch({ type: "edge_added", edge: newEdge });
     },
-    [candidateReason, enableConnect, sendPatch, setEdges],
+    [candidateReason, editable, enableConnect, sendPatch, setEdges],
   );
 
   const handleNodesChange = useCallback(
     (changes) => {
       onNodesChange(changes);
       const moved = changes.filter((change) => change.type === "position" && change.dragging !== true);
-      if (!moved.length) {
+      if (!editable || !moved.length) {
         return;
       }
       moved.forEach((change) => {
@@ -1280,8 +1280,14 @@ function FlowInner({
         });
       });
     },
-    [onNodesChange, schedulePatch],
+    [editable, onNodesChange, schedulePatch],
   );
+
+  useEffect(() => {
+    if (selectable) return;
+    setNodes((curr) => (curr.some((n) => n.selected) ? curr.map((n) => (n.selected ? { ...n, selected: false } : n)) : curr));
+    setEdges((curr) => (curr.some((e) => e.selected) ? curr.map((e) => (e.selected ? { ...e, selected: false } : e)) : curr));
+  }, [selectable, setNodes, setEdges]);
 
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
@@ -1513,7 +1519,7 @@ function FlowInner({
       maxZoom={maxZoom}
       fitView
     >
-      <Controls />
+      <Controls showInteractive={false} />
       {showMinimap ? <MiniMap /> : null}
       <Background />
     </ReactFlow>
@@ -1735,6 +1741,9 @@ export function render({ model, view }) {
       const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
       return {
         ...node,
+        // Node/NodeSpec serialize per-node flags, which override the
+        // canvas-wide nodesDraggable/nodesConnectable in React Flow.
+        ...(editable ? {} : { draggable: false, connectable: false, deletable: false }),
         // Keep the declared class around so a later className/type patch can
         // recombine it with the React Flow node chrome class.
         _className: node.className ?? null,
