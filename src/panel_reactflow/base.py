@@ -1374,9 +1374,10 @@ class ReactFlow(ReactComponent):
         Default React Flow edge options applied to all edges (e.g., ``animated``,
         ``type``). See React Flow documentation for available options.
     editable : bool, default True
-        Enable interactive editing on the canvas (drag, connect, delete).
-        Set to ``False`` for read-only visualization; node and edge
-        editors are then hidden.
+        Enable interactive editing on the canvas (drag, connect, delete,
+        drop and node/edge editors). Set to ``False`` for read-only
+        visualization; nodes and edges stay selectable unless
+        ``selectable`` is also ``False``.
     editor_mode : {"toolbar", "node", "side"}, default "toolbar"
         Where to render node editors:
 
@@ -1393,6 +1394,9 @@ class ReactFlow(ReactComponent):
         Maximum zoom level the viewport can be zoomed in to.
     min_zoom : float, default 0.5
         Minimum zoom level the viewport can be zoomed out to.
+    selectable : bool, default True
+        Allow clicking nodes and edges to select them, independently of
+        ``editable``.
     selection : dict, default {"nodes": [], "edges": []}
         Current selection state with lists of selected node and edge IDs.
         Read-only; updated automatically when selection changes.
@@ -1577,6 +1581,8 @@ class ReactFlow(ReactComponent):
     max_zoom = param.Number(default=2, bounds=(0, None), inclusive_bounds=(False, True), doc="Maximum zoom level of the viewport.")
 
     min_zoom = param.Number(default=0.5, bounds=(0, None), inclusive_bounds=(False, True), doc="Minimum zoom level of the viewport.")
+
+    selectable = param.Boolean(default=True, doc="Allow selecting nodes and edges, even when not editable.")
 
     selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
 

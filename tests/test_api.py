@@ -1029,6 +1029,40 @@ def test_handle_msg_selection_changed_emits_once() -> None:
     assert flow.selection == {"nodes": ["n1"], "edges": ["e1"]}
 
 
+def test_selection_changed_when_not_editable() -> None:
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        editable=False,
+    )
+    events: list[dict] = []
+    flow.on("selection_changed", events.append)
+    flow._handle_msg({"type": "selection_changed", "nodes": ["n1"], "edges": []})
+    assert flow.selectable
+    assert len(events) == 1
+    assert flow.selection == {"nodes": ["n1"], "edges": []}
+
+
+@pytest.mark.parametrize("selection", [{"nodes": ["n1"], "edges": []}, {"nodes": [], "edges": ["e1"]}])
+def test_selected_editor_hidden_when_not_editable(selection) -> None:
+    flow = ReactFlow(
+        nodes=[
+            {"id": "n1", "position": {"x": 0, "y": 0}, "data": {"a": 1}},
+            {"id": "n2", "position": {"x": 1, "y": 1}, "data": {}},
+        ],
+        edges=[{"id": "e1", "source": "n1", "target": "n2", "data": {"w": 1}}],
+        editor_mode="side",
+    )
+    flow.selection = selection
+    assert flow._selected_editor is not None
+    flow.editable = False
+    assert flow._selected_editor is None
+    flow.editable = True
+    assert flow._selected_editor is not None
+
+
 def test_handle_msg_node_clicked_emits_once() -> None:
     flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
     events: list[dict] = []

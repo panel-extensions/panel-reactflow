@@ -920,6 +920,7 @@ function FlowInner({
   nodeEditors,
   colorMode,
   editable,
+  selectable,
   enableConnect,
   connectionValidation,
   hasConnectionValidators,
@@ -1505,8 +1506,8 @@ function FlowInner({
       isValidConnection={validationEnabled ? (connection) => !candidateReason(connection) : undefined}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
-      elementsSelectable={editable}
-      deleteKeyCode={enableDelete ? ["Backspace", "Delete"] : null}
+      elementsSelectable={selectable}
+      deleteKeyCode={editable && enableDelete ? ["Backspace", "Delete"] : null}
       multiSelectionKeyCode={enableMultiselect ? "Shift" : null}
       minZoom={minZoom}
       maxZoom={maxZoom}
@@ -1538,6 +1539,7 @@ export function render({ model, view }) {
   const [colorMode] = model.useState("color_mode");
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
+  const [selectable] = model.useState("selectable");
   const [editorMode] = model.useState("editor_mode");
   const [valuePopupTrigger] = model.useState("popup_trigger");
   const [dropTypes] = model.useState("drop_types");
@@ -1856,6 +1858,7 @@ export function render({ model, view }) {
       edgeTypes={hydratedEdgeTypes}
       nodeEditors={nodeEditors}
       editable={editable}
+      selectable={selectable}
       enableConnect={enableConnect}
       connectionValidation={connectionValidation}
       hasConnectionValidators={hasConnectionValidators}

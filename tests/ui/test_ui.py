@@ -562,6 +562,36 @@ def test_selection_syncs_between_ui_and_python(page):
     wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
 
 
+def test_selection_works_when_not_editable(page):
+    flow = _make_flow()
+    flow.editable = False
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    expect(_node_locator(page, "Start")).to_have_class(re.compile(r"\bselected\b"))
+
+    page.keyboard.press("Backspace")
+    page.wait_for_timeout(300)
+    assert [node["id"] for node in flow.nodes] == ["n1", "n2"]
+    expect(_node_locator(page, "Start").get_by_label("Show node toolbar")).to_have_count(0)
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    wait_until(lambda: flow.selection["edges"] == ["e1"], timeout=8000)
+    expect(page.locator(".jsoneditor")).to_have_count(0)
+
+
+def test_selection_disabled_when_not_selectable(page):
+    flow = _make_flow()
+    flow.selectable = False
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    page.wait_for_timeout(300)
+    assert flow.selection["nodes"] == []
+    expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+
+
 def test_patch_node_and_edge_labels_update_ui(page):
     flow = _make_flow()
     serve_component(page, flow)
