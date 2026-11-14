@@ -684,7 +684,7 @@ def test_selecting_edge_without_editor_does_not_open_editor(page):
 
     page.locator(".react-flow__edge-path").first.click(force=True)
     wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
-    page.wait_for_timeout(300)
+    expect(page.locator(".react-flow__edge.selected")).to_have_count(1)
     expect(page.locator(".jsoneditor:visible")).to_have_count(0)
 
 
@@ -705,6 +705,19 @@ def test_node_toolbar_hidden_when_not_editable(page):
 
     expect(_node_locator(page, "Start")).to_have_count(1)
     expect(_node_locator(page, "Start").get_by_label("Show node toolbar")).to_have_count(0)
+
+
+def test_node_toolbar_closes_when_editable_disabled(page):
+    flow = _make_flow(editor_mode="toolbar")
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").get_by_label("Show node toolbar").click()
+    expect(page.locator(".jsoneditor:visible")).to_have_count(1)
+    flow.editable = False
+    expect(page.locator(".jsoneditor:visible")).to_have_count(0)
+    flow.editable = True
+    expect(_node_locator(page, "Start").get_by_label("Show node toolbar")).to_have_count(1)
+    expect(page.locator(".jsoneditor:visible")).to_have_count(0)
 
 
 def test_delete_node_does_not_rerender_surviving_node_views(page):

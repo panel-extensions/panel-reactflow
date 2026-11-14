@@ -1644,7 +1644,7 @@ class ReactFlow(ReactComponent):
         if "color_mode" not in params:
             params["color_mode"] = "dark" if pn.config.theme == "dark" else "light"
         self._node_ids: list[str] = []
-        self._edge_ids: list[str] = []
+        self._edge_keys: list[tuple[str, str]] = []
         self._attached_node_instances: dict[int, Node] = {}
         self._attached_edge_instances: dict[int, Edge] = {}
         self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
@@ -2157,30 +2157,40 @@ class ReactFlow(ReactComponent):
             editors[node_id] = editor
         self._node_editors = editors
         self.param.trigger("_node_editor_views")
+        if self.selection.get("nodes"):
+            self._update_selected_editor()
 
     def _update_edge_editors(self, *events: tuple[param.parameterized.Event]) -> None:
-        edge_ids = [self._edge_id(edge) for edge in self.edges]
-        edge_ids = [edge_id for edge_id in edge_ids if edge_id is not None]
+        # Keyed by type too, so retyping an edge re-resolves its editor.
+        edge_keys = [(self._edge_id(edge), self._edge_type(edge)) for edge in self.edges]
+        edge_keys = [key for key in edge_keys if key[0] is not None]
         config_changed = any(event.name in ("edge_types", "edge_editors", "default_edge_editor") for event in events)
-        if edge_ids == self._edge_ids and not config_changed:
+        if edge_keys == self._edge_keys and not config_changed:
             return
-        self._edge_ids = edge_ids
+        previous_types = dict(self._edge_keys)
+        self._edge_keys = edge_keys
 
         editors = {}
         for edge in self.edges:
             edge_id = self._edge_id(edge)
             if edge_id is None:
                 continue
-            if edge_id in self._edge_editors and not config_changed:
+            edge_type = self._edge_type(edge)
+            if edge_id in self._edge_editors and previous_types.get(edge_id) == edge_type and not config_changed:
                 editors[edge_id] = self._edge_editors[edge_id]
                 continue
-            edge_type = self._edge_type(edge)
             editor_factory = None
             if isinstance(edge, Edge) and type(edge).editor is not Edge.editor:
                 editor_factory = edge.editor
             if editor_factory is None:
                 editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor
-            schema = self._get_edge_schema(edge_type) if edge_type else None
+            schema = None
+            if isinstance(edge, Edge):
+                schema = edge._data_schema()
+                if not schema.get("properties"):
+                    schema = None
+            if schema is None and edge_type:
+                schema = self._get_edge_schema(edge_type)
             if editor_factory is None:
                 # Edges are usually selected for their own sake, so unlike
                 # nodes (whose editor sits behind a toolbar toggle) only pop
@@ -2203,6 +2213,8 @@ class ReactFlow(ReactComponent):
                 editor = editor_factory
             editors[edge_id] = editor
         self._edge_editors = editors
+        if self.selection.get("edges"):
+            self._update_selected_editor()
 
     def _update_selected_editor(self, *events: tuple[param.parameterized.Event]) -> None:
         selected_nodes = self.selection.get("nodes", [])
@@ -3208,6 +3220,8 @@ class ReactFlow(ReactComponent):
             if self._edge_id(edge) == edge_id:
                 self._apply_prop_patch(edge, patch)
                 break
+        if "type" in patch:
+            self._update_edge_editors()
         self._send_msg({"type": "patch_edge_props", "edge_id": edge_id, "patch": patch})
         self._emit("edge_props_changed", {"type": "edge_props_changed", "edge_id": edge_id, "patch": patch})
 
