@@ -1,8 +1,10 @@
 """Tests for ReactFlow model creation."""
 
 import param
+from panel.io.state import state
 from panel.pane import Markdown
 from panel.viewable import Viewer
+from panel_material_ui.theme import MaterialDesign
 
 from panel_reactflow import Edge, EdgeType, Node, NodeType, ReactFlow
 
@@ -154,3 +156,22 @@ def test_node_and_edge_types_updated_together(flow_model) -> None:
     assert isinstance(flow.edge_types["e"], dict)
     assert isinstance(model.data.node_types["a"], dict)
     assert isinstance(model.data.edge_types["e"], dict)
+
+
+def test_design_wrapped_root_routes_updates_to_flow_model(document, flow_model) -> None:
+    flow = ReactFlow(design=MaterialDesign)
+    model = flow_model(flow)
+    (ref,) = flow._models
+    root = state._views[ref][1]
+
+    assert root is not model
+    assert root.data.__class__.__name__.startswith("MaterialWrapper")
+    assert model.data.__class__.__name__.startswith("ReactFlow")
+
+    sent = []
+    document.callbacks.send_event = sent.append
+    flow._send_msg({"type": "ping"})
+    assert [event.model for event in sent] == [model]
+
+    flow.nodes = [{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}]
+    assert [node["id"] for node in model.data.nodes] == ["n1"]

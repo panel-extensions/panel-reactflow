@@ -1,7 +1,8 @@
 """Holds fixtures and configuration for the test suite."""
 
 import pytest
-from panel.tests.conftest import comm, document  # noqa
+from panel.config import config
+from panel.tests.conftest import comm, document  # noqa: F401
 
 optional_markers = {
     "ui": {
@@ -10,6 +11,15 @@ optional_markers = {
         "skip-reason": "Test only runs with the --ui option.",
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def reset_design():
+    """Importing panel_material_ui sets a global design, so start every test without one."""
+    design = config.design
+    config.design = None
+    yield
+    config.design = design
 
 
 @pytest.fixture
