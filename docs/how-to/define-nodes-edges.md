@@ -186,8 +186,8 @@ edges = [
 ### Self-loops
 
 An edge whose `source` and `target` are the same node is drawn as a loop
-that leaves the output handle, arcs over the node and re-enters at the input
-handle, whatever its `type`. The label sits at the top of the arc, and
+that leaves the output handle, arcs around the node and re-enters at the input
+handle, whatever its `type`. The label sits at the far point of the arc, and
 several loops on one node are stacked so each stays visible.
 
 ```python

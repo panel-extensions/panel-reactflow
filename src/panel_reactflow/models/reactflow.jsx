@@ -481,9 +481,8 @@ function point(x, y) {
 
 /**
  * Build a loop that leaves the source handle and re-enters the same node at
- * the target handle. Handles on opposite sides arc around the node, so the
- * loop never crosses the node body; other combinations bulge outwards from
- * the handles. `index` stacks multiple loops on one node.
+ * the target handle, keeping the curve outside the node body. `index` stacks
+ * multiple loops on one node.
  */
 function getSelfLoopPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, bounds, index = 0 }) {
   const offset = SELF_LOOP_OFFSET + index * SELF_LOOP_SPACING;
@@ -492,6 +491,7 @@ function getSelfLoopPath({ sourceX, sourceY, sourcePosition, targetX, targetY, t
   const [tdx, tdy] = POSITION_VECTORS[targetPosition] ?? [-1, 0];
   const s1 = [sourceX + sdx * reach, sourceY + sdy * reach];
   const t1 = [targetX + tdx * reach, targetY + tdy * reach];
+  const outside = (axisDir, start, size) => (axisDir > 0 ? start + size + offset : start - offset);
   if (sdx && tdx && sdx === -tdx) {
     const labelX = bounds.x + bounds.width / 2;
     const labelY = bounds.y - offset;
@@ -506,18 +506,30 @@ function getSelfLoopPath({ sourceX, sourceY, sourcePosition, targetX, targetY, t
       ` C ${point(labelX, t1[1])} ${point(...t1)} ${point(targetX, targetY)}`;
     return { path, labelX, labelY };
   }
-  // Handles on the same side would collapse into a line, so splay the
-  // control points perpendicular to the handle direction.
-  const sameSide = sdx === tdx && sdy === tdy;
-  const spread = sameSide ? reach : 0;
-  const c1 = [sourceX + sdx * 2 * reach - sdy * spread, sourceY + sdy * 2 * reach - sdx * spread];
-  const c2 = [targetX + tdx * 2 * reach + tdy * spread, targetY + tdy * 2 * reach + tdx * spread];
-  const path = `M ${point(sourceX, sourceY)} C ${point(...c1)} ${point(...c2)} ${point(targetX, targetY)}`;
-  return {
-    path,
-    labelX: (sourceX + 3 * c1[0] + 3 * c2[0] + targetX) / 8,
-    labelY: (sourceY + 3 * c1[1] + 3 * c2[1] + targetY) / 8,
-  };
+  if (sdx === tdx && sdy === tdy) {
+    // Splay the ends apart along the side, source away from target, so the
+    // curve forms a loop rather than a line or a knot.
+    const [ax, ay] = [Math.abs(sdy), Math.abs(sdx)];
+    const sign = (sourceX - targetX) * ax + (sourceY - targetY) * ay >= 0 ? 1 : -1;
+    const spread = Math.max(reach, Math.abs((sourceX - targetX) * ax + (sourceY - targetY) * ay) / 2);
+    const c1 = [sourceX + sdx * 2 * reach + ax * sign * spread, sourceY + sdy * 2 * reach + ay * sign * spread];
+    const c2 = [targetX + tdx * 2 * reach - ax * sign * spread, targetY + tdy * 2 * reach - ay * sign * spread];
+    const path = `M ${point(sourceX, sourceY)} C ${point(...c1)} ${point(...c2)} ${point(targetX, targetY)}`;
+    return {
+      path,
+      labelX: (sourceX + 3 * c1[0] + 3 * c2[0] + targetX) / 8,
+      labelY: (sourceY + 3 * c1[1] + 3 * c2[1] + targetY) / 8,
+    };
+  }
+  // Adjacent sides route through the shared corner. Each half's control
+  // points stay beyond the side its handle sits on, so neither crosses the body.
+  const labelX = outside(sdx || tdx, bounds.x, bounds.width);
+  const labelY = outside(sdy || tdy, bounds.y, bounds.height);
+  const [ux, uy] = [tdx - sdx, tdy - sdy];
+  const k = offset / 2;
+  const path = `M ${point(sourceX, sourceY)} C ${point(...s1)} ${point(labelX - ux * k, labelY - uy * k)} ${point(labelX, labelY)}` +
+    ` C ${point(labelX + ux * k, labelY + uy * k)} ${point(...t1)} ${point(targetX, targetY)}`;
+  return { path, labelX, labelY };
 }
 
 const SelfLoopEdge = React.memo(function SelfLoopEdge({
@@ -541,9 +553,14 @@ const SelfLoopEdge = React.memo(function SelfLoopEdge({
   interactionWidth,
 }) {
   const node = useInternalNode(source);
-  const index = useStore((state) => state.edges
-    .filter((edge) => edge.source === source && edge.target === source)
-    .findIndex((edge) => edge.id === id));
+  const index = useStore((state) => {
+    let count = 0;
+    for (const edge of state.edges) {
+      if (edge.id === id) return count;
+      if (edge.source === source && edge.target === source && !edge.hidden) count++;
+    }
+    return 0;
+  });
   const position = node?.internals?.positionAbsolute;
   const bounds = position && node.measured?.width != null
     ? { x: position.x, y: position.y, width: node.measured.width, height: node.measured.height ?? 0 }
@@ -554,10 +571,11 @@ const SelfLoopEdge = React.memo(function SelfLoopEdge({
         height: Math.abs(sourceY - targetY),
       };
   const { path, labelX, labelY } = getSelfLoopPath({
-    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, bounds, index: Math.max(index, 0),
+    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, bounds, index,
   });
   return (
     <BaseEdge
+      id={id}
       path={path}
       labelX={labelX}
       labelY={labelY}
