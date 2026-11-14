@@ -2184,13 +2184,11 @@ class ReactFlow(ReactComponent):
                 editor_factory = edge.editor
             if editor_factory is None:
                 editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor
-            schema = None
-            if isinstance(edge, Edge):
-                schema = edge._data_schema()
-                if not schema.get("properties"):
-                    schema = None
-            if schema is None and edge_type:
-                schema = self._get_edge_schema(edge_type)
+            schema = self._get_edge_schema(edge_type) if edge_type else None
+            if not (schema and schema.get("properties")) and isinstance(edge, Edge):
+                instance_schema = edge._data_schema()
+                if instance_schema.get("properties"):
+                    schema = instance_schema
             if editor_factory is None:
                 # Edges are usually selected for their own sake, so unlike
                 # nodes (whose editor sits behind a toolbar toggle) only pop
