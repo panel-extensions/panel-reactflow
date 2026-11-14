@@ -1604,8 +1604,8 @@ def test_read_only_drag_across_node_does_not_emit_click(page):
     page.mouse.move(box["x"] + box["width"] / 2 + 80, box["y"] + box["height"] / 2 + 50, steps=5)
     page.mouse.up()
 
-    # Read-only nodes currently still drag (every node is sent with
-    # draggable=True); once they pan instead, the node also moves on screen.
+    # NodeSpec nodes are sent with draggable=True, which overrides editable=False;
+    # whether the node drags or the canvas pans, the node moves on screen.
     wait_until(lambda: abs(node.bounding_box()["x"] - start["x"]) > 20, timeout=8000)
     time.sleep(0.5)
     assert clicks == []
