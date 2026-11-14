@@ -1408,6 +1408,7 @@ class ReactFlow(ReactComponent):
     viewport : dict, optional
         Persisted viewport state with ``x``, ``y`` (position) and ``zoom``.
         Set to restore a specific view on initialization.
+        Use :meth:`fit_view` to fit the graph into view again.
     top_panel : list, default []
         Panel viewables rendered in a top-center overlay panel.
     bottom_panel : list, default []
@@ -3201,6 +3202,94 @@ class ReactFlow(ReactComponent):
                 break
         self._send_msg({"type": "patch_edge_props", "edge_id": edge_id, "patch": patch})
         self._emit("edge_props_changed", {"type": "edge_props_changed", "edge_id": edge_id, "patch": patch})
+
+    def fit_view(
+        self,
+        *node_ids: str | Sequence[str],
+        padding: float | None = None,
+        duration: int | None = None,
+        min_zoom: float | None = None,
+        max_zoom: float | None = None,
+        include_hidden_nodes: bool = False,
+    ) -> None:
+        """Pan and zoom the viewport so that the graph fits into view.
+
+        The canvas fits the view once when it is first rendered. Call this
+        method to fit it again, e.g. after adding nodes or loading a new graph.
+        The resulting viewport is synced back to the ``viewport`` parameter.
+
+        Parameters
+        ----------
+        *node_ids : str or sequence of str
+            Only fit these nodes into view, either as separate arguments or as
+            a single sequence. Fits every node when omitted.
+        padding : float, optional
+            Space around the fitted nodes as a fraction of the viewport size.
+            Defaults to React Flow's ``0.1``.
+        duration : int, optional
+            Length of the animated transition in milliseconds. Jumps to the
+            new viewport when omitted.
+        min_zoom : float, optional
+            Lower zoom bound for this fit, defaults to ``min_zoom``.
+        max_zoom : float, optional
+            Upper zoom bound for this fit, defaults to ``max_zoom``.
+        include_hidden_nodes : bool, default False
+            Whether hidden nodes are included in the fitted bounds.
+
+        Raises
+        ------
+        ValueError
+            If a node id is not part of the graph or an option is out of range.
+
+        Examples
+        --------
+        Load a new graph and fit it into view:
+
+        >>> flow.nodes = new_nodes
+        >>> flow.fit_view()
+
+        Zoom to two nodes with an animated transition:
+
+        >>> flow.fit_view("n1", "n2", padding=0.2, duration=500)
+
+        Notes
+        -----
+        A fit requested right after ``nodes`` changed waits until the browser
+        has rendered and measured those nodes, so it fits the new graph rather
+        than the previous one, even when the change is held back by
+        ``pn.io.hold``.
+
+        Calling this before the component is displayed does nothing, there is
+        no canvas to fit yet and the first render fits the view anyway.
+        """
+        ids = _flatten_ids(node_ids)
+        known = {self._node_id(node) for node in self.nodes}
+        unknown = [node_id for node_id in ids if node_id not in known]
+        if unknown:
+            raise ValueError(f"Cannot fit view to unknown node ids: {unknown}")
+        if padding is not None and padding < 0:
+            raise ValueError("padding must be non-negative.")
+        if duration is not None and duration < 0:
+            raise ValueError("duration must be non-negative.")
+        for name, zoom in (("min_zoom", min_zoom), ("max_zoom", max_zoom)):
+            if zoom is not None and zoom <= 0:
+                raise ValueError(f"{name} must be positive.")
+        options: dict[str, Any] = {}
+        if ids:
+            options["nodes"] = [{"id": node_id} for node_id in ids]
+        if padding is not None:
+            options["padding"] = padding
+        if duration is not None:
+            options["duration"] = duration
+        if min_zoom is not None:
+            options["minZoom"] = min_zoom
+        if max_zoom is not None:
+            options["maxZoom"] = max_zoom
+        if include_hidden_nodes:
+            options["includeHiddenNodes"] = True
+        # The fit may reach the browser before a held ``nodes`` change does, so
+        # it names the node revision it has to wait for.
+        self._send_msg({"type": "fit_view", "node_revision": self._node_update_count, "options": options})
 
     def to_networkx(self, *, multigraph: bool = False):
         """Convert the current graph to NetworkX format.

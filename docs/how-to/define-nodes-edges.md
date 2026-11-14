@@ -441,3 +441,24 @@ with pn.io.hold():
     flow.nodes = new_nodes
     flow.edges = new_edges
 ```
+
+### Fit the graph into view
+
+The canvas fits the view to the graph only when it first renders. After adding
+nodes or loading a new graph, call `fit_view()` to pan and zoom so that the
+graph fits again. The resulting viewport is synced back to `flow.viewport`.
+
+```python
+flow.nodes = new_nodes
+flow.edges = new_edges
+flow.fit_view()
+
+# Zoom to a subset of nodes with some padding and an animated transition
+flow.fit_view("n1", "n2", padding=0.2, duration=500)
+```
+
+A fit requested right after `nodes` changed waits until the browser has
+rendered and measured the new nodes, so it fits the new graph rather than the
+previous one, also inside `pn.io.hold()`. Calling `fit_view()` before the
+component is displayed does nothing, since the first render fits the view
+anyway.
