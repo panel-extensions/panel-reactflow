@@ -13,7 +13,7 @@ import pytest
 from panel.custom import Child, ReactComponent
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import Edge, EdgeSpec, JsonEditor, Node, NodeSpec, NodeType, ReactFlow
+from panel_reactflow import Edge, EdgeSpec, EdgeType, JsonEditor, Node, NodeSpec, NodeType, ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -245,8 +245,140 @@ def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     wait_until(lambda: len(flow.edges) == 1, timeout=8000)
     output_a.drag_to(input_b)
     output_b.drag_to(input_a)
+    output_a.drag_to(input_a)
     expect(page.locator(".react-flow__edge")).to_have_count(1)
     assert len(flow.edges) == 1
+
+
+def _assert_loop_above_node(page, node_label, edge_id):
+    node_box = _node_locator(page, node_label).bounding_box()
+    path_box = page.locator(f'.react-flow__edge[data-id="{edge_id}"] .react-flow__edge-path').bounding_box()
+    assert path_box["height"] > node_box["height"] / 2
+    assert path_box["y"] < node_box["y"] - 20
+    assert path_box["x"] < node_box["x"] and path_box["x"] + path_box["width"] > node_box["x"] + node_box["width"]
+
+
+def test_drawing_self_loop_renders_loop(page, tmp_path):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="a", type="step", label="A", position={"x": 0, "y": 0}).to_dict()],
+        node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
+        connection_validation={"direction": True},
+        width=500,
+        height=350,
+    )
+    serve_component(page, flow)
+    node = _node_locator(page, "A")
+    node.locator(".react-flow__handle-right").drag_to(node.locator(".react-flow__handle-left"))
+
+    wait_until(lambda: [(e["source"], e["target"]) for e in flow.edges] == [("a", "a")], timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+    _assert_loop_above_node(page, "A", flow.edges[0]["id"])
+    page.screenshot(path=tmp_path / "self_loop.png")
+
+
+def test_programmatic_self_loops_render_with_labels(page, tmp_path):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", label="B", position={"x": 300, "y": 0}).to_dict(),
+        ],
+        edges=[
+            EdgeSpec(id="loop1", source="a", target="a", label="Lateral").to_dict(),
+            EdgeSpec(id="loop2", source="a", target="a", label="Second", type="smoothstep").to_dict(),
+            EdgeSpec(id="ab", source="a", target="b").to_dict(),
+        ],
+        width=700,
+        height=400,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(3)
+    expect(page.locator(".rf-self-loop")).to_have_count(2)
+    _assert_loop_above_node(page, "A", "loop1")
+    _assert_loop_above_node(page, "A", "loop2")
+
+    node_box = _node_locator(page, "A").bounding_box()
+    first = _edge_label_locator(page, "Lateral").bounding_box()
+    second = _edge_label_locator(page, "Second").bounding_box()
+    assert first["y"] + first["height"] < node_box["y"]
+    assert second["y"] < first["y"]
+    page.screenshot(path=tmp_path / "self_loops_labels.png")
+
+
+def test_self_loop_with_custom_edge_type_renders_loop(page):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="a", label="A", position={"x": 0, "y": 0}).to_dict()],
+        edges=[EdgeSpec(id="loop", source="a", target="a", type="weighted", data={"weight": 1}).to_dict()],
+        edge_types={"weighted": EdgeType(type="weighted", schema={"type": "object", "properties": {"weight": {"type": "number"}}})},
+        width=500,
+        height=350,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".rf-self-loop")).to_have_count(1)
+    _assert_loop_above_node(page, "A", "loop")
+
+
+def _polyline_self_intersects(points):
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    segments = list(zip(points, points[1:], strict=False))
+    for i, (p1, p2) in enumerate(segments):
+        for q1, q2 in segments[i + 2 :]:
+            if p1 == q2:
+                continue
+            if cross(p1, p2, q1) * cross(p1, p2, q2) < 0 and cross(q1, q2, p1) * cross(q1, q2, p2) < 0:
+                return True
+    return False
+
+
+_SELF_LOOP_JS = Path(__file__).resolve().parents[2] / "src" / "panel_reactflow" / "models" / "reactflow.jsx"
+
+
+@pytest.mark.parametrize(
+    "source, target",
+    [
+        # Same side, source below/right of target, which used to knot.
+        (("right", 150, 160), ("right", 150, 40)),
+        (("right", 150, 40), ("right", 150, 160)),
+        (("top", 120, 0), ("top", 30, 0)),
+        (("bottom", 30, 200), ("bottom", 30, 200)),
+        # Adjacent sides on a tall node.
+        (("right", 150, 100), ("top", 75, 0)),
+        (("left", 0, 150), ("bottom", 75, 200)),
+        (("bottom", 75, 200), ("right", 150, 100)),
+        # Opposite sides.
+        (("right", 150, 100), ("left", 0, 100)),
+        (("bottom", 75, 200), ("top", 75, 0)),
+    ],
+)
+def test_self_loop_path_stays_outside_node(page, source, target):
+    source_js = _SELF_LOOP_JS.read_text()
+    helpers = source_js[source_js.index("const SELF_LOOP_OFFSET") : source_js.index("const SelfLoopEdge")]
+    page.set_content("<svg><path id='p'/></svg>")
+    samples = page.evaluate(
+        """([helpers, source, target]) => {
+            const Position = {Left: "left", Right: "right", Top: "top", Bottom: "bottom"};
+            const getSelfLoopPath = new Function("Position", helpers + "; return getSelfLoopPath;")(Position);
+            const {path} = getSelfLoopPath({
+                sourcePosition: source[0], sourceX: source[1], sourceY: source[2],
+                targetPosition: target[0], targetX: target[1], targetY: target[2],
+                bounds: {x: 0, y: 0, width: 150, height: 200},
+            });
+            const el = document.getElementById("p");
+            el.setAttribute("d", path);
+            const length = el.getTotalLength();
+            return Array.from({length: 101}, (_, i) => {
+                const p = el.getPointAtLength(length * i / 100);
+                return [p.x, p.y];
+            });
+        }""",
+        [helpers, source, target],
+    )
+    inside = [(x, y) for x, y in samples if 1 < x < 149 and 1 < y < 199]
+    assert not inside
+    # The loop must leave the node, not collapse onto its edge.
+    assert max(max(-x, x - 150, -y, y - 200) for x, y in samples) > 20
+    assert not _polyline_self_intersects(samples)
 
 
 def test_frontend_validation_supports_multiple_ports_between_nodes(page):

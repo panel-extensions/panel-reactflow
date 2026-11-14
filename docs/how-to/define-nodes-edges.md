@@ -183,6 +183,23 @@ edges = [
 ]
 ```
 
+### Self-loops
+
+An edge whose `source` and `target` are the same node is drawn as a loop
+that leaves the output handle, arcs around the node and re-enters at the input
+handle, whatever its `type`. The label sits at the far point of the arc, and
+several loops on one node are stacked so each stays visible.
+
+```python
+edges = [
+    {"id": "lateral", "source": "n1", "target": "n1", "label": "lateral"},
+]
+```
+
+Users can draw a self-loop by dragging from a node's output to its own input.
+Enable the `cycles` policy in `connection_validation` to reject them; see
+[Validate Connections](validate-connections.md).
+
 ---
 
 ## Define edges as classes

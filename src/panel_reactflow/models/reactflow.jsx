@@ -1,5 +1,5 @@
 import React from "react";
-import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useNodes, useNodesState, useReactFlow, useStore, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
+import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SimpleBezierEdge, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useInternalNode, useNodes, useNodesState, useReactFlow, useStore, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { SmartBezierEdge, SmartStraightEdge, SmartStepEdge } from "@tisoap/react-flow-smart-edge";
 
@@ -463,6 +463,156 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
 }
 
 
+
+const SELF_LOOP_OFFSET = 40;
+const SELF_LOOP_REACH = 30;
+const SELF_LOOP_SPACING = 20;
+
+const POSITION_VECTORS = {
+  [Position.Left]: [-1, 0],
+  [Position.Right]: [1, 0],
+  [Position.Top]: [0, -1],
+  [Position.Bottom]: [0, 1],
+};
+
+function point(x, y) {
+  return `${x},${y}`;
+}
+
+/**
+ * Build a loop that leaves the source handle and re-enters the same node at
+ * the target handle, keeping the curve outside the node body. `index` stacks
+ * multiple loops on one node.
+ */
+function getSelfLoopPath({ sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, bounds, index = 0 }) {
+  const offset = SELF_LOOP_OFFSET + index * SELF_LOOP_SPACING;
+  const reach = SELF_LOOP_REACH + index * SELF_LOOP_SPACING / 2;
+  const [sdx, sdy] = POSITION_VECTORS[sourcePosition] ?? [1, 0];
+  const [tdx, tdy] = POSITION_VECTORS[targetPosition] ?? [-1, 0];
+  const s1 = [sourceX + sdx * reach, sourceY + sdy * reach];
+  const t1 = [targetX + tdx * reach, targetY + tdy * reach];
+  const outside = (axisDir, start, size) => (axisDir > 0 ? start + size + offset : start - offset);
+  if (sdx && tdx && sdx === -tdx) {
+    const labelX = bounds.x + bounds.width / 2;
+    const labelY = bounds.y - offset;
+    const path = `M ${point(sourceX, sourceY)} C ${point(...s1)} ${point(s1[0], labelY)} ${point(labelX, labelY)}` +
+      ` C ${point(t1[0], labelY)} ${point(...t1)} ${point(targetX, targetY)}`;
+    return { path, labelX, labelY };
+  }
+  if (sdy && tdy && sdy === -tdy) {
+    const labelX = bounds.x + bounds.width + offset;
+    const labelY = bounds.y + bounds.height / 2;
+    const path = `M ${point(sourceX, sourceY)} C ${point(...s1)} ${point(labelX, s1[1])} ${point(labelX, labelY)}` +
+      ` C ${point(labelX, t1[1])} ${point(...t1)} ${point(targetX, targetY)}`;
+    return { path, labelX, labelY };
+  }
+  if (sdx === tdx && sdy === tdy) {
+    // Splay the ends apart along the side, source away from target, so the
+    // curve forms a loop rather than a line or a knot.
+    const [ax, ay] = [Math.abs(sdy), Math.abs(sdx)];
+    const sign = (sourceX - targetX) * ax + (sourceY - targetY) * ay >= 0 ? 1 : -1;
+    const spread = Math.max(reach, Math.abs((sourceX - targetX) * ax + (sourceY - targetY) * ay) / 2);
+    const c1 = [sourceX + sdx * 2 * reach + ax * sign * spread, sourceY + sdy * 2 * reach + ay * sign * spread];
+    const c2 = [targetX + tdx * 2 * reach - ax * sign * spread, targetY + tdy * 2 * reach - ay * sign * spread];
+    const path = `M ${point(sourceX, sourceY)} C ${point(...c1)} ${point(...c2)} ${point(targetX, targetY)}`;
+    return {
+      path,
+      labelX: (sourceX + 3 * c1[0] + 3 * c2[0] + targetX) / 8,
+      labelY: (sourceY + 3 * c1[1] + 3 * c2[1] + targetY) / 8,
+    };
+  }
+  // Adjacent sides route through the shared corner. Each half's control
+  // points stay beyond the side its handle sits on, so neither crosses the body.
+  const labelX = outside(sdx || tdx, bounds.x, bounds.width);
+  const labelY = outside(sdy || tdy, bounds.y, bounds.height);
+  const [ux, uy] = [tdx - sdx, tdy - sdy];
+  const k = offset / 2;
+  const path = `M ${point(sourceX, sourceY)} C ${point(...s1)} ${point(labelX - ux * k, labelY - uy * k)} ${point(labelX, labelY)}` +
+    ` C ${point(labelX + ux * k, labelY + uy * k)} ${point(...t1)} ${point(targetX, targetY)}`;
+  return { path, labelX, labelY };
+}
+
+const SelfLoopEdge = React.memo(function SelfLoopEdge({
+  id,
+  source,
+  sourceX,
+  sourceY,
+  sourcePosition,
+  targetX,
+  targetY,
+  targetPosition,
+  label,
+  labelStyle,
+  labelShowBg,
+  labelBgStyle,
+  labelBgPadding,
+  labelBgBorderRadius,
+  style,
+  markerStart,
+  markerEnd,
+  interactionWidth,
+}) {
+  const node = useInternalNode(source);
+  const index = useStore((state) => {
+    let count = 0;
+    for (const edge of state.edges) {
+      if (edge.id === id) return count;
+      if (edge.source === source && edge.target === source && !edge.hidden) count++;
+    }
+    return 0;
+  });
+  const position = node?.internals?.positionAbsolute;
+  const bounds = position && node.measured?.width != null
+    ? { x: position.x, y: position.y, width: node.measured.width, height: node.measured.height ?? 0 }
+    : {
+        x: Math.min(sourceX, targetX),
+        y: Math.min(sourceY, targetY),
+        width: Math.abs(sourceX - targetX),
+        height: Math.abs(sourceY - targetY),
+      };
+  const { path, labelX, labelY } = getSelfLoopPath({
+    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, bounds, index,
+  });
+  return (
+    <BaseEdge
+      id={id}
+      path={path}
+      labelX={labelX}
+      labelY={labelY}
+      label={label}
+      labelStyle={labelStyle}
+      labelShowBg={labelShowBg}
+      labelBgStyle={labelBgStyle}
+      labelBgPadding={labelBgPadding}
+      labelBgBorderRadius={labelBgBorderRadius}
+      style={style}
+      markerStart={markerStart}
+      markerEnd={markerEnd}
+      interactionWidth={interactionWidth}
+      className="rf-self-loop"
+    />
+  );
+});
+
+// Built-in edge paths collapse when both ends sit on one node, so any edge
+// type falls back to a loop for self-connections.
+function withSelfLoop(EdgeComponent) {
+  return function EdgeOrSelfLoop(props) {
+    return props.source === props.target ? <SelfLoopEdge {...props} /> : <EdgeComponent {...props} />;
+  };
+}
+
+const EDGE_TYPES = Object.fromEntries(Object.entries({
+  default: BezierEdge,
+  bezier: BezierEdge,
+  simplebezier: SimpleBezierEdge,
+  straight: StraightEdge,
+  step: StepEdge,
+  smoothstep: SmoothStepEdge,
+  smart_bezier: SmartBezierEdge,
+  smart_straight: SmartStraightEdge,
+  smart_step: SmartStepEdge,
+}).map(([name, component]) => [name, withSelfLoop(component)]));
 
 function useDebouncedSync(syncMode, debounceMs, syncFn) {
   const timeoutRef = useRef(null);
@@ -1619,15 +1769,7 @@ export function render({ model, view }) {
   useCloseOnOutsideClick(contextMenuPosition, contextMenuRef, "close_context_menu", model);
   useCloseOnOutsideClick(valuePopupPosition, valuePopupRef, "close_value_popup", model);
 
-  const hydratedEdgeTypes = useMemo(() => ({
-    bezier: BezierEdge,
-    straight: StraightEdge,
-    step: StepEdge,
-    smoothstep: SmoothStepEdge,
-    smart_bezier: SmartBezierEdge,
-    smart_straight: SmartStraightEdge,
-    smart_step: SmartStepEdge,
-  }), []);
+  const hydratedEdgeTypes = EDGE_TYPES;
 
   const safeMode = recovery.mode === "safe";
   const safeGraph = useMemo(
