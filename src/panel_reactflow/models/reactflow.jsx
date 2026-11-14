@@ -235,6 +235,10 @@ function renderHandles(direction, handles, opts = {}) {
   });
 }
 
+// Node/NodeSpec serialize per-node flags, which override the canvas-wide
+// nodesDraggable/nodesConnectable in React Flow.
+const READ_ONLY_NODE_FLAGS = { draggable: false, connectable: false, deletable: false };
+
 function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data, isConnectable }) {
     const validation = React.useContext(ConnectionValidationContext);
@@ -944,6 +948,8 @@ function FlowInner({
   const edgeHydrationFrameRef = useRef(null);
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
   const lastViewportSig = useRef(null);
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   const { setViewport: setRfViewport, screenToFlowPosition, fitView } = useReactFlow();
   const [hydratedRevision, setHydratedRevision] = useState(null);
   const pendingFitRef = useRef(null);
@@ -1108,6 +1114,9 @@ function FlowInner({
               return node;
             }
             const next = applyPropPatch(node, patch);
+            if (!editableRef.current) {
+              Object.assign(next, READ_ONLY_NODE_FLAGS);
+            }
             if ("label" in patch) {
               // The node components render `data._label`, not the top-level label.
               next.data = { ...(next.data || {}), _label: patch.label };
@@ -1291,6 +1300,9 @@ function FlowInner({
 
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
+      if (!selectable) {
+        return;
+      }
       const selection = {
         nodes: selectedNodes.map((node) => node.id),
         edges: selectedEdges.map((edge) => edge.id),
@@ -1305,7 +1317,7 @@ function FlowInner({
         edges: selection.edges,
       });
     },
-    [currentSelection, schedulePatch, selectionSetter],
+    [currentSelection, schedulePatch, selectable, selectionSetter],
   );
 
   const onNodesDelete = useCallback(
@@ -1741,9 +1753,7 @@ export function render({ model, view }) {
       const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
       return {
         ...node,
-        // Node/NodeSpec serialize per-node flags, which override the
-        // canvas-wide nodesDraggable/nodesConnectable in React Flow.
-        ...(editable ? {} : { draggable: false, connectable: false, deletable: false }),
+        ...(editable ? {} : READ_ONLY_NODE_FLAGS),
         // Keep the declared class around so a later className/type patch can
         // recombine it with the React Flow node chrome class.
         _className: node.className ?? null,

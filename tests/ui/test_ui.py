@@ -636,6 +636,37 @@ def test_not_editable_spec_nodes_do_not_move(page):
     assert _python_positions(flow) == positions
 
 
+def test_making_flow_editable_restores_dragging_and_editors(page):
+    flow = _make_flow()
+    flow.editable = False
+    serve_component(page, flow)
+    start = _node_locator(page, "Start")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+    expect(start.get_by_label("Show node toolbar")).to_have_count(0)
+
+    flow.editable = True
+    expect(start).to_have_class(re.compile(r"\bdraggable\b"))
+    expect(start.get_by_label("Show node toolbar")).to_have_count(1)
+
+    box = start.locator(".rf-node-label").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 150, box["y"] + 150, steps=10)
+    page.mouse.up()
+    wait_until(lambda: flow.nodes[0]["position"]["x"] > 10, timeout=8000)
+
+
+def test_patch_node_props_cannot_make_read_only_node_draggable(page):
+    flow = _readonly_spec_flow()
+    serve_component(page, flow)
+    start = _node_locator(page, "Start")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+
+    flow.patch_node_props("n1", {"draggable": True, "style": {"opacity": 0.5}})
+    expect(start).to_have_css("opacity", "0.5")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+
+
 def test_selection_disabled_when_not_selectable(page):
     flow = _make_flow()
     flow.selectable = False
@@ -653,9 +684,18 @@ def test_disabling_selectable_clears_selection(page):
 
     _node_locator(page, "Start").click(force=True)
     wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    events = []
+    flow.on("selection_changed", events.append)
     flow.selectable = False
     expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+    page.wait_for_timeout(500)
     assert flow.selection == {"nodes": [], "edges": []}
+    assert len(events) == 1
+
+    flow.selectable = True
+    _node_locator(page, "End").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n2"], timeout=8000)
+    assert len(events) == 2
 
 
 def test_patch_node_and_edge_labels_update_ui(page):
