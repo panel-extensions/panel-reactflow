@@ -22,7 +22,7 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `node_added`         | A node is added to the graph. | `node` |
 | `node_deleted`       | A node is removed. | `node_id` |
 | `node_moved`         | A node is dragged to a new position. | `node_id`, `position` |
-| `node_clicked`       | A node is clicked (single click). | `node_id` |
+| `node_clicked`       | A node is clicked (single click). See [below](#node-clicks). | `node_id`, `position` |
 | `node_context_menu`  | A node is right-clicked. | `node_id`, `position` |
 | `node_data_changed`  | Node data is patched (via API, editor patch, or parameter-driven sync). | `node_id`, `patch` |
 | `edge_added`         | An edge is created (UI connect or API). | `edge` |
@@ -32,6 +32,13 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `sync`               | A batch sync from the frontend. | *(varies)* |
 | `drop`               | Data of one of the `drop_types` is dropped onto the canvas. See [Handle drops](#handle-drops-onto-the-canvas). | `drop_type`, `data`, `position`, `target` |
 | `client_error`       | The graph view hit a rendering error in the browser. See [Recover from Rendering Errors](recover-from-errors.md). | `source`, `message`, `stack`, `component_stack`, `attempt`, `mode` |
+
+### Node clicks
+
+`node_clicked` fires on every single click, so a double click emits two
+`node_clicked` events before the double-click handling runs. Clicks that end a
+drag or pan, and clicks on a node's embedded view or editor, are not reported.
+The event also fires when `editable=False`.
 
 ---
 

@@ -3616,7 +3616,11 @@ class ReactFlow(ReactComponent):
             - ``"node_added"``: Node was added to the graph
             - ``"node_deleted"``: Node was removed from the graph
             - ``"node_moved"``: Node was dragged to a new position
-            - ``"node_clicked"``: Node was clicked
+            - ``"node_clicked"``: Node was clicked. Payload has ``node_id``
+              and a screen ``position`` suitable for :meth:`show_popup`.
+              Clicks on the node's embedded view or editor are not reported,
+              and a double click emits two events. Also fires when
+              ``editable=False``.
             - ``"handle_clicked"``: A node's input/output handle was clicked.
               Payload has ``node_id``, ``handle_id`` (``None`` for a node's
               unnamed default handle), ``direction`` (``"input"`` or
