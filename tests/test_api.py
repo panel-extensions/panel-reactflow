@@ -981,6 +981,26 @@ def test_handle_msg_edge_added_emits_once() -> None:
     assert len(flow.edges) == 1
 
 
+def test_self_loop_edges_are_accepted() -> None:
+    """An edge may start and end on the same node, from Python or from a drawn connection."""
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
+    events: list[dict] = []
+    flow.on("edge_added", events.append)
+    flow.add_edge({"id": "loop", "source": "n1", "target": "n1", "label": "lateral"})
+    flow._handle_msg({"type": "edge_added", "edge": {"id": "n1->n1", "source": "n1", "target": "n1"}})
+    assert [(edge["source"], edge["target"]) for edge in flow.edges] == [("n1", "n1"), ("n1", "n1")]
+    assert [event["edge"]["id"] for event in events] == ["loop", "n1->n1"]
+
+
+@nx_available
+def test_self_loop_survives_networkx_roundtrip() -> None:
+    flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
+    flow.add_edge({"id": "loop", "source": "n1", "target": "n1"})
+    graph = flow.to_networkx()
+    assert list(nx.selfloop_edges(graph)) == [("n1", "n1")]
+    assert [(edge["source"], edge["target"]) for edge in ReactFlow.from_networkx(graph).edges] == [("n1", "n1")]
+
+
 def test_handle_msg_node_moved_emits_once() -> None:
     flow = ReactFlow(nodes=[{"id": "n1", "position": {"x": 0, "y": 0}, "data": {}}])
     events: list[dict] = []

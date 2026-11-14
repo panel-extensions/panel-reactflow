@@ -245,8 +245,63 @@ def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     wait_until(lambda: len(flow.edges) == 1, timeout=8000)
     output_a.drag_to(input_b)
     output_b.drag_to(input_a)
+    output_a.drag_to(input_a)
     expect(page.locator(".react-flow__edge")).to_have_count(1)
     assert len(flow.edges) == 1
+
+
+def _assert_loop_above_node(page, node_label, edge_id):
+    node_box = _node_locator(page, node_label).bounding_box()
+    path_box = page.locator(f'.react-flow__edge[data-id="{edge_id}"] .react-flow__edge-path').bounding_box()
+    assert path_box["height"] > node_box["height"] / 2
+    assert path_box["y"] < node_box["y"] - 20
+    assert path_box["x"] < node_box["x"] and path_box["x"] + path_box["width"] > node_box["x"] + node_box["width"]
+
+
+def test_drawing_self_loop_renders_loop(page, tmp_path):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="a", type="step", label="A", position={"x": 0, "y": 0}).to_dict()],
+        node_types={"step": NodeType(type="step", inputs=["in"], outputs=["out"])},
+        connection_validation={"direction": True},
+        width=500,
+        height=350,
+    )
+    serve_component(page, flow)
+    node = _node_locator(page, "A")
+    node.locator(".react-flow__handle-right").drag_to(node.locator(".react-flow__handle-left"))
+
+    wait_until(lambda: [(e["source"], e["target"]) for e in flow.edges] == [("a", "a")], timeout=8000)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+    _assert_loop_above_node(page, "A", flow.edges[0]["id"])
+    page.screenshot(path=tmp_path / "self_loop.png")
+
+
+def test_programmatic_self_loops_render_with_labels(page, tmp_path):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", label="B", position={"x": 300, "y": 0}).to_dict(),
+        ],
+        edges=[
+            EdgeSpec(id="loop1", source="a", target="a", label="Lateral").to_dict(),
+            EdgeSpec(id="loop2", source="a", target="a", label="Second", type="smoothstep").to_dict(),
+            EdgeSpec(id="ab", source="a", target="b").to_dict(),
+        ],
+        width=700,
+        height=400,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(3)
+    expect(page.locator(".rf-self-loop")).to_have_count(2)
+    _assert_loop_above_node(page, "A", "loop1")
+    _assert_loop_above_node(page, "A", "loop2")
+
+    node_box = _node_locator(page, "A").bounding_box()
+    first = _edge_label_locator(page, "Lateral").bounding_box()
+    second = _edge_label_locator(page, "Second").bounding_box()
+    assert first["y"] + first["height"] < node_box["y"]
+    assert second["y"] < first["y"]
+    page.screenshot(path=tmp_path / "self_loops_labels.png")
 
 
 def test_frontend_validation_supports_multiple_ports_between_nodes(page):
