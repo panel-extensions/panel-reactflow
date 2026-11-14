@@ -1532,7 +1532,7 @@ def test_selecting_edge_with_editor_shows_editor() -> None:
     assert flow._selected_editor is not None
 
 
-def test_selected_editor_hidden_when_not_editable() -> None:
+def test_selecting_while_not_editable_shows_no_editor() -> None:
     flow = ReactFlow(default_edge_editor=JsonEditor, editor_mode="side")
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"a": 1}})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
