@@ -484,10 +484,10 @@ def test_connection_validator_registration_and_policy_sync() -> None:
         flow.add_connection_validator(None)
 
 
-def test_connection_validator_flag_syncs_to_model(document, comm) -> None:
+def test_connection_validator_flag_syncs_to_model(flow_model) -> None:
     """The browser receives both the registration flag and opt-in policy updates."""
     flow = ReactFlow()
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
     assert model.data.has_connection_validators is False
     assert model.data.connection_validation == {}
 

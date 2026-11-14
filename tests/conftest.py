@@ -1,6 +1,8 @@
 """Holds fixtures and configuration for the test suite."""
 
-from panel.tests.conftest import document, comm  # noqa
+import pytest
+from panel.config import config
+from panel.tests.conftest import comm, document  # noqa: F401
 
 optional_markers = {
     "ui": {
@@ -9,6 +11,26 @@ optional_markers = {
         "skip-reason": "Test only runs with the --ui option.",
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def reset_design():
+    """Importing panel_material_ui sets a global design, so start every test without one."""
+    design = config.design
+    config.design = None
+    yield
+    config.design = design
+
+
+@pytest.fixture
+def flow_model(document, comm):  # noqa: F811
+    """Return the ReactFlow model, which a design may nest inside a wrapper root."""
+
+    def get_model(flow):
+        root = flow.get_root(document, comm=comm)
+        return flow._models[root.ref["id"]][0]
+
+    return get_model
 
 
 def pytest_addoption(parser):
