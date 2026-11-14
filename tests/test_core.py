@@ -31,13 +31,13 @@ def test_reactflow_add_node_with_arbitrary_object(document, comm) -> None:
     assert flow.nodes[0]["id"] == "n1"
 
 
-def test_view_idx_updates_on_remove_node(document, comm) -> None:
+def test_view_idx_updates_on_remove_node(flow_model) -> None:
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}, "view": Markdown("A")})
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}, "view": Markdown("B")})
     flow.add_node({"id": "n3", "position": {"x": 2, "y": 2}, "data": {}})
 
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
 
     flow.remove_node("n1")
 
@@ -63,9 +63,9 @@ def test_reactflow_add_node_with_viewer(document, comm) -> None:
     assert flow.nodes[0]["id"] == "n1"
 
 
-def test_reactflow_add_node_dynamically_creates_views(document, comm):
+def test_reactflow_add_node_dynamically_creates_views(flow_model):
     flow = ReactFlow()
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
     assert model.children == [
         "_views",
         "_node_editor_views",
@@ -84,7 +84,7 @@ def test_reactflow_add_node_dynamically_creates_views(document, comm):
     assert len(model.data._node_editor_views) == 1
 
 
-def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) -> None:
+def test_bokeh_children_initialize_for_object_views_and_editors(flow_model) -> None:
     class ViewNode(Node):
         def __panel__(self):
             return Markdown("Node view content")
@@ -104,7 +104,7 @@ def test_bokeh_children_initialize_for_object_views_and_editors(document, comm) 
         edges=[EditorEdge(id="e1", source="n1", target="n2", data={})],
     )
 
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
     assert model.children == [
         "_views",
         "_node_editor_views",
@@ -128,9 +128,9 @@ class _Config(param.Parameterized):
     x = param.Integer(default=1)
 
 
-def test_updated_node_types_reach_model_as_descriptors(document, comm) -> None:
+def test_updated_node_types_reach_model_as_descriptors(flow_model) -> None:
     flow = ReactFlow()
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
     synced = []
     model.data.on_change("node_types", lambda attr, old, new: synced.append(new))
 
@@ -141,9 +141,9 @@ def test_updated_node_types_reach_model_as_descriptors(document, comm) -> None:
     assert "x" in model.data.node_types["a"]["schema"]["properties"]
 
 
-def test_node_and_edge_types_updated_together(document, comm) -> None:
+def test_node_and_edge_types_updated_together(flow_model) -> None:
     flow = ReactFlow()
-    model = flow.get_root(document, comm=comm)
+    model = flow_model(flow)
 
     flow.param.update(
         node_types={"a": NodeType(type="a", schema=_Config)},
