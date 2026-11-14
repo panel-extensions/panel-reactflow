@@ -141,7 +141,8 @@ flow.on("*", on_any_event)
 
 `selection_changed` fires whenever the user clicks a node, an edge, or the
 canvas background.  The payload includes lists of selected `nodes` and
-`edges` IDs.
+`edges` IDs. Selection keeps working on a read-only canvas
+(`editable=False`); set `selectable=False` to turn it off.
 
 ```python
 details = pn.pane.JSON({}, depth=2)

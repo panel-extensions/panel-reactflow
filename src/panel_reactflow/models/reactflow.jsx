@@ -235,6 +235,10 @@ function renderHandles(direction, handles, opts = {}) {
   });
 }
 
+// Node/NodeSpec serialize per-node flags, which override the canvas-wide
+// nodesDraggable/nodesConnectable in React Flow.
+const READ_ONLY_NODE_FLAGS = { draggable: false, connectable: false, deletable: false };
+
 function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data, isConnectable }) {
     const validation = React.useContext(ConnectionValidationContext);
@@ -920,6 +924,7 @@ function FlowInner({
   nodeEditors,
   colorMode,
   editable,
+  selectable,
   enableConnect,
   connectionValidation,
   hasConnectionValidators,
@@ -943,6 +948,8 @@ function FlowInner({
   const edgeHydrationFrameRef = useRef(null);
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
   const lastViewportSig = useRef(null);
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
   const { setViewport: setRfViewport, screenToFlowPosition, fitView } = useReactFlow();
   const [hydratedRevision, setHydratedRevision] = useState(null);
   const pendingFitRef = useRef(null);
@@ -1107,6 +1114,9 @@ function FlowInner({
               return node;
             }
             const next = applyPropPatch(node, patch);
+            if (!editableRef.current) {
+              Object.assign(next, READ_ONLY_NODE_FLAGS);
+            }
             if ("label" in patch) {
               // The node components render `data._label`, not the top-level label.
               next.data = { ...(next.data || {}), _label: patch.label };
@@ -1248,7 +1258,7 @@ function FlowInner({
 
   const onConnect = useCallback(
     (connection) => {
-      if (!enableConnect || candidateReason(connection)) {
+      if (!editable || !enableConnect || candidateReason(connection)) {
         return;
       }
       const baseId = connection.id || `${connection.source}->${connection.target}`;
@@ -1261,14 +1271,14 @@ function FlowInner({
       setEdges(updated);
       sendPatch({ type: "edge_added", edge: newEdge });
     },
-    [candidateReason, enableConnect, sendPatch, setEdges],
+    [candidateReason, editable, enableConnect, sendPatch, setEdges],
   );
 
   const handleNodesChange = useCallback(
     (changes) => {
       onNodesChange(changes);
       const moved = changes.filter((change) => change.type === "position" && change.dragging !== true);
-      if (!moved.length) {
+      if (!editable || !moved.length) {
         return;
       }
       moved.forEach((change) => {
@@ -1279,11 +1289,20 @@ function FlowInner({
         });
       });
     },
-    [onNodesChange, schedulePatch],
+    [editable, onNodesChange, schedulePatch],
   );
+
+  useEffect(() => {
+    if (selectable) return;
+    setNodes((curr) => (curr.some((n) => n.selected) ? curr.map((n) => (n.selected ? { ...n, selected: false } : n)) : curr));
+    setEdges((curr) => (curr.some((e) => e.selected) ? curr.map((e) => (e.selected ? { ...e, selected: false } : e)) : curr));
+  }, [selectable, setNodes, setEdges]);
 
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
+      if (!selectable) {
+        return;
+      }
       const selection = {
         nodes: selectedNodes.map((node) => node.id),
         edges: selectedEdges.map((edge) => edge.id),
@@ -1298,7 +1317,7 @@ function FlowInner({
         edges: selection.edges,
       });
     },
-    [currentSelection, schedulePatch, selectionSetter],
+    [currentSelection, schedulePatch, selectable, selectionSetter],
   );
 
   const onNodesDelete = useCallback(
@@ -1505,14 +1524,14 @@ function FlowInner({
       isValidConnection={validationEnabled ? (connection) => !candidateReason(connection) : undefined}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
-      elementsSelectable={editable}
-      deleteKeyCode={enableDelete ? ["Backspace", "Delete"] : null}
+      elementsSelectable={selectable}
+      deleteKeyCode={editable && enableDelete ? ["Backspace", "Delete"] : null}
       multiSelectionKeyCode={enableMultiselect ? "Shift" : null}
       minZoom={minZoom}
       maxZoom={maxZoom}
       fitView
     >
-      <Controls />
+      <Controls showInteractive={false} />
       {showMinimap ? <MiniMap /> : null}
       <Background />
     </ReactFlow>
@@ -1538,6 +1557,7 @@ export function render({ model, view }) {
   const [colorMode] = model.useState("color_mode");
   const [debounceMs] = model.useState("debounce_ms");
   const [editable] = model.useState("editable");
+  const [selectable] = model.useState("selectable");
   const [editorMode] = model.useState("editor_mode");
   const [valuePopupTrigger] = model.useState("popup_trigger");
   const [dropTypes] = model.useState("drop_types");
@@ -1733,6 +1753,7 @@ export function render({ model, view }) {
       const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
       return {
         ...node,
+        ...(editable ? {} : READ_ONLY_NODE_FLAGS),
         // Keep the declared class around so a later className/type patch can
         // recombine it with the React Flow node chrome class.
         _className: node.className ?? null,
@@ -1856,6 +1877,7 @@ export function render({ model, view }) {
       edgeTypes={hydratedEdgeTypes}
       nodeEditors={nodeEditors}
       editable={editable}
+      selectable={selectable}
       enableConnect={enableConnect}
       connectionValidation={connectionValidation}
       hasConnectionValidators={hasConnectionValidators}

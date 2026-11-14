@@ -1374,9 +1374,12 @@ class ReactFlow(ReactComponent):
         Default React Flow edge options applied to all edges (e.g., ``animated``,
         ``type``). See React Flow documentation for available options.
     editable : bool, default True
-        Enable interactive editing on the canvas (drag, connect, delete).
-        Set to ``False`` for read-only visualization; node and edge
-        editors are then hidden.
+        Enable interactive editing on the canvas (drag, connect, delete,
+        drop and node/edge editors). Set to ``False`` for read-only
+        visualization; nodes and edges stay selectable unless
+        ``selectable`` is also ``False``. Context menus and popups supplied
+        by the application are not affected and must respect this flag
+        themselves.
     editor_mode : {"toolbar", "node", "side"}, default "toolbar"
         Where to render node editors:
 
@@ -1393,6 +1396,9 @@ class ReactFlow(ReactComponent):
         Maximum zoom level the viewport can be zoomed in to.
     min_zoom : float, default 0.5
         Minimum zoom level the viewport can be zoomed out to.
+    selectable : bool, default True
+        Allow clicking nodes and edges to select them, independently of
+        ``editable``. Setting it to ``False`` clears the current selection.
     selection : dict, default {"nodes": [], "edges": []}
         Current selection state with lists of selected node and edge IDs.
         Read-only; updated automatically when selection changes.
@@ -1578,6 +1584,8 @@ class ReactFlow(ReactComponent):
 
     min_zoom = param.Number(default=0.5, bounds=(0, None), inclusive_bounds=(False, True), doc="Minimum zoom level of the viewport.")
 
+    selectable = param.Boolean(default=True, doc="Allow selecting nodes and edges, even when not editable.")
+
     selection = param.Dict(default={"nodes": [], "edges": []}, doc="Derived selection state for node and edge ids.")
 
     show_minimap = param.Boolean(default=False, doc="Show the minimap overlay.")
@@ -1684,6 +1692,7 @@ class ReactFlow(ReactComponent):
             ["selection", "editor_mode", "editable", "nodes", "edges"],
         )
         self.param.watch(self._update_views, ["nodes"])
+        self.param.watch(self._clear_selection_if_unselectable, ["selectable"])
         self._sync_instance_flow_refs()
         self._update_node_editors()
         self._update_edge_editors()
@@ -2213,6 +2222,11 @@ class ReactFlow(ReactComponent):
         self._edge_editors = editors
         if self.selection.get("edges"):
             self._update_selected_editor()
+
+    def _clear_selection_if_unselectable(self, *_: param.parameterized.Event) -> None:
+        if self.selectable or self.selection == {"nodes": [], "edges": []}:
+            return
+        self._handle_msg({"type": "selection_changed", "nodes": [], "edges": []})
 
     def _update_selected_editor(self, *events: tuple[param.parameterized.Event]) -> None:
         selected_nodes = self.selection.get("nodes", [])

@@ -562,6 +562,156 @@ def test_selection_syncs_between_ui_and_python(page):
     wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
 
 
+def test_selection_works_when_not_editable(page):
+    flow = _make_flow()
+    flow.editable = False
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    expect(_node_locator(page, "Start")).to_have_class(re.compile(r"\bselected\b"))
+
+    page.keyboard.press("Backspace")
+    page.wait_for_timeout(300)
+    assert [node["id"] for node in flow.nodes] == ["n1", "n2"]
+    expect(_node_locator(page, "Start").get_by_label("Show node toolbar")).to_have_count(0)
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    wait_until(lambda: flow.selection["edges"] == ["e1"], timeout=8000)
+    expect(page.locator(".jsoneditor")).to_have_count(0)
+
+
+def _readonly_spec_flow():
+    return ReactFlow(
+        nodes=[
+            NodeSpec(id="n1", position={"x": 0, "y": 0}, label="Start").to_dict(),
+            NodeSpec(id="n2", position={"x": 260, "y": 60}, label="End").to_dict(),
+        ],
+        edges=[EdgeSpec(id="e1", source="n1", target="n2").to_dict()],
+        editable=False,
+        width=900,
+        height=600,
+    )
+
+
+def _node_transforms(page):
+    return [page.locator(f'.react-flow__node[data-id="{node_id}"]').evaluate("el => el.style.transform") for node_id in ("n1", "n2")]
+
+
+def _python_positions(flow):
+    return [dict(node["position"]) for node in flow.nodes]
+
+
+def test_not_editable_spec_nodes_do_not_move(page):
+    flow = _readonly_spec_flow()
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__controls-interactive")).to_have_count(0)
+    start = _node_locator(page, "Start")
+    transforms, positions = _node_transforms(page), _python_positions(flow)
+
+    start.click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    for _ in range(5):
+        page.keyboard.press("ArrowRight")
+
+    pane = page.locator(".react-flow__pane").bounding_box()
+    page.keyboard.down("Shift")
+    page.mouse.move(pane["x"] + 5, pane["y"] + 5)
+    page.mouse.down()
+    page.mouse.move(pane["x"] + pane["width"] - 5, pane["y"] + pane["height"] - 5, steps=10)
+    page.mouse.up()
+    page.keyboard.up("Shift")
+    wait_until(lambda: flow.selection["nodes"] == ["n1", "n2"], timeout=8000)
+    for _ in range(5):
+        page.keyboard.press("ArrowDown")
+
+    box = start.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 150, box["y"] + 150, steps=10)
+    page.mouse.up()
+
+    page.wait_for_timeout(500)
+    assert _node_transforms(page) == transforms
+    assert _python_positions(flow) == positions
+
+
+def test_making_flow_editable_restores_dragging_and_editors(page):
+    flow = _make_flow()
+    flow.editable = False
+    serve_component(page, flow)
+    start = _node_locator(page, "Start")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+    expect(start.get_by_label("Show node toolbar")).to_have_count(0)
+
+    flow.editable = True
+    expect(start).to_have_class(re.compile(r"\bdraggable\b"))
+    expect(start.get_by_label("Show node toolbar")).to_have_count(1)
+
+    box = start.locator(".rf-node-label").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 150, box["y"] + 150, steps=10)
+    page.mouse.up()
+    wait_until(lambda: flow.nodes[0]["position"]["x"] > 10, timeout=8000)
+
+
+def test_patch_node_props_cannot_make_read_only_node_draggable(page):
+    flow = _readonly_spec_flow()
+    serve_component(page, flow)
+    start = _node_locator(page, "Start")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+
+    flow.patch_node_props("n1", {"draggable": True, "style": {"opacity": 0.5}})
+    expect(start).to_have_css("opacity", "0.5")
+    expect(start).not_to_have_class(re.compile(r"\bdraggable\b"))
+
+
+def test_selection_disabled_when_not_selectable(page):
+    flow = _make_flow()
+    flow.selectable = False
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    page.wait_for_timeout(300)
+    assert flow.selection["nodes"] == []
+    expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+
+
+def test_disabling_selectable_clears_selection(page):
+    flow = _make_flow()
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
+    events = []
+    flow.on("selection_changed", events.append)
+    flow.selectable = False
+    expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+    page.wait_for_timeout(500)
+    assert flow.selection == {"nodes": [], "edges": []}
+    assert len(events) == 1
+
+    flow.selectable = True
+    _node_locator(page, "End").click(force=True)
+    wait_until(lambda: flow.selection["nodes"] == ["n2"], timeout=8000)
+    assert len(events) == 2
+
+
+def test_selection_changed_emitted_in_debounce_mode(page):
+    flow = _make_flow()
+    flow.sync_mode = "debounce"
+    events = []
+    flow.on("selection_changed", events.append)
+    serve_component(page, flow)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: len(events) == 1, timeout=8000)
+    _node_locator(page, "End").click(force=True)
+    wait_until(lambda: len(events) == 2, timeout=8000)
+    assert [event["nodes"] for event in events] == [["n1"], ["n2"]]
+
+
 def test_patch_node_and_edge_labels_update_ui(page):
     flow = _make_flow()
     serve_component(page, flow)
