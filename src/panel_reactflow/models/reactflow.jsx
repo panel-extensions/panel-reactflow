@@ -1043,7 +1043,6 @@ function FlowInner({
   pyNodes,
   nodeUpdateCount,
   hydratedEdges,
-  selectionSetter,
   currentSelection,
   views,
   viewportSetter,
@@ -1467,6 +1466,23 @@ function FlowInner({
     setEdges((curr) => (curr.some((e) => e.selected) ? curr.map((e) => (e.selected ? { ...e, selected: false } : e)) : curr));
   }, [selectable, setNodes, setEdges]);
 
+  // The last selection sent to Python, plus the ones Python has not echoed
+  // back yet. An update of the ``selection`` parameter that matches a pending
+  // send is an echo; anything else was set from Python and becomes the new
+  // baseline.
+  const lastSentSelectionRef = useRef(currentSelection || { nodes: [], edges: [] });
+  const pendingSelectionsRef = useRef([]);
+  useEffect(() => {
+    const pending = pendingSelectionsRef.current;
+    const echoed = pending.findIndex((sent) => areEqual(sent, currentSelection));
+    if (echoed >= 0) {
+      pendingSelectionsRef.current = pending.slice(echoed + 1);
+      return;
+    }
+    pendingSelectionsRef.current = [];
+    lastSentSelectionRef.current = currentSelection || { nodes: [], edges: [] };
+  }, [currentSelection]);
+
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
       if (!selectable) {
@@ -1476,9 +1492,16 @@ function FlowInner({
         nodes: selectedNodes.map((node) => node.id),
         edges: selectedEdges.map((edge) => edge.id),
       };
-      if (areEqual(selection, currentSelection)) {
+      // Compare against what was last sent rather than the ``selection``
+      // parameter: Python only echoes it back after a round trip (or the
+      // debounce delay), so a quick select-then-clear would otherwise look
+      // unchanged and never be sent.
+      if (areEqual(selection, lastSentSelectionRef.current)) {
         return;
       }
+      lastSentSelectionRef.current = selection;
+      // Python does not echo a selection it already had, so keep the list short.
+      pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
       // Python updates ``selection`` from this message, syncing it here as
       // well would make it process every selection change twice.
       schedulePatch({
@@ -1487,7 +1510,7 @@ function FlowInner({
         edges: selection.edges,
       });
     },
-    [currentSelection, schedulePatch, selectable, selectionSetter],
+    [schedulePatch, selectable],
   );
 
   const onNodesDelete = useCallback(
@@ -1720,7 +1743,7 @@ export function render({ model, view }) {
   const [pyEdges] = model.useState("edges");
   const [pyNodeTypes] = model.useState("node_types");
   const [defaultEdgeOptions] = model.useState("default_edge_options");
-  const [selection, setSelection] = model.useState("selection");
+  const [selection] = model.useState("selection");
   const [syncMode] = model.useState("sync_mode");
   const [colorMode] = model.useState("color_mode");
   const [debounceMs] = model.useState("debounce_ms");
@@ -2054,7 +2077,6 @@ export function render({ model, view }) {
       pyNodes={pyNodes || []}
       nodeUpdateCount={nodeUpdateCount}
       hydratedEdges={safeGraph ? safeGraph.edges : hydratedEdges}
-      selectionSetter={setSelection}
       currentSelection={selection}
       views={views}
       viewportSetter={setViewport}

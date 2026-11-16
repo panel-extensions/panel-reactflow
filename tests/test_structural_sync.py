@@ -359,3 +359,37 @@ def test_node_lookup_survives_id_reassignment() -> None:
     node.id = "b"
     assert flow._get_node("b") is node
     assert flow._get_node("a") is None
+
+
+def test_node_appended_in_place_is_found() -> None:
+    flow = ReactFlow(nodes=_nodes(2))
+    flow.nodes.append({"id": "late", "position": {"x": 0, "y": 0}, "data": {"v": 0}})
+    flow.patch_node_data("late", {"v": 1})
+    flow.patch_node_props("late", {"label": "Late"})
+    flow._handle_msg({"type": "node_moved", "node_id": "late", "position": {"x": 5, "y": 6}})
+    late = flow.nodes[-1]
+    assert late["data"] == {"v": 1}
+    assert late["label"] == "Late"
+    assert late["position"] == {"x": 5, "y": 6}
+
+
+def test_dict_id_changed_in_place_is_found() -> None:
+    flow = ReactFlow(nodes=_nodes(2), edges=_edges(2))
+    flow.nodes[0]["id"] = "renamed"
+    flow.edges[0]["id"] = "renamed-edge"
+    flow.patch_node_data("renamed", {"v": 7})
+    flow.patch_edge_data("renamed-edge", {"w": 1})
+    assert flow.nodes[0]["data"] == {"v": 7}
+    assert flow.edges[0]["data"] == {"w": 1}
+
+
+def test_raising_editor_factory_does_not_break_editor_requests(caplog) -> None:
+    def broken(data, schema, *, id, type, on_patch):
+        raise RuntimeError("boom")
+
+    flow = ReactFlow(nodes=_nodes(2), node_editors={"broken": broken})
+    flow.patch_node_props("n0", {"type": "broken"})
+    flow._handle_msg({"type": "editor_requested", "node_id": "n0"})
+    assert flow._node_editor_ids == []
+    flow._handle_msg({"type": "editor_requested", "node_id": "n1"})
+    assert flow._node_editor_ids == ["n1"]

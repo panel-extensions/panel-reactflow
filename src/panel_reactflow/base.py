@@ -2037,21 +2037,23 @@ class ReactFlow(ReactComponent):
         self._edge_index = index
         self._first_edge_by_type = first_by_type
 
-    def _get_node(self, node_id: str) -> dict[str, Any] | Node | None:
+    def _get_node(self, node_id: str, *, scan: bool = True) -> dict[str, Any] | Node | None:
         node = self._node_index.get(node_id)
         if node is not None and self._node_id(node) == node_id:
             return node
-        # The id of a Node instance may have been reassigned in place.
-        if node is not None or any(instance.id == node_id for instance in self._attached_node_instances.values()):
+        # The index misses nodes added or re-identified in place (e.g.
+        # ``flow.nodes.append(...)`` or ``node["id"] = ...``), which do not
+        # trigger the watcher, so fall back to a scan and reindex.
+        if scan and any(self._node_id(item) == node_id for item in self.nodes):
             self._rebuild_node_index()
             return self._node_index.get(node_id)
         return None
 
-    def _get_edge(self, edge_id: str) -> dict[str, Any] | Edge | None:
+    def _get_edge(self, edge_id: str, *, scan: bool = True) -> dict[str, Any] | Edge | None:
         edge = self._edge_index.get(edge_id)
         if edge is not None and self._edge_id(edge) == edge_id:
             return edge
-        if edge is not None or any(instance.id == edge_id for instance in self._attached_edge_instances.values()):
+        if scan and any(self._edge_id(item) == edge_id for item in self.edges):
             self._rebuild_edge_index()
             return self._edge_index.get(edge_id)
         return None
@@ -2295,9 +2297,12 @@ class ReactFlow(ReactComponent):
             "sync": "on_sync",
         }
         hook_name = hook_map.get(event_type)
+        # Deleted edges are gone from the graph (remove_edge runs their hooks
+        # itself), so do not scan for them.
+        scan = event_type != "edge_deleted"
         for edge_id in edge_ids:
-            edge = self._get_edge_instance(edge_id)
-            if edge is None:
+            edge = self._get_edge(edge_id, scan=scan)
+            if not isinstance(edge, Edge):
                 continue
             if hook_name is not None:
                 self._invoke_edge_hook(edge, hook_name, payload)
@@ -2504,6 +2509,15 @@ class ReactFlow(ReactComponent):
     def _request_node_editor(self, node_id: str | None) -> None:
         if node_id is None or node_id in self._requested_node_editors or node_id not in self._node_index:
             return
+        try:
+            self._get_node_editor(node_id)
+        except Exception:
+            # A broken editor factory must not take down message handling.
+            _LOGGER.exception("Failed to build the editor for node %r", node_id)
+            return
+        # Requested editors are kept (and shipped) until their node is removed
+        # or the editor mode changes, so reopening a toolbar is instant. This
+        # is bounded by the number of toolbars the user opened.
         self._requested_node_editors[node_id] = None
         self._refresh_node_editor_views()
 
