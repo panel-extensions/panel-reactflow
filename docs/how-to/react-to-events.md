@@ -189,7 +189,7 @@ flow.on("drop", on_drop)
 `examples/drop_from_menu.py` extends this with a grouped palette and places
 a node dropped on an input handle beside the node it feeds.
 
-To accept files dragged in from the operating system, add `"Files"` to `drop_types`. The payload's `data` is then a list with one `{"name", "type", "size", "content"}` entry per file, each read as text:
+To accept files dragged in from the operating system, add `"Files"` to `drop_types`. The payload's `data` is then a list with one `{"name", "type", "size", "content"}` entry per file. A file whose bytes are valid UTF-8 arrives with its text as a `str` `content`, whatever MIME type the operating system reports for it (Windows, for example, reports `.csv` files as `application/vnd.ms-excel`). Other files, such as images or Parquet, arrive with `bytes` content:
 
 ```python
 flow = ReactFlow(drop_types=["Files"])
@@ -202,6 +202,23 @@ def on_file_drop(payload, flow):
 
 flow.on("drop", on_file_drop)
 ```
+
+For example, to load tables of either kind:
+
+```python
+import io
+
+import pandas as pd
+
+def on_table_drop(payload, flow):
+    for file in payload["data"]:
+        if file["name"].endswith(".parquet"):
+            df = pd.read_parquet(io.BytesIO(file["content"]))
+        elif file["name"].endswith(".csv"):
+            df = pd.read_csv(io.StringIO(file["content"]))
+```
+
+Files that exceed `max_drop_size` (10 MB in total by default) or cannot be read are not sent; they are listed in the payload's `rejected` entries with a `reason` instead.
 
 ---
 

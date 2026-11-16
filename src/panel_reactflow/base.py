@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import inspect
 import json
@@ -72,6 +73,25 @@ def _ensure_jsonable(value: Any, path: str) -> None:
         json.dumps(value)
     except Exception as exc:
         raise ValueError(f"Value at {path} is not JSON-serializable.") from exc
+
+
+def _decode_dropped_files(files: Any) -> Any:
+    """Turn the wire format of a ``"Files"`` drop into Python values.
+
+    The browser sends files that decode as UTF-8 as text and other files
+    base64 encoded; the latter are decoded to ``bytes`` here so handlers
+    get ``str`` or ``bytes`` content without dealing with the encoding.
+    """
+    if not isinstance(files, list):
+        return files
+    decoded = []
+    for entry in files:
+        if isinstance(entry, dict) and "encoding" in entry:
+            entry = dict(entry)
+            if entry.pop("encoding") == "base64" and isinstance(entry.get("content"), str):
+                entry["content"] = base64.b64decode(entry["content"])
+        decoded.append(entry)
+    return decoded
 
 
 def _is_param_class(obj: Any) -> bool:
@@ -1492,6 +1512,14 @@ class ReactFlow(ReactComponent):
         Allow users to delete selected nodes or edges using keyboard shortcuts.
     enable_multiselect : bool, default True
         Allow selecting multiple nodes/edges with modifier keys (Shift/Ctrl).
+    max_drop_size : int, default 10_000_000
+        Maximum total size in bytes of the data in one drop. Larger files
+        are not read and are reported in the drop event's ``rejected``
+        list, so a big drop cannot exceed the websocket message limit and
+        disconnect the session. Binary files are sent base64 encoded, which
+        adds a third on the wire, so keep this well below Bokeh's
+        ``websocket_max_message_size`` (20 MiB by default). ``0`` disables
+        the limit.
     max_zoom : float, default 2
         Maximum zoom level the viewport can be zoomed in to.
     min_zoom : float, default 0.5
@@ -1706,6 +1734,17 @@ class ReactFlow(ReactComponent):
         ``"Files"`` to accept files dragged in from the operating system.
         Each accepted drop emits a ``"drop"`` event; drops of other types are
         ignored, as are all drops while ``editable`` is False.""",
+    )
+
+    max_drop_size = param.Integer(
+        default=10_000_000,
+        bounds=(0, None),
+        doc="""
+        Maximum total size in bytes of one drop. Files beyond the limit are
+        not read and are listed in the drop event's ``rejected`` entries.
+        Binary files are sent base64 encoded (a third larger on the wire),
+        so keep this below Bokeh's ``websocket_max_message_size``. ``0``
+        disables the limit.""",
     )
 
     popup_trigger = param.ObjectSelector(
@@ -2611,9 +2650,10 @@ class ReactFlow(ReactComponent):
                     {
                         "type": "drop",
                         "drop_type": msg.get("drop_type"),
-                        "data": msg.get("data"),
+                        "data": (_decode_dropped_files(msg.get("data")) if msg.get("drop_type") == "Files" else msg.get("data")),
                         "position": msg.get("position"),
                         "target": msg.get("target"),
+                        "rejected": msg.get("rejected") or [],
                     },
                 )
             case "sync":
@@ -3783,11 +3823,17 @@ class ReactFlow(ReactComponent):
               the canvas. Payload has the matched ``drop_type``, the dropped
               ``data`` (parsed from JSON when possible, otherwise the raw
               string; for ``"Files"`` a list of ``{"name", "type", "size",
-              "content"}`` with each file read as text), the drop
-              ``position`` in flow coordinates, and a
-              ``target`` of ``{"node_id", "handle_id", "direction"}`` when
-              dropped on a node or handle (``handle_id`` and ``direction``
-              are ``None`` for a node), else ``None``.
+              "content"}``, where ``content`` is a ``str`` for a file that
+              decodes as UTF-8 text, whatever its reported MIME type, and
+              ``bytes`` for any other file), the
+              drop ``position`` in flow coordinates, a ``target`` of
+              ``{"node_id", "handle_id", "direction"}`` when dropped on a
+              node or handle (``handle_id`` and ``direction`` are ``None``
+              for a node), else ``None``, and a ``rejected`` list of
+              ``{"name", "type", "size", "reason"}`` for files that were
+              not sent because they exceed ``max_drop_size`` or could not
+              be read. A non-file drop larger than ``max_drop_size`` is
+              sent with ``data=None`` and one ``rejected`` entry.
             - ``"client_error"``: The graph view hit a rendering error in the
               browser. The payload carries ``source``, ``message``, ``stack``,
               ``component_stack``, ``attempt`` and ``mode``, or for

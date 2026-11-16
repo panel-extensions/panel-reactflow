@@ -1,5 +1,5 @@
 import React from "react";
-import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SimpleBezierEdge, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useInternalNode, useNodes, useNodesState, useReactFlow, useStore, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
+import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SimpleBezierEdge, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useInternalNode, useNodes, useNodesState, useReactFlow, useStore, useStoreApi, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { SmartBezierEdge, SmartStraightEdge, SmartStepEdge } from "@tisoap/react-flow-smart-edge";
 
@@ -127,14 +127,68 @@ function popupCloseDistance(event) {
 // The DataTransfer type browsers report for files dragged in from the OS.
 const FILES_DROP_TYPE = "Files";
 
-// Files carry no string payload, so their contents have to be read explicitly.
-function readDroppedFiles(files) {
-  return Promise.all(Array.from(files, async (file) => ({
-    name: file.name,
-    type: file.type,
-    size: file.size,
-    content: await file.text(),
-  })));
+// Types that are never text, so their bytes skip the UTF-8 decode attempt.
+const BINARY_MIME_PATTERN = /^(image\/(?!svg\+xml$)|audio\/|video\/|font\/)|^application\/(pdf|zip|gzip|x-gzip|x-tar|x-bzip2|x-7z-compressed|x-rar-compressed|wasm)$/;
+
+function bytesToBase64(bytes) {
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    chunks.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)));
+  }
+  return btoa(chunks.join(""));
+}
+
+async function readDroppedFile(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // The reported MIME type is unreliable (Windows reports .csv as
+  // application/vnd.ms-excel), so any file that decodes cleanly as UTF-8 is
+  // sent as text and only the rest base64 encoded, which also keeps binaries
+  // from being mangled by replacement characters.
+  if (!BINARY_MIME_PATTERN.test(file.type)) {
+    try {
+      const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      return { name: file.name, type: file.type, size: file.size, encoding: "text", content };
+    } catch (_error) {
+      // Not valid UTF-8, fall through to base64.
+    }
+  }
+  return { name: file.name, type: file.type, size: file.size, encoding: "base64", content: bytesToBase64(bytes) };
+}
+
+/**
+ * Read dropped OS files, keeping the total payload under `maxSize` bytes so a
+ * large drop cannot exceed the websocket message limit and drop the session.
+ * Files that are too large or cannot be read (e.g. directories) are reported
+ * in `rejected` instead of failing the whole drop.
+ */
+async function readDroppedFiles(files, maxSize) {
+  const list = Array.from(files);
+  const accepted = [];
+  const rejected = [];
+  let budget = Number.isFinite(maxSize) && maxSize > 0 ? maxSize : Infinity;
+  list.forEach((file) => {
+    const meta = { name: file.name, type: file.type, size: file.size };
+    if (file.size > budget) {
+      rejected.push({ ...meta, reason: `File exceeds the remaining drop size limit of ${budget} bytes` });
+    } else {
+      budget -= file.size;
+      accepted.push(file);
+    }
+  });
+  const results = await Promise.allSettled(accepted.map(readDroppedFile));
+  const data = [];
+  results.forEach((result, index) => {
+    if (result.status === "fulfilled") {
+      data.push(result.value);
+    } else {
+      const file = accepted[index];
+      rejected.push({
+        name: file.name, type: file.type, size: file.size,
+        reason: String(result.reason?.message ?? result.reason ?? "File could not be read"),
+      });
+    }
+  });
+  return { data, rejected };
 }
 
 // Resolve the node or handle under a drop so a handler can wire what was dropped.
@@ -239,6 +293,80 @@ function renderHandles(direction, handles, opts = {}) {
 // nodesDraggable/nodesConnectable in React Flow.
 const READ_ONLY_NODE_FLAGS = { draggable: false, connectable: false, deletable: false };
 
+function currentZoom(storeApi) {
+  const zoom = storeApi.getState().transform?.[2];
+  return Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+}
+
+function isFigureModel(modelNode) {
+  const typeName = String(modelNode?.type || modelNode?.name || modelNode?.constructor?.__name__ || "");
+  return typeName === "Figure" || typeName.endsWith(".Figure");
+}
+
+// Waits until the child view exists, giving up after maxTries * interval ms or
+// once the caller is cancelled.
+async function resolveChildView(viewInstance, childModel, isCancelled, maxTries = 50, interval = 20) {
+  for (let tries = 0; tries < maxTries && !isCancelled(); tries++) {
+    try {
+      const result = await Promise.resolve(viewInstance._child_views.get(childModel));
+      if (result) {
+        return result;
+      }
+    } catch (_error) {
+      // The child view is not registered yet, try again.
+    }
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  return null;
+}
+
+/**
+ * Inject the zoom compensating stylesheet into every Bokeh figure rendered
+ * inside the node view with id `viewKey`. `onInject` runs before the first
+ * injection so the wrapper's CSS variables can capture the current zoom.
+ */
+async function applyFigureStyles(viewKey, isCancelled, onInject) {
+  const found = globalThis.Bokeh?.index?.find_by_id?.(viewKey);
+  const views = found ? [...found] : [];
+  const visited = new Set();
+
+  const walkSubView = async (subView) => {
+    if (isCancelled()) {
+      return;
+    }
+    const modelNode = subView?.model;
+    const modelId = String(modelNode?.id ?? "");
+    if (!modelId || visited.has(modelId)) {
+      return;
+    }
+    visited.add(modelId);
+
+    if (isFigureModel(modelNode)) {
+      const stylesheets = Array.isArray(modelNode.stylesheets) ? modelNode.stylesheets : [];
+      const alreadyInjected = stylesheets.some(
+        (entry) => typeof entry === "string" && entry.includes("scale(var(--rf-inverse-zoom))"),
+      );
+      if (!alreadyInjected) {
+        onInject();
+        modelNode.stylesheets = [...stylesheets, figureStylesheet];
+      }
+      return;
+    }
+
+    const childModels = Object.values(subView?.child_models || {}).filter(Boolean);
+    for (const childModel of childModels) {
+      const childSubView = await resolveChildView(subView, childModel, isCancelled);
+      if (childSubView) {
+        await walkSubView(childSubView);
+      }
+    }
+  };
+
+  for (const view of views) {
+    await walkSubView(view);
+  }
+}
+
 function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data, isConnectable }) {
     const validation = React.useContext(ConnectionValidationContext);
@@ -310,7 +438,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
       },
       [id],
     );
-    const zoom = useStore((s) => s.transform?.[2] ?? 1);
+    const storeApi = useStoreApi();
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
     useEffect(() => {
@@ -324,84 +452,29 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
     const showView = data?.view && !spec.minimal;
 
     const displayLabel = data?._label ?? spec.label ?? typeName;
-    const initialZoomRef = useRef(Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+    // The zoom is read from the store instead of subscribed to, otherwise every
+    // node re-renders on every zoom step. It only matters at the moment a
+    // figure's stylesheet is injected.
+    const [figureZoom, setFigureZoom] = useState(() => currentZoom(storeApi));
 
-    const viewWrapperStyle = {
-      "--rf-inverse-zoom": 1 / initialZoomRef.current,
-      "--rf-zoom": initialZoomRef.current,
-    };
+    const viewWrapperStyle = useMemo(() => ({
+      "--rf-inverse-zoom": 1 / figureZoom,
+      "--rf-zoom": figureZoom,
+    }), [figureZoom]);
 
-    const injectFigureStylesheet = (figureModel) => {
-      const stylesheets = Array.isArray(figureModel.stylesheets) ? figureModel.stylesheets : [];
-      const alreadyInjected = stylesheets.some(
-        (entry) => typeof entry === "string" && entry.includes("scale(var(--rf-inverse-zoom))"),
-      );
-      if (alreadyInjected) {
-        return;
+    const viewKey = data?.view?.key;
+    const viewReady = data?._viewReady;
+    useEffect(() => {
+      if (viewKey == null) {
+        return undefined;
       }
-      initialZoomRef.current = zoom;
-      figureModel.stylesheets = [...stylesheets, figureStylesheet];
-    };
-
-    const isFigureModel = (modelNode) => {
-      const typeName = String(modelNode?.type || modelNode?.name || modelNode?.constructor?.__name__ || "");
-      return typeName === "Figure" || typeName.endsWith(".Figure");
-    };
-
-    // Waits until get_child_view returns a non-null/undefined value or times out (maxTries * interval ms)
-    const resolveChildView = async (viewInstance, childModel, maxTries = 50, interval = 20) => {
-      let tries = 0;
-      while (tries < maxTries) {
-        try {
-          let result = await Promise.resolve(viewInstance._child_views.get(childModel));
-          if (result) {
-            return result;
-          }
-        } catch (error) {
-          // Ignore this error, try again
-        }
-        await new Promise(res => setTimeout(res, interval));
-        tries++;
-      }
-      return null;
-    };
-
-
-    const applyFigureStyles = async () => {
-      const views = [...Bokeh.index.find_by_id(data.view?.key)]
-      if (!views.length) {
-        return;
-      }
-      const visited = new Set();
-
-      const walkSubView = async (subView) => {
-        const modelNode = subView?.model;
-        const modelId = String(modelNode?.id ?? "");
-        if (!modelId || visited.has(modelId)) {
-          return;
-        }
-        visited.add(modelId);
-
-        if (isFigureModel(modelNode)) {
-          injectFigureStylesheet(modelNode);
-          return
-        }
-
-        const childModels = Object.values(subView?.child_models || {}).filter(Boolean);
-        for (const childModel of childModels) {
-          const childSubView = await resolveChildView(subView, childModel);
-          if (childSubView) {
-            await walkSubView(childSubView);
-          }
-        }
+      let cancelled = false;
+      applyFigureStyles(viewKey, () => cancelled, () => setFigureZoom(currentZoom(storeApi)))
+        .catch((error) => console.warn("[panel-reactflow] failed to style node figure", error));
+      return () => {
+        cancelled = true;
       };
-
-      for (const view of views) {
-        await walkSubView(view);
-      }
-    };
-
-    applyFigureStyles();
+    }, [viewKey, viewReady, data, storeApi]);
 
     const handleGearClick = (e) => {
       e.stopPropagation();
@@ -618,22 +691,69 @@ const EDGE_TYPES = Object.fromEntries(Object.entries({
   smart_step: SmartStepEdge,
 }).map(([name, component]) => [name, withSelfLoop(component)]));
 
+// Messages that only carry the latest state of something, so a newer one
+// supersedes a pending one with the same key. Everything else is an event that
+// must reach Python.
+function supersedeKey(payload) {
+  if (payload.type === "node_moved") return `node_moved:${payload.node_id}`;
+  if (payload.type === "selection_changed") return "selection_changed";
+  return null;
+}
+
+/**
+ * In debounce mode, queue messages until `debounceMs` pass without a new one
+ * and then send them in order. State messages (moves, selection) are coalesced
+ * to their latest value; events such as deletions are never dropped. Any
+ * pending messages are flushed on unmount or when leaving debounce mode.
+ */
 function useDebouncedSync(syncMode, debounceMs, syncFn) {
   const timeoutRef = useRef(null);
+  const queueRef = useRef([]);
+  const syncRef = useRef(syncFn);
+  syncRef.current = syncFn;
 
-  return useCallback(
-    (payload) => {
-      if (syncMode === "debounce") {
-        if (timeoutRef.current) {
-          clearTimeout(timeoutRef.current);
-        }
-        timeoutRef.current = setTimeout(() => syncFn(payload), debounceMs);
-      } else {
-        syncFn(payload);
+  const flush = useCallback(() => {
+    if (timeoutRef.current !== null) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    const queue = queueRef.current;
+    queueRef.current = [];
+    queue.forEach((payload) => {
+      try {
+        syncRef.current(payload);
+      } catch (error) {
+        console.error("[panel-reactflow] failed to send", payload?.type, error);
       }
+    });
+  }, []);
+
+  const schedule = useCallback(
+    (payload) => {
+      if (syncMode !== "debounce") {
+        flush();
+        syncRef.current(payload);
+        return;
+      }
+      const key = supersedeKey(payload);
+      if (key !== null) {
+        queueRef.current = queueRef.current.filter((queued) => supersedeKey(queued) !== key);
+      }
+      queueRef.current.push(payload);
+      if (timeoutRef.current !== null) {
+        clearTimeout(timeoutRef.current);
+      }
+      timeoutRef.current = setTimeout(flush, debounceMs);
     },
-    [syncMode, debounceMs, syncFn],
+    [syncMode, debounceMs, flush],
   );
+
+  useEffect(() => {
+    if (syncMode !== "debounce") flush();
+  }, [syncMode, flush]);
+  useEffect(() => flush, [flush]);
+
+  return { schedule, flush, queueRef };
 }
 
 function areEqual(a, b) {
@@ -947,6 +1067,7 @@ function FlowInner({
   valuePopupTrigger,
   hoverDelay,
   dropTypes,
+  maxDropSize,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -955,6 +1076,7 @@ function FlowInner({
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
   const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
+  const lastPySelectedRef = useRef(new Map());
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
   editableRef.current = editable;
@@ -1035,25 +1157,31 @@ function FlowInner({
     // The event is recycled once the handler yields, so read it before awaiting files.
     const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
     const target = dropTarget(event.target);
-    let data;
-    if (dropType === FILES_DROP_TYPE) {
-      try {
-        data = await readDroppedFiles(event.dataTransfer.files);
-      } catch (error) {
-        reportError(error, null, { source: "handler", handler: "onDrop" });
-        return;
+    const files = dropType === FILES_DROP_TYPE ? event.dataTransfer.files : null;
+    const raw = files ? null : event.dataTransfer.getData(dropType);
+    // The limit is in bytes, so measure the UTF-8 encoding rather than UTF-16 code units.
+    const rawSize = raw !== null && maxDropSize > 0 ? new TextEncoder().encode(raw).length : 0;
+    try {
+      let data;
+      let rejected = [];
+      if (files) {
+        ({ data, rejected } = await readDroppedFiles(files, maxDropSize));
+      } else if (rawSize > maxDropSize) {
+        data = null;
+        rejected = [{ type: dropType, size: rawSize, reason: `Data exceeds the drop size limit of ${maxDropSize} bytes` }];
+      } else {
+        data = raw;
+        try {
+          data = JSON.parse(raw);
+        } catch (_error) {
+          // Not JSON, so hand the handler the raw string.
+        }
       }
-    } else {
-      const raw = event.dataTransfer.getData(dropType);
-      data = raw;
-      try {
-        data = JSON.parse(raw);
-      } catch (_error) {
-        // Not JSON, so hand the handler the raw string.
-      }
+      model.send_msg({ type: "drop", drop_type: dropType, data, position, target, rejected });
+    } catch (error) {
+      reportError(error, null, { source: "handler", handler: "onDrop" });
     }
-    model.send_msg({ type: "drop", drop_type: dropType, data, position, target });
-  }, [acceptedDropType, model, reportError, screenToFlowPosition]);
+  }, [acceptedDropType, maxDropSize, model, reportError, screenToFlowPosition]);
 
   const onConnectEnd = useCallback(() => {
     if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
@@ -1194,18 +1322,33 @@ function FlowInner({
       cancelAnimationFrame(hydrationFrameRef.current);
     }
     hydrationFrameRef.current = requestAnimationFrame(() => {
+      const lastPySelected = lastPySelectedRef.current;
+      const nextPySelected = new Map();
+      const pendingMoves = new Set(
+        patchQueueRef.current.filter((payload) => payload.type === "node_moved").map((payload) => payload.node_id),
+      );
       setNodes((curr) => {
-        const currById = new Map(curr.map((n) => [n.id, n]));
+        const currById = new Map(curr.map((n) => [n?.id, n]));
         const merged = hydratedNodes.map((n) => {
+          if (!n || typeof n !== "object") return n;
+          nextPySelected.set(n.id, Boolean(n.selected));
           const prev = currById.get(n.id);
           if (!prev) return n;
+          // Selection is owned by the browser unless Python changed it since
+          // the last push; positions of nodes being dragged, or whose move
+          // has not been sent yet, stay where the pointer put them.
+          const pythonSelected = Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
+          const keepPosition = prev.dragging || pendingMoves.has(n.id);
           const next = {
             ...n,
-            selected: prev.selected,
+            ...(prev.measured ? { measured: prev.measured } : {}),
+            ...(keepPosition ? { position: prev.position } : {}),
+            selected: pythonSelected ? n.selected : prev.selected,
             dragging: prev.dragging,
           };
           return areEqual(prev, next) ? prev : next;
         });
+        lastPySelectedRef.current = nextPySelected;
         if (merged.length === curr.length && merged.every((node, index) => node === curr[index])) {
           return curr;
         }
@@ -1264,7 +1407,17 @@ function FlowInner({
     [model],
   );
 
-  const schedulePatch = useDebouncedSync(syncMode, debounceMs, sendPatch);
+  const { schedule: schedulePatch, flush: flushPatches, queueRef: patchQueueRef } = useDebouncedSync(syncMode, debounceMs, sendPatch);
+
+  // Immediate messages flush the debounce queue first so Python sees events in
+  // the order they happened.
+  const sendNow = useCallback(
+    (payload) => {
+      flushPatches();
+      sendPatch(payload);
+    },
+    [flushPatches, sendPatch],
+  );
 
   const onConnect = useCallback(
     (connection) => {
@@ -1279,9 +1432,9 @@ function FlowInner({
       const updated = addEdge(newEdge, edgesRef.current);
       if (updated === edgesRef.current) return;
       setEdges(updated);
-      sendPatch({ type: "edge_added", edge: newEdge });
+      sendNow({ type: "edge_added", edge: newEdge });
     },
-    [candidateReason, editable, enableConnect, sendPatch, setEdges],
+    [candidateReason, editable, enableConnect, sendNow, setEdges],
   );
 
   const handleNodesChange = useCallback(
@@ -1358,13 +1511,13 @@ function FlowInner({
   const onNodeContextMenu = useCallback(
     (event, node) => {
       event.preventDefault();
-      sendPatch({
+      sendNow({
         type: "node_context_menu",
         node_id: node.id,
         position: { x: event.clientX, y: event.clientY },
       });
     },
-    [sendPatch],
+    [sendNow],
   );
 
   const edgeHoverTimerRef = useRef(null);
@@ -1401,7 +1554,7 @@ function FlowInner({
         }
         if (dx * dx + dy * dy >= closeDistance * closeDistance) {
           schedulePopupClose(() => {
-            sendPatch({ type: "edge_unhovered", ...target });
+            sendNow({ type: "edge_unhovered", ...target });
             cleanup();
           });
         }
@@ -1409,11 +1562,11 @@ function FlowInner({
       edgeHoverCleanupRef.current = cleanup;
       edgeHoverTimerRef.current = setTimeout(() => {
         edgeHoverTimerRef.current = null;
-        sendPatch({ type: "edge_hovered", ...target, position });
+        sendNow({ type: "edge_hovered", ...target, position });
         document.addEventListener("pointermove", onPointerMove, true);
       }, hoverDelay);
     },
-    [sendPatch, valuePopupTrigger, hoverDelay],
+    [sendNow, valuePopupTrigger, hoverDelay],
   );
 
   const onEdgeHoverEnd = useCallback(
@@ -1434,24 +1587,24 @@ function FlowInner({
       ) {
         return;
       }
-      sendPatch({
+      sendNow({
         type: "node_clicked",
         node_id: node.id,
         position: { x: event.clientX, y: event.clientY },
       });
     },
-    [sendPatch],
+    [sendNow],
   );
 
   const onEdgeClick = useCallback(
     (event, edge) => {
-      sendPatch({
+      sendNow({
         type: "edge_clicked",
         edge_id: edge.id,
         position: { x: event.clientX, y: event.clientY },
       });
     },
-    [sendPatch],
+    [sendNow],
   );
 
   const onMoveEnd = useCallback(
@@ -1466,63 +1619,61 @@ function FlowInner({
   // An exception in an interaction handler leaves the canvas showing a change
   // that never reached Python. Report those instead of letting them vanish into
   // the browser console.
-  const handlers = useMemo(() => {
-    const wrap = (name, fn) =>
-      typeof fn === "function"
-        ? (...args) => {
-            try {
-              return fn(...args);
-            } catch (error) {
-              reportError(error, null, { source: "handler", handler: name });
-              return undefined;
-            }
-          }
-        : undefined;
-    return {
-      onNodesChange: wrap("onNodesChange", handleNodesChange),
-      onEdgesChange: wrap("onEdgesChange", onEdgesChange),
-      onSelectionChange: wrap("onSelectionChange", onSelectionChange),
-      onNodesDelete: wrap("onNodesDelete", onNodesDelete),
-      onEdgesDelete: wrap("onEdgesDelete", onEdgesDelete),
-      onConnect: wrap("onConnect", onConnect),
-      onConnectStart: wrap("onConnectStart", onConnectStart),
-      onConnectEnd: wrap("onConnectEnd", onConnectEnd),
-      onMoveEnd: wrap("onMoveEnd", onMoveEnd),
-      onNodeClick: wrap("onNodeClick", onNodeClick),
-      onNodeDoubleClick: wrap("onNodeDoubleClick", onNodeDoubleClick),
-      onNodeContextMenu: wrap("onNodeContextMenu", onNodeContextMenu),
-      onEdgeClick: wrap("onEdgeClick", onEdgeClick),
-      onEdgeMouseEnter: wrap("onEdgeMouseEnter", onEdgeHover),
-      onEdgeMouseLeave: wrap("onEdgeMouseLeave", onEdgeHoverEnd),
-      onPaneClick: wrap("onPaneClick", onPaneClick),
-      onDragOver: wrap("onDragOver", onDragOver),
-      onDrop: wrap("onDrop", onDrop),
-    };
-  }, [
-    handleNodesChange,
+  const latestHandlers = {
+    onNodesChange: handleNodesChange,
+    onEdgesChange,
+    onSelectionChange,
+    onNodesDelete,
+    onEdgesDelete,
     onConnect,
     onConnectStart,
     onConnectEnd,
-    onEdgeClick,
-    onEdgeHover,
-    onEdgeHoverEnd,
-    onEdgesChange,
-    onEdgesDelete,
     onMoveEnd,
     onNodeClick,
-    onNodeContextMenu,
     onNodeDoubleClick,
-    onNodesDelete,
+    onNodeContextMenu,
+    onEdgeClick,
+    onEdgeMouseEnter: onEdgeHover,
+    onEdgeMouseLeave: onEdgeHoverEnd,
+    onPaneClick,
     onDragOver,
     onDrop,
-    onPaneClick,
-    onSelectionChange,
-    reportError,
-  ]);
+  };
+  const handlersRef = useRef(latestHandlers);
+  handlersRef.current = latestHandlers;
+  const definedHandlers = Object.keys(latestHandlers).filter((name) => typeof latestHandlers[name] === "function").join(",");
+  // The wrappers dispatch to the latest handler through a ref so their
+  // identity stays stable. React Flow passes several of them to every node
+  // wrapper, so a new identity (e.g. onMoveEnd after each viewport sync)
+  // would re-render every node.
+  const handlers = useMemo(() => {
+    const wrap = (name) => (...args) => {
+      try {
+        const result = handlersRef.current[name]?.(...args);
+        if (result && typeof result.then === "function") {
+          return result.catch((error) => {
+            reportError(error, null, { source: "handler", handler: name });
+          });
+        }
+        return result;
+      } catch (error) {
+        reportError(error, null, { source: "handler", handler: name });
+        return undefined;
+      }
+    };
+    return Object.fromEntries(definedHandlers.split(",").filter(Boolean).map((name) => [name, wrap(name)]));
+  }, [definedHandlers, reportError]);
 
   const validationEnabled = hasConnectionValidators || Object.values(connectionValidation || {}).some(Boolean);
+  // Every node consumes this context, so a fresh object on each FlowInner
+  // render would re-render every node on every drag step or data patch.
+  const validationContext = useMemo(() => ({ drag, reasonForHandle }), [drag, reasonForHandle]);
+  const isValidConnection = useMemo(
+    () => (validationEnabled ? (connection) => !candidateReason(connection) : undefined),
+    [candidateReason, validationEnabled],
+  );
   return (
-    <ConnectionValidationContext.Provider value={{ drag, reasonForHandle }}>
+    <ConnectionValidationContext.Provider value={validationContext}>
     <ReactFlow
       nodes={nodes}
       edges={edges}
@@ -1531,7 +1682,7 @@ function FlowInner({
       defaultEdgeOptions={defaultEdgeOptions}
       colorMode={colorMode}
       {...handlers}
-      isValidConnection={validationEnabled ? (connection) => !candidateReason(connection) : undefined}
+      isValidConnection={isValidConnection}
       nodesDraggable={editable}
       nodesConnectable={editable && enableConnect}
       elementsSelectable={selectable}
@@ -1571,6 +1722,7 @@ export function render({ model, view }) {
   const [editorMode] = model.useState("editor_mode");
   const [valuePopupTrigger] = model.useState("popup_trigger");
   const [dropTypes] = model.useState("drop_types");
+  const [maxDropSize] = model.useState("max_drop_size");
   const [hoverDelay] = model.useState("popup_hover_delay");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
@@ -1751,7 +1903,13 @@ export function render({ model, view }) {
 
   const hydratedNodes = useMemo(() => {
     return (pyNodes || []).map((node, idx) => {
-      const data = node.data || {};
+      // Malformed entries are passed through untouched so the error boundary
+      // and safe mode can deal with them instead of this render crashing the
+      // whole component outside the boundary.
+      if (!node || typeof node !== "object") {
+        return node;
+      }
+      const data = node.data && typeof node.data === "object" ? node.data : {};
       const viewIndex = data.view_idx;
       const { view_idx, ...dataWithoutViewIdx } = data;
       const baseView = views[viewIndex];
@@ -1782,6 +1940,9 @@ export function render({ model, view }) {
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
+      if (!edge || typeof edge !== "object") {
+        return edge;
+      }
       const data = edge.data || {};
       const label = edge.label;
       if (label === undefined) {
@@ -1902,6 +2063,7 @@ export function render({ model, view }) {
       valuePopupTrigger={valuePopupTrigger}
       hoverDelay={hoverDelay}
       dropTypes={dropTypes}
+      maxDropSize={maxDropSize}
     />
   );
 

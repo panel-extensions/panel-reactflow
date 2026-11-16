@@ -2099,9 +2099,55 @@ def test_drop_message_emits_drop_event() -> None:
         "data": {"path": [1]},
         "position": {"x": 10.5, "y": 20},
         "target": {"node_id": "n1", "handle_id": "in", "direction": "input"},
+        "rejected": [],
     }
     assert received == [(payload, flow)]
     assert wildcard == [payload]
+
+
+def test_drop_message_forwards_rejected_files() -> None:
+    flow = ReactFlow(drop_types=["Files"])
+    received = []
+    flow.on("drop", received.append)
+    rejected = [{"name": "big.bin", "type": "", "size": 30_000_000, "reason": "File exceeds the drop size limit"}]
+
+    flow._handle_msg({"type": "drop", "drop_type": "Files", "data": [], "position": {"x": 0, "y": 0}, "target": None, "rejected": rejected})
+
+    assert received[0]["data"] == []
+    assert received[0]["rejected"] == rejected
+
+
+def test_file_drop_decodes_base64_content_to_bytes() -> None:
+    flow = ReactFlow(drop_types=["Files"])
+    received = []
+    flow.on("drop", received.append)
+    files = [
+        {"name": "a.csv", "type": "application/vnd.ms-excel", "size": 6, "encoding": "text", "content": "Zoë,1"},
+        {"name": "a.bin", "type": "", "size": 3, "encoding": "base64", "content": "AP8B"},
+    ]
+
+    flow._handle_msg({"type": "drop", "drop_type": "Files", "data": files, "position": {"x": 0, "y": 0}, "target": None, "rejected": []})
+
+    text, binary = received[0]["data"]
+    assert text == {"name": "a.csv", "type": "application/vnd.ms-excel", "size": 6, "content": "Zoë,1"}
+    assert binary == {"name": "a.bin", "type": "", "size": 3, "content": bytes([0, 255, 1])}
+
+
+def test_non_file_drop_data_is_not_decoded() -> None:
+    flow = ReactFlow(drop_types=["application/json"])
+    received = []
+    flow.on("drop", received.append)
+    data = [{"encoding": "base64", "content": "AP8B"}]
+
+    flow._handle_msg({"type": "drop", "drop_type": "application/json", "data": data, "position": {"x": 0, "y": 0}, "target": None, "rejected": []})
+
+    assert received[0]["data"] == data
+
+
+def test_max_drop_size_stays_below_websocket_limit() -> None:
+    # Base64 inflates binary drops by 4/3, which must still fit in Bokeh's
+    # default 20 MiB websocket message limit.
+    assert ReactFlow().max_drop_size * 4 / 3 < 20 * 1024 * 1024
 
 
 def test_fit_view_sends_default_options() -> None:
