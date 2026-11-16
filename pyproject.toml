@@ -54,6 +54,9 @@ Homepage = "https://github.com/panel-extensions/panel-reactflow"
 Source = "https://github.com/panel-extensions/panel-reactflow"
 
 [project.optional-dependencies]
+material = ["panel-material-ui"]
+validation = ["jsonschema"]
+recommended = ["panel-material-ui", "jsonschema"]
 dev = [
     "mkdocs-material",
     "mkdocs",

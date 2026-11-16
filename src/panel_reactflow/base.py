@@ -152,13 +152,23 @@ def _normalize_schema(schema: Any) -> dict[str, Any] | None:
     raise ValueError(f"Cannot normalize schema: {schema!r}")
 
 
+_JSONSCHEMA_WARNED = False
+
+
 def _validate_data(data: dict[str, Any], schema: dict[str, Any] | None) -> None:
-    """Validate *data* against a JSON Schema if available."""
+    """Validate *data* against a JSON Schema if ``jsonschema`` is installed."""
+    global _JSONSCHEMA_WARNED
     if schema is None:
         return
     try:
         import jsonschema as _js
     except ImportError:
+        if not _JSONSCHEMA_WARNED:
+            _JSONSCHEMA_WARNED = True
+            _LOGGER.warning(
+                "Node and edge data is not validated against its schema because the jsonschema "
+                "package is not installed. Install panel-reactflow[validation] to enable validation."
+            )
         return
     try:
         _js.validate(data, schema)
@@ -1157,6 +1167,72 @@ class Editor(Viewer):
             _on_patch=on_patch,
             **kwargs,
         )
+        self._is_updating = False
+
+    def _report_patch(self, patch: dict[str, Any], remove: Sequence[str] = ()) -> bool:
+        """Report an edit through ``on_patch``, returning ``False`` if it was rejected.
+
+        A ``ValueError`` (e.g. a failed ``validate_on_patch`` check) is
+        logged instead of propagating out of the widget watcher that made
+        the edit, so the caller can revert the widget.
+        """
+        if self._on_patch is None:
+            return True
+        try:
+            if remove and _accepts_keyword(self._on_patch, "remove"):
+                self._on_patch(patch, remove=list(remove))
+            else:
+                self._on_patch(patch)
+        except ValueError as exc:
+            _LOGGER.warning("Rejected edit of %s %r: %s", self._node_type or "item", self._node_id, exc)
+            return False
+        return True
+
+    def _handle_json_edit(self, new: Any, editor: JSONEditor) -> None:
+        """Report an edit made in a JSON editor, reverting it if rejected.
+
+        Keys deleted in the editor are reported as ``remove`` so they are
+        deleted from the graph data instead of surviving the merge.
+        """
+        if self._is_updating or new == self._data:
+            return
+        if isinstance(new, dict):
+            patch, removed = _json_data_patch(self._data, new)
+            if self._report_patch(patch, removed):
+                with self._updating():
+                    self._data = dict(new)
+                return
+        else:
+            _LOGGER.warning("Rejected edit of %s %r: data must be a JSON object.", self._node_type or "item", self._node_id)
+        with self._updating():
+            editor.value = dict(self._data)
+
+    @contextmanager
+    def _updating(self):
+        """Apply a change without reporting it back through ``on_patch``."""
+        self._is_updating = True
+        try:
+            yield
+        finally:
+            self._is_updating = False
+
+
+def _accepts_keyword(fn: Callable, name: str) -> bool:
+    try:
+        parameters = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any((p.name == name and p.kind is not p.POSITIONAL_ONLY) or p.kind is p.VAR_KEYWORD for p in parameters)
+
+
+def _schema_definitions(schema: dict[str, Any]) -> dict[str, Any]:
+    return {**(schema.get("definitions") or {}), **(schema.get("$defs") or {})}
+
+
+def _json_data_patch(old: dict[str, Any], new: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Return the changed keys and the removed keys going from *old* to *new*."""
+    patch = {key: value for key, value in new.items() if key not in old or old[key] != value}
+    return patch, [key for key in old if key not in new]
 
 
 class JsonEditor(Editor):
@@ -1199,13 +1275,18 @@ class JsonEditor(Editor):
 
     def __init__(self, data=None, schema=None, **kwargs):
         super().__init__(data, schema, **kwargs)
-        self._editor = JSONEditor(value=self._data)
+        self._editor = JSONEditor(value=dict(self._data))
         self._editor.param.watch(self._on_json_change, "value")
 
     def _on_json_change(self, event: param.parameterized.Event) -> None:
-        if self._on_patch is not None and event.new != self._data:
-            self._data = event.new
-            self._on_patch(event.new)
+        self._handle_json_edit(event.new, self._editor)
+
+    @param.depends("_data", watch=True)
+    def _sync_from_data(self) -> None:
+        if self._is_updating:
+            return
+        with self._updating():
+            self._editor.value = dict(self._data)
 
     def __panel__(self):
         return self._editor
@@ -1278,46 +1359,77 @@ class SchemaEditor(Editor):
     The editor falls back to :class:`JsonEditor` if:
     - No schema is provided
     - Schema has no ``properties`` field
-    - Form generation fails (e.g., missing dependencies)
+    - Form generation fails, which is logged as a warning
+
+    A property the form cannot represent with a dedicated widget is shown
+    as a literal input rather than turning the whole form into JSON.
+    Widgets are drawn from ``panel_material_ui`` when it is installed
+    (``pip install panel-reactflow[material]``) and from ``panel.widgets``
+    otherwise. Date and datetime values are written back as ISO 8601
+    strings so the data stays JSON serializable.
     """
 
     def __init__(self, data=None, schema=None, **kwargs):
         super().__init__(data, schema, **kwargs)
-        if self._schema and self._schema.get("properties"):
+        self._form = None
+        properties = (self._schema or {}).get("properties")
+        if properties:
             try:
                 from .schema import JSONSchema
 
                 self._form = JSONSchema(
-                    self._data,
-                    schema=self._schema["properties"],
+                    dict(self._data),
+                    schema=properties,
+                    definitions=_schema_definitions(self._schema),
                     multi=False,
                 )
-                for name, widget in self._form._widgets.items():
-                    widget.param.watch(
-                        lambda event, _n=name: self._on_widget_change(_n, event),
-                        "value",
-                    )
-                self._panel = self._form.layout
             except Exception:
-                # Graceful fallback if JSONSchema rendering fails
-                # (e.g. missing pandas dependency).
-                self._init_json_fallback()
-        else:
+                _LOGGER.warning(
+                    "Could not build a form from the schema of %s %r, falling back to a JSON editor.",
+                    self._node_type or "item",
+                    self._node_id,
+                    exc_info=True,
+                )
+        if self._form is None:
             self._init_json_fallback()
+            return
+        for name, widget in self._form._widgets.items():
+            widget.param.watch(
+                lambda event, _n=name: self._on_widget_change(_n, event),
+                "value",
+            )
+        self._panel = self._form.layout
 
     def _init_json_fallback(self) -> None:
-        self._json_editor = JSONEditor(value=self._data)
+        self._json_editor = JSONEditor(value=dict(self._data))
         self._json_editor.param.watch(self._on_json_change, "value")
         self._panel = self._json_editor
 
     def _on_widget_change(self, name: str, event: param.parameterized.Event) -> None:
-        if self._on_patch is not None:
-            self._on_patch({name: event.new})
+        if self._is_updating:
+            return
+        from .schema import to_json_value
+
+        value = to_json_value(event.new)
+        if self._report_patch({name: value}):
+            with self._updating():
+                self._data = {**self._data, name: value}
+        else:
+            with self._updating():
+                event.obj.value = event.old
 
     def _on_json_change(self, event: param.parameterized.Event) -> None:
-        if self._on_patch is not None and event.new != self._data:
-            self._data = event.new
-            self._on_patch(event.new)
+        self._handle_json_edit(event.new, self._json_editor)
+
+    @param.depends("_data", watch=True)
+    def _sync_from_data(self) -> None:
+        if self._is_updating:
+            return
+        with self._updating():
+            if self._form is not None:
+                self._form._set_widget_values(self._data)
+            else:
+                self._json_editor.value = dict(self._data)
 
     def __panel__(self):
         return self._panel
@@ -1756,7 +1868,7 @@ class ReactFlow(ReactComponent):
         schema: dict | None,
         item_type: str,
         *,
-        patch_fn: Callable[[str, dict], None],
+        patch_fn: Callable[..., None],
     ) -> Any:
         """Instantiate an editor from *factory*.
 
@@ -1767,8 +1879,11 @@ class ReactFlow(ReactComponent):
         ``patch_node_data`` for nodes, ``patch_edge_data`` for edges.
         """
 
-        def on_patch(patch: dict) -> None:
-            patch_fn(item_id, patch)
+        def on_patch(patch: dict, *, remove: Sequence[str] | None = None) -> None:
+            if remove:
+                patch_fn(item_id, patch, remove=remove)
+            else:
+                patch_fn(item_id, patch)
 
         return factory(data, schema, id=item_id, type=item_type, on_patch=on_patch)
 
@@ -2937,6 +3052,7 @@ class ReactFlow(ReactComponent):
         get_schema: Callable[[Any], dict[str, Any] | None],
         sync_from_data: Callable[[Any], None],
         instance_cls: type,
+        remove: Sequence[str] = (),
     ) -> None:
         """Shared implementation for ``patch_node_data``/``patch_edge_data``.
 
@@ -2949,6 +3065,8 @@ class ReactFlow(ReactComponent):
             if get_id(item) != item_id:
                 continue
             data = get_data(item)
+            for key in remove:
+                data.pop(key, None)
             data.update(patch)
             if self.validate_on_patch:
                 _validate_data(data, get_schema(item))
@@ -2957,7 +3075,7 @@ class ReactFlow(ReactComponent):
                 sync_from_data(item)
             break
 
-    def patch_node_data(self, node_id: str, patch: dict[str, Any]) -> None:
+    def patch_node_data(self, node_id: str, patch: dict[str, Any], *, remove: Sequence[str] | None = None) -> None:
         """Update specific properties in a node's data dictionary.
 
         Merges the provided patch dictionary into the node's existing ``data``
@@ -2971,6 +3089,9 @@ class ReactFlow(ReactComponent):
         patch : dict
             Dictionary of key-value pairs to merge into the node's ``data``.
             Existing keys will be updated, new keys will be added.
+        remove : list of str, optional
+            Keys to delete from the node's ``data`` before *patch* is
+            merged in. Used by the JSON editors to apply deleted keys.
 
         Raises
         ------
@@ -3026,14 +3147,19 @@ class ReactFlow(ReactComponent):
             get_schema=lambda node: self._get_node_schema(self._node_type(node)),
             sync_from_data=self._sync_node_data_params_from_data,
             instance_cls=Node,
+            remove=remove or (),
         )
-        self._send_msg({"type": "patch_node_data", "node_id": node_id, "patch": patch})
-        self._emit("node_data_changed", {"type": "node_data_changed", "node_id": node_id, "patch": patch})
+        msg = {"type": "patch_node_data", "node_id": node_id, "patch": patch}
+        event = {"type": "node_data_changed", "node_id": node_id, "patch": patch}
+        if remove:
+            msg["remove"] = event["remove"] = list(remove)
+        self._send_msg(msg)
+        self._emit("node_data_changed", event)
         mirrored = self._mirrored_props(patch, Node._mirrored_data_keys)
         if mirrored:
             self.patch_node_props(node_id, mirrored)
 
-    def patch_edge_data(self, edge_id: str, patch: dict[str, Any]) -> None:
+    def patch_edge_data(self, edge_id: str, patch: dict[str, Any], *, remove: Sequence[str] | None = None) -> None:
         """Update specific properties in an edge's data dictionary.
 
         Merges the provided patch dictionary into the edge's existing ``data``
@@ -3047,6 +3173,9 @@ class ReactFlow(ReactComponent):
         patch : dict
             Dictionary of key-value pairs to merge into the edge's ``data``.
             Existing keys will be updated, new keys will be added.
+        remove : list of str, optional
+            Keys to delete from the edge's ``data`` before *patch* is
+            merged in. Used by the JSON editors to apply deleted keys.
 
         Raises
         ------
@@ -3096,9 +3225,14 @@ class ReactFlow(ReactComponent):
             get_schema=lambda edge: self._get_edge_schema(self._edge_type(edge)) if self._edge_type(edge) else None,
             sync_from_data=self._sync_edge_data_params_from_data,
             instance_cls=Edge,
+            remove=remove or (),
         )
-        self._send_msg({"type": "patch_edge_data", "edge_id": edge_id, "patch": patch})
-        self._emit("edge_data_changed", {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch})
+        msg = {"type": "patch_edge_data", "edge_id": edge_id, "patch": patch}
+        event = {"type": "edge_data_changed", "edge_id": edge_id, "patch": patch}
+        if remove:
+            msg["remove"] = event["remove"] = list(remove)
+        self._send_msg(msg)
+        self._emit("edge_data_changed", event)
         mirrored = self._mirrored_props(patch, Edge._mirrored_data_keys)
         if mirrored:
             self.patch_edge_props(edge_id, mirrored)
