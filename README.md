@@ -30,6 +30,14 @@ Install it via `pip`:
 pip install panel-reactflow
 ```
 
+The schema-driven editors use [panel-material-ui](https://github.com/panel-extensions/panel-material-ui)
+widgets when it is installed and plain Panel widgets otherwise. Install it
+with:
+
+```bash
+pip install "panel-reactflow[material]"
+```
+
 ## Usage
 
 ```python

@@ -9,8 +9,11 @@ interactive graph that auto-generates editing forms from a JSON Schema.
 ## Install
 
 ```bash
-pip install panel-reactflow
+pip install "panel-reactflow[material]"
 ```
+
+The `material` extra installs `panel-material-ui`, whose widgets the
+schema-driven editors use (plain Panel widgets otherwise).
 
 ## Minimal app
 

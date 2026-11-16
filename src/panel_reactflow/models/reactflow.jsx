@@ -710,6 +710,14 @@ function applyPropPatch(element, patch) {
   return next;
 }
 
+function withoutKeys(data, keys) {
+  const next = { ...(data || {}) };
+  (keys || []).forEach((key) => {
+    delete next[key];
+  });
+  return next;
+}
+
 /**
  * Drop or repair graph elements that React Flow cannot render, so a structurally
  * broken graph degrades to a partial view instead of an unmounted canvas.
@@ -1087,7 +1095,8 @@ function FlowInner({
             if (node.id !== msg.node_id) {
               return node;
             }
-            const data = { ...(node.data || {}), ...(msg.patch || {}) };
+            const data = withoutKeys(node.data, msg.remove);
+            Object.assign(data, msg.patch || {});
             return { ...node, data };
           }),
         );
@@ -1099,7 +1108,8 @@ function FlowInner({
             if (edge.id !== msg.edge_id) {
               return edge;
             }
-            const data = { ...(edge.data || {}), ...(msg.patch || {}) };
+            const data = withoutKeys(edge.data, msg.remove);
+            Object.assign(data, msg.patch || {});
             const nextLabel = msg.patch?.label ?? edge.label;
             return { ...edge, data, label: nextLabel };
           }),

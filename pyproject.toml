@@ -45,6 +45,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "jsonschema",
     "packaging",
     "panel >=1.5.0",
 ]
@@ -54,6 +55,7 @@ Homepage = "https://github.com/panel-extensions/panel-reactflow"
 Source = "https://github.com/panel-extensions/panel-reactflow"
 
 [project.optional-dependencies]
+material = ["panel-material-ui"]
 dev = [
     "mkdocs-material",
     "mkdocs",
