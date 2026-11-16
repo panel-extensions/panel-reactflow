@@ -495,6 +495,39 @@ def test_python_connection_validation_filters_targets(page):
     assert flow.edges[0]["source"] == "source" and flow.edges[0]["target"] == "right"
 
 
+def test_edge_rejected_by_python_after_drag_is_removed_from_browser(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="right", type="consumer", label="Right", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=["out"]),
+            "consumer": NodeType(type="consumer", inputs=["in"]),
+        },
+        width=650,
+        height=350,
+    )
+    state = {"block": False}
+    flow.add_connection_validator(lambda payload: "Changed during drag" if state["block"] else None)
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    right = _node_locator(page, "Right").locator(".react-flow__handle-left")
+
+    box = source.bounding_box()
+    destination = right.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 25, box["y"] + box["height"] / 2)
+    expect(right).to_have_class(re.compile("rf-handle-valid"))
+    state["block"] = True
+    page.mouse.move(destination["x"] + destination["width"] / 2, destination["y"] + destination["height"] / 2)
+    page.mouse.up()
+
+    expect(page.locator(".react-flow__edge")).to_have_count(0)
+    assert flow.edges == []
+
+
 def test_late_python_validation_reply_does_not_reopen_drag(page):
     flow = ReactFlow(
         nodes=[

@@ -600,8 +600,8 @@ def test_empty_validator_reason_still_rejects() -> None:
     assert all(result["reason"] == "Connection rejected." for result in msgs[0]["results"])
 
 
-def test_connection_validators_only_run_on_drag_requests() -> None:
-    """Normal edge additions do not call connection validators or emit validation replies."""
+def test_connection_validators_recheck_edges_from_the_browser() -> None:
+    """A connected edge is validated again and undone in the browser when rejected."""
     flow = _two_node_flow()
     seen = []
 
@@ -612,6 +612,19 @@ def test_connection_validators_only_run_on_drag_requests() -> None:
     flow.add_connection_validator(validate)
     msgs = _capture_msgs(flow)
     flow._handle_msg({"type": "edge_added", "edge": {"id": "e1", "source": "n1", "target": "n2"}})
+
+    assert flow.edges == []
+    assert seen == [{"source": "n1", "target": "n2", "sourceHandle": None, "targetHandle": None}]
+    assert msgs == [{"type": "edge_rejected", "edge_id": "e1", "reason": "blocked"}]
+
+
+def test_connection_validators_do_not_run_for_python_edges() -> None:
+    flow = _two_node_flow()
+    seen = []
+    flow.add_connection_validator(lambda payload: seen.append(payload) or "blocked")
+    msgs = _capture_msgs(flow)
+
+    flow.add_edge({"id": "e1", "source": "n1", "target": "n2"})
 
     assert len(flow.edges) == 1
     assert seen == []
