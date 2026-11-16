@@ -3461,9 +3461,7 @@ class ReactFlow(ReactComponent):
         for _, payload in prepared:
             self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
-    def _prepare_edge(
-        self, edge: dict[str, Any] | EdgeSpec | Edge, node_ids: set[Any], edge_ids: set[Any]
-    ) -> tuple[dict[str, Any] | Edge, dict[str, Any]]:
+    def _prepare_edge(self, edge: dict[str, Any] | EdgeSpec | Edge, node_ids: set[Any], edge_ids: set[Any]) -> tuple[dict[str, Any] | Edge, dict[str, Any]]:
         """Coerce and validate an edge to add, returning it with its payload.
 
         *node_ids* are the ids of the graph's nodes and *edge_ids* those of its

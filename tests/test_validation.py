@@ -42,7 +42,8 @@ def test_add_node_rejects_duplicate_id():
     with pytest.raises(ValueError, match="'a' already exists"):
         flow.add_node(_node("a"))
     assert [n["id"] for n in flow.nodes] == ["a"]
-    assert list(flow._node_editors) == ["a"]
+    # Editors are built lazily, and the rejected node must not have built one.
+    assert flow._node_editors == {}
 
 
 def test_failed_add_node_leaves_node_instance_detached():
@@ -460,3 +461,40 @@ def test_browser_edge_with_colliding_id_gets_fresh_id():
     flow._handle_msg({"type": "edge_added", "edge": {"id": "a->b", "source": "a", "target": "a"}})
     assert [(e["id"], e["source"], e["target"]) for e in flow.edges] == [("a->b", "a", "b"), ("a->b:1", "b", "a"), ("a->b:2", "a", "a")]
     assert msgs == []
+
+
+def test_add_nodes_rejects_duplicate_ids_within_batch() -> None:
+    flow = ReactFlow()
+    with pytest.raises(ValueError, match="already exists"):
+        flow.add_nodes([{"id": "a", "position": {"x": 0, "y": 0}, "data": {}}, {"id": "a", "position": {"x": 1, "y": 1}, "data": {}}])
+    assert flow.nodes == []
+
+
+def test_add_edges_rejects_duplicate_ids_within_batch() -> None:
+    flow = ReactFlow()
+    flow.add_nodes([{"id": "a", "position": {"x": 0, "y": 0}, "data": {}}, {"id": "b", "position": {"x": 1, "y": 1}, "data": {}}])
+    with pytest.raises(ValueError, match="already exists"):
+        flow.add_edges([{"id": "e", "source": "a", "target": "b"}, {"id": "e", "source": "b", "target": "a"}])
+    assert flow.edges == []
+
+
+def test_add_edges_generated_ids_do_not_collide_within_batch() -> None:
+    flow = ReactFlow()
+    flow.add_nodes([{"id": "a", "position": {"x": 0, "y": 0}, "data": {}}, {"id": "b", "position": {"x": 1, "y": 1}, "data": {}}])
+    flow.add_edges([{"source": "a", "target": "b"}, {"source": "a", "target": "b"}])
+    assert len({edge["id"] for edge in flow.edges}) == 2
+
+
+def test_batch_adds_check_against_one_growing_id_set(monkeypatch) -> None:
+    flow = ReactFlow()
+    seen = []
+    original = ReactFlow._check_node_payload
+
+    def spy(self, payload, node_ids=None):
+        seen.append(node_ids)
+        return original(self, payload, node_ids)
+
+    monkeypatch.setattr(ReactFlow, "_check_node_payload", spy)
+    flow.add_nodes([{"id": f"n{i}", "position": {"x": 0, "y": 0}, "data": {}} for i in range(3)])
+    assert all(ids is seen[0] for ids in seen)
+    assert seen[0] == {"n0", "n1", "n2"}
