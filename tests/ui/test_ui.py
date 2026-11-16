@@ -79,6 +79,23 @@ def _node_locator(page, label):
     return page.locator(".react-flow__node").filter(has_text=label)
 
 
+def _wait_for_viewport(page):
+    """Wait until React Flow measured the nodes and the initial fitView settled.
+
+    Drags resolve handle positions up front, so a fitView landing between
+    resolving the handle and pressing the mouse turns the drag into a pan.
+    """
+    expect(page.locator(".react-flow__node").first).to_be_visible()
+    viewport = page.locator(".react-flow__viewport")
+    previous = None
+    for _ in range(50):
+        current = viewport.evaluate("el => el.style.transform")
+        if current == previous:
+            return
+        previous = current
+        page.wait_for_timeout(100)
+
+
 def _edge_label_locator(page, label):
     return page.locator(".react-flow__edge-text").filter(has_text=label)
 
@@ -560,6 +577,24 @@ def test_selection_syncs_between_ui_and_python(page):
 
     page.locator(".react-flow__edge-path").first.click(force=True)
     wait_until(lambda: "e1" in flow.selection["edges"], timeout=8000)
+
+
+def test_quick_select_then_clear_reaches_python(page):
+    # Clearing the selection before Python echoed the previous one back must
+    # still be sent, rather than compared against the stale echo.
+    flow = _make_flow()
+    flow.param.update(sync_mode="debounce", debounce_ms=1500)
+    serve_component(page, flow)
+    _wait_for_viewport(page)
+
+    node = _node_locator(page, "End").locator(".rf-node-label").bounding_box()
+    pane = _pane_locator(page).bounding_box()
+    page.mouse.click(node["x"] + node["width"] / 2, node["y"] + node["height"] / 2)
+    page.mouse.click(pane["x"] + pane["width"] - 20, pane["y"] + pane["height"] - 20)
+    expect(_node_locator(page, "End")).not_to_have_class(re.compile(r"\bselected\b"))
+
+    page.wait_for_timeout(2500)
+    assert flow.selection == {"nodes": [], "edges": []}
 
 
 def test_selection_works_when_not_editable(page):
@@ -1062,6 +1097,7 @@ def test_connectable_handles_data_source_to_sink(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect from source output to sink input
     source_handle = _node_locator(page, "Data Source").locator(".react-flow__handle-right").first
@@ -1097,6 +1133,7 @@ def test_connectable_handles_transform_node(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect from first transform output to second transform input
     source_handle = _node_locator(page, "Transform").first.locator(".react-flow__handle-right").first
@@ -1150,6 +1187,7 @@ def test_connectable_handles_monitor_node(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect source to monitor input (should work)
     source_handle = _node_locator(page, "Source").locator(".react-flow__handle-right").first
@@ -1207,6 +1245,7 @@ def test_connectable_handles_multiple_inputs_outputs(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect basic1 output to multi input
     basic1_handle = _node_locator(page, "Basic").first.locator(".react-flow__handle-right").first

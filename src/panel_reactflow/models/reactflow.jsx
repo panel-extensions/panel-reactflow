@@ -478,6 +478,10 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
 
     const handleGearClick = (e) => {
       e.stopPropagation();
+      if (!toolbarOpen && !data.editor) {
+        // Editors are built on demand, the first time a toolbar is opened.
+        model.send_msg({ type: "editor_requested", node_id: id });
+      }
       toggleToolbar((v) => !v);
     };
 
@@ -1039,7 +1043,6 @@ function FlowInner({
   pyNodes,
   nodeUpdateCount,
   hydratedEdges,
-  selectionSetter,
   currentSelection,
   views,
   viewportSetter,
@@ -1075,7 +1078,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null });
   const lastPySelectedRef = useRef(new Map());
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
@@ -1313,7 +1316,8 @@ function FlowInner({
     if (
       nodeUpdateCount === lastHydrated.current.nodeRevision &&
       nodesSig === lastHydrated.current.nodesSig &&
-      editable === lastHydrated.current.editable
+      editable === lastHydrated.current.editable &&
+      nodeEditors === lastHydrated.current.nodeEditors
     ) {
       return;
     }
@@ -1357,6 +1361,7 @@ function FlowInner({
       lastHydrated.current.nodeRevision = nodeUpdateCount;
       lastHydrated.current.nodesSig = nodesSig;
       lastHydrated.current.editable = editable;
+      lastHydrated.current.nodeEditors = nodeEditors;
       setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
@@ -1461,6 +1466,23 @@ function FlowInner({
     setEdges((curr) => (curr.some((e) => e.selected) ? curr.map((e) => (e.selected ? { ...e, selected: false } : e)) : curr));
   }, [selectable, setNodes, setEdges]);
 
+  // The last selection sent to Python, plus the ones Python has not echoed
+  // back yet. An update of the ``selection`` parameter that matches a pending
+  // send is an echo; anything else was set from Python and becomes the new
+  // baseline.
+  const lastSentSelectionRef = useRef(currentSelection || { nodes: [], edges: [] });
+  const pendingSelectionsRef = useRef([]);
+  useEffect(() => {
+    const pending = pendingSelectionsRef.current;
+    const echoed = pending.findIndex((sent) => areEqual(sent, currentSelection));
+    if (echoed >= 0) {
+      pendingSelectionsRef.current = pending.slice(echoed + 1);
+      return;
+    }
+    pendingSelectionsRef.current = [];
+    lastSentSelectionRef.current = currentSelection || { nodes: [], edges: [] };
+  }, [currentSelection]);
+
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
       if (!selectable) {
@@ -1470,17 +1492,25 @@ function FlowInner({
         nodes: selectedNodes.map((node) => node.id),
         edges: selectedEdges.map((edge) => edge.id),
       };
-      if (areEqual(selection, currentSelection)) {
+      // Compare against what was last sent rather than the ``selection``
+      // parameter: Python only echoes it back after a round trip (or the
+      // debounce delay), so a quick select-then-clear would otherwise look
+      // unchanged and never be sent.
+      if (areEqual(selection, lastSentSelectionRef.current)) {
         return;
       }
-      selectionSetter(selection);
+      lastSentSelectionRef.current = selection;
+      // Python does not echo a selection it already had, so keep the list short.
+      pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
+      // Python updates ``selection`` from this message, syncing it here as
+      // well would make it process every selection change twice.
       schedulePatch({
         type: "selection_changed",
         nodes: selection.nodes,
         edges: selection.edges,
       });
     },
-    [currentSelection, schedulePatch, selectable, selectionSetter],
+    [schedulePatch, selectable],
   );
 
   const onNodesDelete = useCallback(
@@ -1713,7 +1743,7 @@ export function render({ model, view }) {
   const [pyEdges] = model.useState("edges");
   const [pyNodeTypes] = model.useState("node_types");
   const [defaultEdgeOptions] = model.useState("default_edge_options");
-  const [selection, setSelection] = model.useState("selection");
+  const [selection] = model.useState("selection");
   const [syncMode] = model.useState("sync_mode");
   const [colorMode] = model.useState("color_mode");
   const [debounceMs] = model.useState("debounce_ms");
@@ -1741,6 +1771,16 @@ export function render({ model, view }) {
   const selectedEditor = model.get_child("_selected_editor");
   const views = model.get_child("_views");
   const nodeEditors = model.get_child("_node_editor_views");
+  const [nodeEditorIds] = model.useState("_node_editor_ids");
+  const nodeEditorsById = useMemo(() => {
+    const byId = new Map();
+    (nodeEditorIds || []).forEach((nodeId, idx) => {
+      if (nodeEditors[idx] !== undefined) {
+        byId.set(nodeId, nodeEditors[idx]);
+      }
+    });
+    return byId;
+  }, [nodeEditorIds, nodeEditors]);
   const topPanels = model.get_child("top_panel");
   const bottomPanels = model.get_child("bottom_panel");
   const leftPanels = model.get_child("left_panel");
@@ -1915,7 +1955,7 @@ export function render({ model, view }) {
       const baseView = views[viewIndex];
       const baseViewId = baseView?.key;
       const isViewReady = baseViewId ? Boolean(readyViewMap.get(baseViewId)) : true;
-      const editorView = nodeEditors[idx];
+      const editorView = nodeEditorsById.get(node.id);
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(dataWithoutViewIdx);
       const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
@@ -1936,7 +1976,7 @@ export function render({ model, view }) {
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editable, editorMode, allNodeTypes]);
+  }, [pyNodes, nodeEditorsById, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
@@ -2037,7 +2077,6 @@ export function render({ model, view }) {
       pyNodes={pyNodes || []}
       nodeUpdateCount={nodeUpdateCount}
       hydratedEdges={safeGraph ? safeGraph.edges : hydratedEdges}
-      selectionSetter={setSelection}
       currentSelection={selection}
       views={views}
       viewportSetter={setViewport}
@@ -2046,7 +2085,7 @@ export function render({ model, view }) {
       nodeTypes={hydratedNodeTypes}
       nodeTypeSpecs={allNodeTypes}
       edgeTypes={hydratedEdgeTypes}
-      nodeEditors={nodeEditors}
+      nodeEditors={nodeEditorsById}
       editable={editable}
       selectable={selectable}
       enableConnect={enableConnect}

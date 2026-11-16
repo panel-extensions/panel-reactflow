@@ -166,7 +166,7 @@ def test_node_can_provide_custom_editor() -> None:
 
     node = _NodeWithEditor(id="n1", position={"x": 0, "y": 0}, data={})
     flow = ReactFlow(nodes=[node])
-    editor = flow._node_editors["n1"]
+    editor = flow._get_node_editor("n1")
     assert hasattr(editor, "object")
     assert "n1" in editor.object
 
@@ -373,7 +373,7 @@ def test_edge_can_provide_custom_editor() -> None:
         ],
         edges=[edge],
     )
-    editor = flow._edge_editors["e1"]
+    editor = flow._get_edge_editor("e1")
     assert hasattr(editor, "object")
     assert "e1" in editor.object
 
@@ -1444,13 +1444,13 @@ def test_editor_resolution_default_schema_editor() -> None:
     """Without node_editors, the fallback is SchemaEditor."""
     flow = ReactFlow()
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"x": 1}})
-    assert isinstance(flow._node_editors["n1"], SchemaEditor)
+    assert isinstance(flow._get_node_editor("n1"), SchemaEditor)
 
 
 def test_editor_resolution_explicit_json_editor() -> None:
     flow = ReactFlow(node_editors={"panel": JsonEditor})
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"x": 1}})
-    assert isinstance(flow._node_editors["n1"], JsonEditor)
+    assert isinstance(flow._get_node_editor("n1"), JsonEditor)
 
 
 def test_editor_resolution_custom_editor_class() -> None:
@@ -1460,7 +1460,7 @@ def test_editor_resolution_custom_editor_class() -> None:
 
     flow = ReactFlow(node_editors={"panel": MyEditor})
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"value": "hi"}})
-    assert isinstance(flow._node_editors["n1"], MyEditor)
+    assert isinstance(flow._get_node_editor("n1"), MyEditor)
 
 
 def test_editor_resolution_callable_editor() -> None:
@@ -1469,7 +1469,7 @@ def test_editor_resolution_callable_editor() -> None:
 
     flow = ReactFlow(node_editors={"panel": my_editor})
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {}})
-    editor = flow._node_editors["n1"]
+    editor = flow._get_node_editor("n1")
     assert hasattr(editor, "object")
     assert "n1" in editor.object
 
@@ -1477,7 +1477,7 @@ def test_editor_resolution_callable_editor() -> None:
 def test_editor_resolution_default_node_editor() -> None:
     flow = ReactFlow(default_node_editor=JsonEditor)
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "data": {"value": "hi"}})
-    assert isinstance(flow._node_editors["n1"], JsonEditor)
+    assert isinstance(flow._get_node_editor("n1"), JsonEditor)
 
 
 # --- Edge editor resolution tests ---
@@ -1489,7 +1489,7 @@ def test_edge_editor_resolution_default_without_schema() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 1}})
     edge_id = flow.edges[0]["id"]
-    assert flow._edge_editors[edge_id] is None
+    assert flow._get_edge_editor(edge_id) is None
 
 
 def test_edge_editor_resolution_default_with_schema() -> None:
@@ -1498,7 +1498,7 @@ def test_edge_editor_resolution_default_with_schema() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
     edge_id = flow.edges[0]["id"]
-    assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+    assert isinstance(flow._get_edge_editor(edge_id), SchemaEditor)
 
 
 def test_edge_editor_created_when_schema_added_later() -> None:
@@ -1507,9 +1507,9 @@ def test_edge_editor_created_when_schema_added_later() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "type": "pipe", "data": {"w": 1}})
     edge_id = flow.edges[0]["id"]
-    assert flow._edge_editors[edge_id] is None
+    assert flow._get_edge_editor(edge_id) is None
     flow.edge_types = {"pipe": EdgeType(type="pipe", schema={"type": "object", "properties": {"w": {"type": "number"}}})}
-    assert isinstance(flow._edge_editors[edge_id], SchemaEditor)
+    assert isinstance(flow._get_edge_editor(edge_id), SchemaEditor)
 
 
 def test_selecting_edge_without_editor_shows_no_editor() -> None:
@@ -1558,7 +1558,7 @@ def test_edge_editor_resolution_custom() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "type": "flow", "data": {}})
     edge_id = flow.edges[0]["id"]
-    editor = flow._edge_editors[edge_id]
+    editor = flow._get_edge_editor(edge_id)
     assert hasattr(editor, "object")
     assert edge_id in editor.object
 
@@ -1569,7 +1569,7 @@ def test_edge_editor_resolution_default_edge_editor() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {}})
     edge_id = flow.edges[0]["id"]
-    assert isinstance(flow._edge_editors[edge_id], JsonEditor)
+    assert isinstance(flow._get_edge_editor(edge_id), JsonEditor)
 
 
 class _UntypedDataEdge(Edge):
@@ -1589,7 +1589,7 @@ _PIPE_SCHEMA = {"type": "object", "properties": {"w": {"type": "number"}}}
 def test_untyped_edge_subclass_with_data_params_gets_schema_editor() -> None:
     flow = _two_node_flow()
     flow.add_edge(_UntypedDataEdge(id="e1", source="n1", target="n2"))
-    editor = flow._edge_editors["e1"]
+    editor = flow._get_edge_editor("e1")
     assert isinstance(editor, SchemaEditor)
     assert "weight" in editor._schema["properties"]
 
@@ -1624,20 +1624,20 @@ def test_selected_node_editor_refreshes_when_editors_change() -> None:
 def test_edge_editor_re_resolved_on_type_change() -> None:
     flow = _two_node_flow(edge_types={"pipe": EdgeType(type="pipe", schema=_PIPE_SCHEMA)})
     flow.add_edge({"id": "e1", "source": "n1", "target": "n2", "data": {"w": 1}})
-    assert flow._edge_editors["e1"] is None
+    assert flow._get_edge_editor("e1") is None
     flow.patch_edge_props("e1", {"type": "pipe"})
-    assert isinstance(flow._edge_editors["e1"], SchemaEditor)
+    assert isinstance(flow._get_edge_editor("e1"), SchemaEditor)
     flow.patch_edge_props("e1", {"type": None})
-    assert flow._edge_editors["e1"] is None
+    assert flow._get_edge_editor("e1") is None
 
 
 def test_edge_instance_editor_re_resolved_on_type_change() -> None:
     flow = _two_node_flow(edge_types={"pipe": EdgeType(type="pipe", schema=_PIPE_SCHEMA)})
     edge = Edge(id="e1", source="n1", target="n2", data={"w": 1})
     flow.add_edge(edge)
-    assert flow._edge_editors["e1"] is None
+    assert flow._get_edge_editor("e1") is None
     edge.type = "pipe"
-    assert isinstance(flow._edge_editors["e1"], SchemaEditor)
+    assert isinstance(flow._get_edge_editor("e1"), SchemaEditor)
 
 
 def test_edge_editor_on_patch_calls_patch_edge_data() -> None:
@@ -1646,7 +1646,7 @@ def test_edge_editor_on_patch_calls_patch_edge_data() -> None:
     flow.add_node({"id": "n2", "position": {"x": 1, "y": 1}, "data": {}})
     flow.add_edge({"source": "n1", "target": "n2", "data": {"w": 0}})
     edge_id = flow.edges[0]["id"]
-    editor = flow._edge_editors[edge_id]
+    editor = flow._get_edge_editor(edge_id)
     # Simulate an on_patch call from the editor
     editor._on_patch({"w": 42})
     assert flow.edges[0]["data"]["w"] == 42
@@ -1850,10 +1850,10 @@ def test_remove_node_syncs_nodes_and_edges_together() -> None:
     assert {name for name, _ in messages[0]} == {"nodes", "edges"}
 
 
-def test_remove_node_batch_triggers_views_once() -> None:
+def test_remove_node_batch_updates_nodes_once() -> None:
     flow = _chain_flow()
     triggers = []
-    flow.param.watch(lambda e: triggers.append(e), ["_views"], onlychanged=False)
+    flow.param.watch(lambda e: triggers.append(e), ["_node_update_count"], onlychanged=False)
     flow.remove_node(["n1", "n2", "n3"])
     assert len(triggers) == 1
 

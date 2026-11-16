@@ -6,6 +6,13 @@
 
 - **Binary file drops**: binary files dropped onto the canvas, such as images or Parquet, now arrive with `bytes` content instead of being mangled by a text decode. Any file that decodes as UTF-8 still arrives as a `str`, whatever MIME type the operating system reports, so text handlers keep working ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
 - **Drop size limit**: the new `max_drop_size` parameter (10 MB by default) caps the bytes sent for one drop so a large drop cannot exceed the websocket message limit and disconnect the session. Files over the limit or that cannot be read are listed in the drop event's `rejected` entries ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+- **Batch graph edits**: `add_nodes()` and `add_edges()` add many nodes or edges in a single update, validating all of them first, and emit one `node_added`/`edge_added` event per item ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+- **Faster structural updates**: adding, removing and assigning nodes and edges no longer re-renders every embedded view and editor, and node and edge editors are built only when shown (toolbar editors on first open, side panel and edge editors on selection) ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+
+### Behavior changes
+
+- Selection changes made in the browser no longer emit `node_props_changed`/`edge_props_changed` for `Node`/`Edge` instances (nor echo a `patch_*_props` message back to the browser); `selection_changed` and `on_selection_changed` still fire ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+- Cached editors are rebuilt when a node is replaced under the same id, its type changes or the type/editor configuration changes ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
 
 ### Bug fixes
 
