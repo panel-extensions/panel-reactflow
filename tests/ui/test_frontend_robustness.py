@@ -1,11 +1,9 @@
 """UI tests for debounced sync, file drops, render counts and hydration merging."""
 
-import base64
-
 import pytest
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import ReactFlow, drop_file_bytes
+from panel_reactflow import ReactFlow
 
 pytest.importorskip("playwright")
 
@@ -127,7 +125,7 @@ def _drop_files(locator, files):
     )
 
 
-def test_binary_file_drop_is_base64_encoded(page):
+def test_binary_file_drop_arrives_as_bytes(page):
     flow = _flow(n=1, drop_types=["Files"])
     drops = []
     flow.on("drop", drops.append)
@@ -149,9 +147,8 @@ def test_binary_file_drop_is_base64_encoded(page):
 
     wait_until(lambda: len(drops) == 1, page)
     image, notes = drops[0]["data"]
-    assert image["encoding"] == "base64"
-    assert base64.b64decode(image["content"]) == bytes([0, 255, 1, 2, 137, 80])
-    assert notes == {"name": "notes.txt", "type": "text/plain", "size": 6, "encoding": "text", "content": "héllo"}
+    assert image["content"] == bytes([0, 255, 1, 2, 137, 80])
+    assert notes == {"name": "notes.txt", "type": "text/plain", "size": 6, "content": "héllo"}
     assert drops[0]["rejected"] == []
 
 
@@ -192,14 +189,12 @@ def test_text_file_with_vendor_mime_type_is_sent_as_text(page):
 
     wait_until(lambda: len(drops) == 1, page)
     data_csv, notes = drops[0]["data"]
-    assert data_csv["encoding"] == "text"
     assert data_csv["content"] == "name,city\nZoë,Köln\n"
-    assert notes["encoding"] == "text"
+    assert data_csv["content"].encode() == csv
     assert notes["content"] == "key = value"
-    assert drop_file_bytes(data_csv) == csv
 
 
-def test_file_with_text_mime_type_that_is_not_utf8_is_base64_encoded(page):
+def test_file_with_text_mime_type_that_is_not_utf8_arrives_as_bytes(page):
     flow = _flow(n=1, drop_types=["Files"])
     drops = []
     flow.on("drop", drops.append)
@@ -212,10 +207,8 @@ def test_file_with_text_mime_type_that_is_not_utf8_is_base64_encoded(page):
 
     wait_until(lambda: len(drops) == 1, page)
     csv_file, blob = drops[0]["data"]
-    assert csv_file["encoding"] == "base64"
-    assert drop_file_bytes(csv_file) == latin1
-    assert blob["encoding"] == "base64"
-    assert drop_file_bytes(blob) == bytes([0xFF, 0xFE, 0x00])
+    assert csv_file["content"] == latin1
+    assert blob["content"] == bytes([0xFF, 0xFE, 0x00])
 
 
 def test_non_file_drop_limit_counts_utf8_bytes(page):

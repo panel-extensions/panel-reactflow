@@ -1482,8 +1482,8 @@ def test_drop_of_files_sends_their_contents(page):
     wait_until(lambda: len(drops) == 1, timeout=8000)
     assert drops[0]["drop_type"] == "Files"
     assert drops[0]["data"] == [
-        {"name": "graph.json", "type": "application/json", "size": 13, "encoding": "text", "content": '{"nodes": []}'},
-        {"name": "notes.txt", "type": "text/plain", "size": 2, "encoding": "text", "content": "hi"},
+        {"name": "graph.json", "type": "application/json", "size": 13, "content": '{"nodes": []}'},
+        {"name": "notes.txt", "type": "text/plain", "size": 2, "content": "hi"},
     ]
     assert drops[0]["target"] is None
 

@@ -13,7 +13,6 @@ from .base import (
     ReactFlow,
     SchemaEditor,
     SchemaSource,
-    drop_file_bytes,
 )
 
 __all__ = [
@@ -28,5 +27,4 @@ __all__ = [
     "ReactFlow",
     "SchemaEditor",
     "SchemaSource",
-    "drop_file_bytes",
 ]

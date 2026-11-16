@@ -75,34 +75,23 @@ def _ensure_jsonable(value: Any, path: str) -> None:
         raise ValueError(f"Value at {path} is not JSON-serializable.") from exc
 
 
-def drop_file_bytes(file: dict[str, Any]) -> bytes:
-    """Return the raw bytes of a file entry from a ``"Files"`` drop event.
+def _decode_dropped_files(files: Any) -> Any:
+    """Turn the wire format of a ``"Files"`` drop into Python values.
 
-    Files that decode as UTF-8 arrive with ``encoding="text"`` and binary
-    files with ``encoding="base64"``; this undoes either, so a handler does
-    not need to branch on the encoding.
-
-    Parameters
-    ----------
-    file : dict
-        One entry of the ``data`` list of a ``drop`` event whose
-        ``drop_type`` is ``"Files"``.
-
-    Returns
-    -------
-    bytes
-        The file contents as dropped (minus a leading UTF-8 byte order mark,
-        which the browser strips when decoding text).
-
-    Examples
-    --------
-    >>> def on_drop(payload, flow):
-    ...     for file in payload["data"]:
-    ...         df = pd.read_parquet(io.BytesIO(drop_file_bytes(file)))
+    The browser sends files that decode as UTF-8 as text and other files
+    base64 encoded; the latter are decoded to ``bytes`` here so handlers
+    get ``str`` or ``bytes`` content without dealing with the encoding.
     """
-    if file.get("encoding") == "base64":
-        return base64.b64decode(file["content"])
-    return file["content"].encode("utf-8")
+    if not isinstance(files, list):
+        return files
+    decoded = []
+    for entry in files:
+        if isinstance(entry, dict) and "encoding" in entry:
+            entry = dict(entry)
+            if entry.pop("encoding") == "base64" and isinstance(entry.get("content"), str):
+                entry["content"] = base64.b64decode(entry["content"])
+        decoded.append(entry)
+    return decoded
 
 
 def _is_param_class(obj: Any) -> bool:
@@ -2661,7 +2650,7 @@ class ReactFlow(ReactComponent):
                     {
                         "type": "drop",
                         "drop_type": msg.get("drop_type"),
-                        "data": msg.get("data"),
+                        "data": (_decode_dropped_files(msg.get("data")) if msg.get("drop_type") == "Files" else msg.get("data")),
                         "position": msg.get("position"),
                         "target": msg.get("target"),
                         "rejected": msg.get("rejected") or [],
@@ -3834,11 +3823,9 @@ class ReactFlow(ReactComponent):
               the canvas. Payload has the matched ``drop_type``, the dropped
               ``data`` (parsed from JSON when possible, otherwise the raw
               string; for ``"Files"`` a list of ``{"name", "type", "size",
-              "encoding", "content"}``, where ``encoding`` is ``"text"``
-              when the file decoded as UTF-8 text, whatever its reported
-              MIME type, and ``content`` is that text, or ``"base64"`` for
-              other files, whose ``content`` is the base64 encoded bytes;
-              :func:`drop_file_bytes` returns the bytes of either), the
+              "content"}``, where ``content`` is a ``str`` for a file that
+              decodes as UTF-8 text, whatever its reported MIME type, and
+              ``bytes`` for any other file), the
               drop ``position`` in flow coordinates, a ``target`` of
               ``{"node_id", "handle_id", "direction"}`` when dropped on a
               node or handle (``handle_id`` and ``direction`` are ``None``

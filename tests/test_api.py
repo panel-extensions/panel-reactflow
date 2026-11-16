@@ -8,7 +8,7 @@ import panel as pn
 import param
 import pytest
 
-from panel_reactflow import Edge, EdgeSpec, EdgeType, Node, NodeSpec, NodeType, ReactFlow, SchemaSource, drop_file_bytes
+from panel_reactflow import Edge, EdgeSpec, EdgeType, Node, NodeSpec, NodeType, ReactFlow, SchemaSource
 from panel_reactflow.base import (
     Editor,
     JsonEditor,
@@ -2117,12 +2117,31 @@ def test_drop_message_forwards_rejected_files() -> None:
     assert received[0]["rejected"] == rejected
 
 
-def test_drop_file_bytes_decodes_text_and_base64_entries() -> None:
-    text = {"name": "a.csv", "type": "application/vnd.ms-excel", "size": 7, "encoding": "text", "content": "Zoë,1"}
-    binary = {"name": "a.bin", "type": "", "size": 3, "encoding": "base64", "content": "AP8B"}
+def test_file_drop_decodes_base64_content_to_bytes() -> None:
+    flow = ReactFlow(drop_types=["Files"])
+    received = []
+    flow.on("drop", received.append)
+    files = [
+        {"name": "a.csv", "type": "application/vnd.ms-excel", "size": 6, "encoding": "text", "content": "Zoë,1"},
+        {"name": "a.bin", "type": "", "size": 3, "encoding": "base64", "content": "AP8B"},
+    ]
 
-    assert drop_file_bytes(text) == "Zoë,1".encode()
-    assert drop_file_bytes(binary) == bytes([0, 255, 1])
+    flow._handle_msg({"type": "drop", "drop_type": "Files", "data": files, "position": {"x": 0, "y": 0}, "target": None, "rejected": []})
+
+    text, binary = received[0]["data"]
+    assert text == {"name": "a.csv", "type": "application/vnd.ms-excel", "size": 6, "content": "Zoë,1"}
+    assert binary == {"name": "a.bin", "type": "", "size": 3, "content": bytes([0, 255, 1])}
+
+
+def test_non_file_drop_data_is_not_decoded() -> None:
+    flow = ReactFlow(drop_types=["application/json"])
+    received = []
+    flow.on("drop", received.append)
+    data = [{"encoding": "base64", "content": "AP8B"}]
+
+    flow._handle_msg({"type": "drop", "drop_type": "application/json", "data": data, "position": {"x": 0, "y": 0}, "target": None, "rejected": []})
+
+    assert received[0]["data"] == data
 
 
 def test_max_drop_size_stays_below_websocket_limit() -> None:

@@ -4,7 +4,7 @@
 
 ### Enhancements
 
-- **Binary file drops**: files dropped onto the canvas now carry an `encoding` of `"text"` or `"base64"`. Any file that decodes as UTF-8 is sent as text whatever MIME type the operating system reports, so text handlers keep working, while binary files such as images or Parquet arrive base64 encoded instead of mangled. The new `drop_file_bytes(entry)` helper returns an entry's bytes either way ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+- **Binary file drops**: binary files dropped onto the canvas, such as images or Parquet, now arrive with `bytes` content instead of being mangled by a text decode. Any file that decodes as UTF-8 still arrives as a `str`, whatever MIME type the operating system reports, so text handlers keep working ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
 - **Drop size limit**: the new `max_drop_size` parameter (10 MB by default) caps the bytes sent for one drop so a large drop cannot exceed the websocket message limit and disconnect the session. Files over the limit or that cannot be read are listed in the drop event's `rejected` entries ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
 
 ### Bug fixes
