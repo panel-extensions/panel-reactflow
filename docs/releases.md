@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `add_node()`, `add_nodes()`, `add_edge()` and `add_edges()` raise a `ValueError` for an id that is already in use, an edge whose `source` or `target` is missing or not a node of the graph, and data that cannot be sent to the browser (arbitrary objects, sets, dataclasses; NumPy values and datetimes are fine). Previously such nodes and edges were added and broke rendering or later lookups. The same data check applies to `patch_node_data()`, `patch_edge_data()` and `patch_*_props()`. Add nodes before the edges that connect them. Graphs passed to the constructor only log a warning for duplicate ids and dangling edges.
+- Connection validators registered with `add_connection_validator()` run again on the final connection when the browser reports a new edge (`edge_added`), not only while dragging. A rejected edge is not added to `flow.edges`, no `edge_added` event fires, and the browser removes the edge it drew (`edge_rejected` message). The same happens when `add_edge()` raises for an edge from the browser. A browser edge whose id collides with an existing edge gets a fresh id instead.
+- Exceptions raised by event callbacks registered with `flow.on()` and by `Node`/`Edge` hooks are logged on the `panel.reactflow` logger instead of propagating, and the remaining callbacks still run. Code that relied on a callback exception aborting `add_node()`, `remove_node()` and similar calls must check state explicitly.
+
 ### Enhancements
 
 - **Binary file drops**: binary files dropped onto the canvas, such as images or Parquet, now arrive with `bytes` content instead of being mangled by a text decode. Any file that decodes as UTF-8 still arrives as a `str`, whatever MIME type the operating system reports, so text handlers keep working ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).

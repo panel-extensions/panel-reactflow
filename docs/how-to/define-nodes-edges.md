@@ -438,9 +438,11 @@ flow.remove_edge("e1")
 
 `add_node()` and `add_edge()` raise a `ValueError` for an id that is already
 in use, an edge whose `source` or `target` is not a node of the graph, and data
-that cannot be serialized to JSON (anything but a node's `view` is sent to the
-browser as JSON, so convert e.g. dates to ISO strings). The same checks apply to
-`patch_node_data()`, `patch_edge_data()` and the `patch_*_props()` methods.
+that cannot be sent to the browser. Anything Bokeh can serialize is accepted,
+including NumPy scalars and arrays and datetimes; arbitrary objects, sets and
+dataclasses are not (a node's `view` is rendered separately and not checked).
+The same checks apply to `patch_node_data()`, `patch_edge_data()` and the
+`patch_*_props()` methods.
 
 `remove_node()` and `remove_edge()` also take several ids at once, either as
 separate arguments or as a single sequence. Pass them together rather than
