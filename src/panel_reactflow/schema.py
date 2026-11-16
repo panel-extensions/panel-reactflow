@@ -34,7 +34,8 @@ def _import_material_ui():
     ``MaterialDesign`` regardless, so when this import is the one that
     loads the package the previous global design is restored. An
     application that imports ``panel_material_ui`` itself keeps its
-    behavior.
+    behavior, as long as it imports it first or sets
+    ``pn.config.design`` explicitly.
     """
     if "panel_material_ui" in sys.modules:
         return sys.modules["panel_material_ui"]
@@ -180,6 +181,7 @@ class JSONSchema(PaneBase):
         super().__init__(object, **params)
         self._widgets = {}
         self._resolved = {}
+        self._nullable = set()
         self._update_widgets_from_schema()
 
     # Schema resolution
@@ -352,9 +354,12 @@ class JSONSchema(PaneBase):
 
     # Values
 
-    def _coerce_value(self, value: Any, schema: dict[str, Any], wtype: Any) -> Any:
+    def _coerce_value(self, value: Any, schema: dict[str, Any], wtype: Any, nullable: bool = False) -> Any:
         """Convert a data value into one the widget accepts, or ``_MISSING``."""
         if value is None:
+            value_param = getattr(wtype, "param", None)
+            if nullable and value_param is not None and "value" in value_param and value_param["value"].allow_None:
+                return None
             return _MISSING
         if schema.get("type") == "string" and schema.get("format") in _DATE_FORMATS:
             convert = (lambda v: _parse_datetime(v).date()) if schema["format"] == "date" else _parse_datetime
@@ -372,8 +377,10 @@ class JSONSchema(PaneBase):
         return value
 
     def _build_widget(self, name: str, schema: dict[str, Any], value: Any) -> WidgetBase | None:
-        resolved, _ = self._resolve(schema)
+        resolved, nullable = self._resolve(schema)
         self._resolved[name] = resolved
+        if nullable:
+            self._nullable.add(name)
         override = (self.widgets or {}).get(name)
         if isinstance(override, WidgetBase):
             return override
@@ -390,7 +397,7 @@ class JSONSchema(PaneBase):
         if isinstance(wtype, WidgetBase):
             return wtype
         title = schema.get("title") or resolved.get("title") or name
-        coerced = self._coerce_value(value, resolved, wtype)
+        coerced = self._coerce_value(value, resolved, wtype, nullable)
         if coerced is not _MISSING:
             kwargs["value"] = coerced
         elif isinstance(wtype, type) and issubclass(wtype, self._literal_widget):
@@ -407,6 +414,7 @@ class JSONSchema(PaneBase):
     def _update_widgets_from_schema(self):
         self._widgets = {}
         self._resolved = {}
+        self._nullable = set()
         if not self.schema:
             self.layout[:] = []
             return
@@ -443,7 +451,7 @@ class JSONSchema(PaneBase):
             widget = self._widgets.get(name)
             if widget is None:
                 continue
-            coerced = self._coerce_value(value, self._resolved.get(name, {}), type(widget))
+            coerced = self._coerce_value(value, self._resolved.get(name, {}), type(widget), name in self._nullable)
             if coerced is _MISSING:
                 continue
             try:

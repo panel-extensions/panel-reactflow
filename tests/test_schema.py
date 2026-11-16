@@ -223,6 +223,26 @@ def test_object_update_ignores_keys_without_widgets():
     assert form._widgets["x"].value == "b"
 
 
+def test_nullable_property_shows_none():
+    form = _form({"i": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "f": {"type": ["number", "null"]}}, {"i": None})
+    assert type(form._widgets["i"]).__name__ == "IntInput"
+    assert form._widgets["i"].value is None
+    assert form._widgets["f"].value is None
+
+
+def test_object_update_to_none_clears_nullable_widget():
+    form = _form({"i": {"anyOf": [{"type": "integer"}, {"type": "null"}]}, "s": {"type": "string"}}, {"i": 4, "s": "x"})
+    assert form._widgets["i"].value == 4
+    form.object = {"i": None, "s": None}
+    assert form._widgets["i"].value is None
+    assert form._widgets["s"].value == "x"
+
+
+def test_non_nullable_property_keeps_widget_default():
+    form = _form({"i": {"type": "integer"}}, {"i": None})
+    assert form._widgets["i"].value == 0
+
+
 # Generated schemas
 
 
@@ -285,6 +305,7 @@ def test_pydantic_model_schema_produces_widgets():
         "fixed": "Select",
     }
     assert editor._form._widgets["color"].value == "green"
+    assert editor._form._widgets["maybe"].value is None
 
 
 # Editors
@@ -335,6 +356,18 @@ def test_schema_editor_follows_external_data_without_echo():
     editor._form._widgets["n"].value = 8
     assert patches == [{"n": 8}]
     assert editor._data["n"] == 8
+
+
+def test_schema_editor_follows_external_reset_to_none():
+    schema = {"type": "object", "properties": {"m": {"anyOf": [{"type": "integer"}, {"type": "null"}]}}}
+    patches = []
+    editor = SchemaEditor({"m": 4}, schema, on_patch=patches.append)
+    editor._data = {"m": None}
+    assert editor._form._widgets["m"].value is None
+    assert patches == []
+    editor._form._widgets["m"].value = 2
+    editor._form._widgets["m"].value = None
+    assert patches == [{"m": 2}, {"m": None}]
 
 
 def test_schema_editor_whole_form_failure_falls_back_to_json(monkeypatch, caplog):
