@@ -20,6 +20,7 @@ def reset_design():
     """Isolate tests from a global design or theme set by an earlier test or import."""
     design, theme = config.design, config.theme
     config.design = None
+    config.theme = "default"
     yield
     config.design = design
     config.theme = theme
