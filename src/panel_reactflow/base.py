@@ -152,24 +152,12 @@ def _normalize_schema(schema: Any) -> dict[str, Any] | None:
     raise ValueError(f"Cannot normalize schema: {schema!r}")
 
 
-_JSONSCHEMA_WARNED = False
-
-
 def _validate_data(data: dict[str, Any], schema: dict[str, Any] | None) -> None:
-    """Validate *data* against a JSON Schema if ``jsonschema`` is installed."""
-    global _JSONSCHEMA_WARNED
+    """Validate *data* against a JSON Schema."""
     if schema is None:
         return
-    try:
-        import jsonschema as _js
-    except ImportError:
-        if not _JSONSCHEMA_WARNED:
-            _JSONSCHEMA_WARNED = True
-            _LOGGER.warning(
-                "Node and edge data is not validated against its schema because the jsonschema "
-                "package is not installed. Install panel-reactflow[validation] to enable validation."
-            )
-        return
+    import jsonschema as _js
+
     try:
         _js.validate(data, schema)
     except _js.ValidationError as exc:

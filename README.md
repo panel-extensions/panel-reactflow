@@ -31,12 +31,11 @@ pip install panel-reactflow
 ```
 
 The schema-driven editors use [panel-material-ui](https://github.com/panel-extensions/panel-material-ui)
-widgets when it is installed and validating node and edge data against
-their schema requires [jsonschema](https://python-jsonschema.readthedocs.io).
-Install both with:
+widgets when it is installed and plain Panel widgets otherwise. Install it
+with:
 
 ```bash
-pip install "panel-reactflow[recommended]"
+pip install "panel-reactflow[material]"
 ```
 
 ## Usage

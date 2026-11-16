@@ -12,7 +12,6 @@ import param
 import pytest
 
 from panel_reactflow import NodeType, ReactFlow
-from panel_reactflow import base as rf_base
 from panel_reactflow.base import JsonEditor, SchemaEditor
 from panel_reactflow.schema import JSONSchema, to_json_value
 
@@ -77,15 +76,6 @@ def test_schema_falls_back_to_panel_widgets_without_material_ui():
         """
     )
     assert out == "True True"
-
-
-def test_missing_jsonschema_warns_once(monkeypatch, caplog):
-    monkeypatch.setitem(sys.modules, "jsonschema", None)
-    monkeypatch.setattr(rf_base, "_JSONSCHEMA_WARNED", False)
-    with caplog.at_level(logging.WARNING, logger="panel.reactflow"):
-        rf_base._validate_data({"x": 1}, {"type": "object"})
-        rf_base._validate_data({"x": 1}, {"type": "object"})
-    assert len([r for r in caplog.records if "jsonschema" in r.getMessage()]) == 1
 
 
 # Schema resolution
@@ -337,7 +327,6 @@ def test_schema_editor_writes_dates_as_iso_strings():
 
 def test_schema_editor_rejected_patch_reverts_widget(caplog):
     flow, _ = _schema_flow(validate_on_patch=True)
-    pytest.importorskip("jsonschema")
     widget = _editor(flow, "a")._form._widgets["n"]
     with caplog.at_level(logging.WARNING, logger="panel.reactflow"):
         widget.value = -3
