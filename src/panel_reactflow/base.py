@@ -4840,8 +4840,8 @@ class ReactFlow(ReactComponent):
             - ``"selection_changed"``: Selection changed
             - ``"nodes_grouped"``: :meth:`group_nodes` put nodes into a new
               group. Payload has ``group_id`` and ``node_ids``.
-            - ``"nodes_ungrouped"``: :meth:`ungroup` dissolved a group.
-              Payload has ``group_id`` and ``node_ids`` (its former children).
+            - ``"nodes_ungrouped"``: :meth:`ungroup` dissolved a group, or a
+              group was deleted with ``group_delete="ungroup"``. Payload has ``group_id`` and ``node_ids`` (its former children).
             - ``"group_toggled"``: A group was collapsed or expanded, from
               its header or :meth:`collapse_group`. Payload has ``node_id``
               and ``collapsed``.

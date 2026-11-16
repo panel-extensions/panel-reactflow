@@ -1,37 +1,256 @@
 # Release Notes
 
-## Unreleased
+## Version 0.6.0
+
+This release makes the graph model stricter and more robust. Adding
+nodes and edges now validates ids, endpoints and data up front, a
+failing callback no longer interrupts event processing, and the
+frontend no longer drops messages in debounce mode or re-renders every
+node on each interaction. It also adds group nodes, `fit_view()`,
+batch adds, self-loop edges, binary file drops and selection in
+read-only graphs. Please review the breaking and behavior changes before upgrading.
 
 ### Breaking changes
 
-- `add_node()`, `add_nodes()`, `add_edge()` and `add_edges()` raise a `ValueError` for an id that is already in use, an edge whose `source` or `target` is missing or not a node of the graph, and data that cannot be sent to the browser (arbitrary objects, sets, dataclasses; NumPy values and datetimes are fine). Previously such nodes and edges were added and broke rendering or later lookups. The same data check applies to `patch_node_data()`, `patch_edge_data()` and `patch_*_props()`. Add nodes before the edges that connect them. Graphs passed to the constructor only log a warning for duplicate ids and dangling edges.
-- Connection validators registered with `add_connection_validator()` run again on the final connection when the browser reports a new edge (`edge_added`), not only while dragging. A rejected edge is not added to `flow.edges`, no `edge_added` event fires, and the browser removes the edge it drew (`edge_rejected` message). The same happens when `add_edge()` raises for an edge from the browser. A browser edge whose id collides with an existing edge gets a fresh id instead.
-- Exceptions raised by event callbacks registered with `flow.on()` and by `Node`/`Edge` hooks are logged on the `panel.reactflow` logger instead of propagating, and the remaining callbacks still run. Code that relied on a callback exception aborting `add_node()`, `remove_node()` and similar calls must check state explicitly.
+- **Stricter graph edits**: `add_node()`, `add_nodes()`, `add_edge()`
+  and `add_edges()` raise a `ValueError` for an id that is already in
+  use, an edge whose `source` or `target` is missing or not a node of
+  the graph, and data that cannot be sent to the browser (arbitrary
+  objects, sets, dataclasses; NumPy values and datetimes are fine).
+  Previously such nodes and edges were added and broke rendering or
+  later lookups. The same data check applies to `patch_node_data()`,
+  `patch_edge_data()` and `patch_*_props()`. Add nodes before the edges
+  that connect them. Graphs passed to the constructor only log a
+  warning for duplicate ids and dangling edges, and direct assignment
+  to `nodes`/`edges` is not checked
+  ([#90](https://github.com/panel-extensions/panel-reactflow/pull/90)).
+
+- **Validators check browser edges**: connection validators registered
+  with `add_connection_validator()` run again on the final connection
+  when the browser reports a new edge (`edge_added`), not only while
+  dragging. A rejected edge is not added to `flow.edges`, no
+  `edge_added` event fires, and the browser removes the edge it drew
+  (`edge_rejected` message). The same happens when `add_edge()` raises
+  for an edge from the browser. A browser edge whose id collides with
+  an existing edge gets a fresh id instead
+  ([#90](https://github.com/panel-extensions/panel-reactflow/pull/90)).
+
+- **Callback errors are logged**: exceptions raised by event callbacks
+  registered with `flow.on()` and by `Node`/`Edge` hooks are logged on
+  the `panel.reactflow` logger instead of propagating, and the
+  remaining callbacks still run. Code that relied on a callback
+  exception aborting `add_node()`, `remove_node()` and similar calls
+  must check state explicitly
+  ([#90](https://github.com/panel-extensions/panel-reactflow/pull/90)).
+
+- **Edge editors are opt-in**: selecting an edge no longer opens a raw
+  JSON editor by default. An edge gets an editor only when its `Edge`
+  subclass overrides `editor`, `edge_editors[type]` or
+  `default_edge_editor` is set, or its type defines a schema with
+  properties, matching how node editors are resolved. Pass
+  `default_edge_editor=SchemaEditor` to restore the previous behavior
+  ([#81](https://github.com/panel-extensions/panel-reactflow/pull/81)).
+
+### Highlights
+
+- **Group nodes**: nodes can be nested through `parentId`, with
+  `extent`, `expandParent`, `hidden` and `zIndex` now fields of
+  `NodeSpec` and `Node` that `patch_node_props()` accepts. A built-in
+  `"group"` node type draws a frame around its children that collapses
+  into a compact node, re-drawing edges into hidden children to the
+  group's handles. `group_nodes()`, `ungroup()`, `set_parent()`,
+  `collapse_group()`/`expand_group()` and `absolute_position()` manage
+  groups from Python, with `nodes_grouped`, `nodes_ungrouped` and
+  `group_toggled` events. With `group_delete="ungroup"`, deleting a
+  group in the browser or with `remove_node()` keeps its children and
+  moves them, with their edges and canvas positions, to the group's
+  parent. See [Group Nodes](how-to/group-nodes.md)
+  ([#95](https://github.com/panel-extensions/panel-reactflow/pull/95), [#96](https://github.com/panel-extensions/panel-reactflow/pull/96)).
+
+- **Fit the view from Python**: `flow.fit_view()` pans and zooms the
+  canvas to fit every node, or a subset with
+  `flow.fit_view("a", "b", padding=0.2)`, and accepts React Flow's
+  `fitView` options such as `duration` and `max_zoom`. A fit requested
+  right after replacing `nodes`, including inside `pn.io.hold()`, waits
+  for the new nodes to reach the browser. See
+  [Fit the graph into view](how-to/define-nodes-edges.md#fit-the-graph-into-view)
+  ([#80](https://github.com/panel-extensions/panel-reactflow/pull/80)).
+
+- **Self-loop edges**: an edge whose `source` and `target` are the same
+  node now renders as a loop around the node instead of a flat path
+  hidden behind it. Every built-in edge type and custom edge types get
+  the loop, several loops on one node stack outward, and
+  `connection_validation={"cycles": True}` still rejects them. See
+  [Self-loops](how-to/define-nodes-edges.md#self-loops)
+  ([#82](https://github.com/panel-extensions/panel-reactflow/pull/82)).
+
+- **Selection in read-only graphs**: `editable=False` no longer turns
+  off selection, so read-only diagrams can be clicked to select and
+  `selection_changed` fires. The new `selectable` parameter (`True` by
+  default) turns selection off; disabling it at runtime clears the
+  selection
+  ([#85](https://github.com/panel-extensions/panel-reactflow/pull/85)).
+
+- **Faster structural updates**: adding, removing and assigning nodes
+  and edges no longer re-renders every embedded view and editor, and
+  node and edge editors are built only when shown (toolbar editors on
+  first open, side panel and edge editors on selection). In the
+  browser, dragging a node or zooming no longer re-renders every node:
+  dragging one node 60 times in a 1,500 node graph went from about
+  91,000 node renders to 62, and an update to one node's embedded view
+  re-renders only that node
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88), [#89](https://github.com/panel-extensions/panel-reactflow/pull/89), [#94](https://github.com/panel-extensions/panel-reactflow/pull/94)).
 
 ### Enhancements
 
-- **Binary file drops**: binary files dropped onto the canvas, such as images or Parquet, now arrive with `bytes` content instead of being mangled by a text decode. Any file that decodes as UTF-8 still arrives as a `str`, whatever MIME type the operating system reports, so text handlers keep working ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
-- **Drop size limit**: the new `max_drop_size` parameter (10 MB by default) caps the bytes sent for one drop so a large drop cannot exceed the websocket message limit and disconnect the session. Files over the limit or that cannot be read are listed in the drop event's `rejected` entries ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
-- **Batch graph edits**: `add_nodes()` and `add_edges()` add many nodes or edges in a single update, validating all of them first, and emit one `node_added`/`edge_added` event per item ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
-- **Faster structural updates**: adding, removing and assigning nodes and edges no longer re-renders every embedded view and editor, and node and edge editors are built only when shown (toolbar editors on first open, side panel and edge editors on selection) ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
-- **Ungroup on delete**: with `group_delete="ungroup"`, deleting a group in the browser or with `remove_node()` deletes only the group and moves its children, with their edges and canvas positions, to the group's parent ([#96](https://github.com/panel-extensions/panel-reactflow/pull/96)).
-- **Group nodes**: nodes can be nested through `parentId` (with `extent`, `expandParent`, `hidden` and `zIndex`, now fields of `NodeSpec` and `Node` that `patch_node_props()` accepts). A built-in `"group"` node type draws a frame around its children that collapses into a compact node, re-drawing edges into hidden children to the group's handles. `group_nodes()`, `ungroup()`, `set_parent()`, `collapse_group()`/`expand_group()` and `absolute_position()` manage groups from Python, with `nodes_grouped`, `nodes_ungrouped` and `group_toggled` events ([#95](https://github.com/panel-extensions/panel-reactflow/pull/95)).
-- **Refused connections**: dropping a dragged connection onto a handle that refuses it emits a `connection_refused` event with the connection and the reason, so an application can say why nothing was drawn ([#98](https://github.com/panel-extensions/panel-reactflow/pull/98)).
-- **Handle positions**: an input or output handle dict accepts a `top`, in px for a number or as a CSS length for a string, to line a handle up with a port drawn by the node's view instead of spreading the handles evenly over the node's height ([#92](https://github.com/panel-extensions/panel-reactflow/pull/92)).
+- **Batch graph edits**: `add_nodes()` and `add_edges()` add many nodes
+  or edges in a single update, validating all of them first, and emit
+  one `node_added`/`edge_added` event per item
+  ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+
+- **Refused connections**: dropping a dragged connection onto a handle
+  that refuses it emits a `connection_refused` event with the
+  connection and the reason, so an application can say why nothing was
+  drawn. See
+  [Explain a refused drop](how-to/validate-connections.md#explain-a-refused-drop)
+  ([#98](https://github.com/panel-extensions/panel-reactflow/pull/98)).
+
+- **Handle positions**: an input or output handle dict accepts a `top`,
+  in px for a number or as a CSS length for a string, to line a handle
+  up with a port drawn by the node's view instead of spreading the
+  handles evenly over the node's height ([#92](https://github.com/panel-extensions/panel-reactflow/pull/92)).
+
+- **Binary file drops**: binary files dropped onto the canvas, such as
+  images or Parquet, now arrive with `bytes` content instead of being
+  mangled by a text decode. Any file that decodes as UTF-8 still
+  arrives as a `str`, whatever MIME type the operating system reports,
+  so text handlers keep working
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+
+- **Drop size limit**: the new `max_drop_size` parameter (10 MB by
+  default, `0` disables it) caps the bytes sent for one drop so a large
+  drop cannot exceed the websocket message limit and disconnect the
+  session. Files over the limit or that cannot be read are listed in
+  the drop event's `rejected` entries instead of discarding the whole
+  drop
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+
+- **Selecting nodes from Python**: a node's `selected` field set from
+  Python now selects it in the browser, and Python updates sent while a
+  node is being dragged no longer snap it back to its old position
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
 
 ### Behavior changes
 
-- `ungroup()` emits `nodes_ungrouped` before the group's `node_deleted`, so the events can be undone in reverse order ([#96](https://github.com/panel-extensions/panel-reactflow/pull/96)).
-- `remove_node()` also removes the nodes nested in a removed node through `parentId`, as deleting a parent in the browser already did ([#95](https://github.com/panel-extensions/panel-reactflow/pull/95)).
-- Selection changes made in the browser no longer emit `node_props_changed`/`edge_props_changed` for `Node`/`Edge` instances (nor echo a `patch_*_props` message back to the browser); `selection_changed` and `on_selection_changed` still fire ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
-- Cached editors are rebuilt when a node is replaced under the same id, its type changes or the type/editor configuration changes ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+- With `editable=False`, editors are hidden everywhere (side panel,
+  node toolbar and inline), per-node `draggable`, `connectable` and
+  `deletable` flags are forced off in the browser, and the Delete key
+  does nothing. Previously `NodeSpec` nodes could still be dragged and
+  node data edited through the toolbar in a read-only graph
+  ([#81](https://github.com/panel-extensions/panel-reactflow/pull/81),
+  [#85](https://github.com/panel-extensions/panel-reactflow/pull/85)).
+
+- The interactivity (lock) button is removed from the canvas controls,
+  since it could re-enable dragging regardless of `editable`
+  ([#85](https://github.com/panel-extensions/panel-reactflow/pull/85)).
+
+- In read-only graphs, dict nodes without a `draggable` key now receive
+  pointer events, so their embedded widgets, context menu and handle
+  clicks work
+  ([#83](https://github.com/panel-extensions/panel-reactflow/pull/83)).
+
+- `remove_node()` also removes the nodes nested in a removed node
+  through `parentId`, as deleting a parent in the browser already did
+  ([#95](https://github.com/panel-extensions/panel-reactflow/pull/95)).
+
+- Selection changes made in the browser no longer emit
+  `node_props_changed`/`edge_props_changed` for `Node`/`Edge` instances
+  (nor echo a `patch_*_props` message back to the browser);
+  `selection_changed` and `on_selection_changed` still fire
+  ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
+
+- Cached editors are rebuilt when a node is replaced under the same id,
+  its type changes or the type/editor configuration changes
+  ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
 
 ### Bug fixes
 
-- Edges follow handles whose `top` reads a CSS variable set in the node's `style`: changing the style or class re-measures the node's handles, which React Flow otherwise only does when the node resizes, so a `patch_node_props()` that moved the handles left the edges at the old positions.
-- A `patch_node_props()` or `patch_node_data()` sent while an older nodes sync is still on its way to the browser is no longer undone by that sync, e.g. deselecting nodes and selecting the new group after `group_nodes()` in an event callback left the old nodes selected ([#97](https://github.com/panel-extensions/panel-reactflow/pull/97)).
-- A `patch_node_props()` or `patch_node_data()` for a node that reaches the browser in the same update, e.g. selecting a group right after `group_nodes()` in an event callback, is applied once the node arrives instead of being dropped ([#96](https://github.com/panel-extensions/panel-reactflow/pull/96)).
-- **Schema editors**: forms are built for the schemas generated by `param` and `pydantic` (`$ref`, nullable `anyOf`, `const`, enums, `minimum`/`maximum`), a property without a dedicated widget is shown as a literal input instead of replacing the whole form, and nullable fields show and accept `None`. Building an editor no longer switches the global `pn.config.design` to `MaterialDesign`; import `panel_material_ui` first, or set `pn.config.design`, if your app relies on that. `jsonschema` is now a dependency, so node and edge data is always validated against its schema, and `panel-material-ui` is declared through the `material` extra ([#87](https://github.com/panel-extensions/panel-reactflow/pull/87)).
+- **Node clicks**: `node_clicked` events and `Node.on_click` hooks were
+  documented but never sent by the frontend. Clicks are now reported
+  with a screen `position` that can be passed to `show_popup()`, except
+  for clicks on a node's embedded view or editor and clicks that end a
+  drag
+  ([#83](https://github.com/panel-extensions/panel-reactflow/pull/83)).
+
+- **Lost messages in debounce mode**: with `sync_mode="debounce"` only
+  the last pending message was sent, so deleting a multi-node selection
+  never reached Python and dragging several nodes reported only one
+  move. Messages are now queued and sent in order
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+
+- **Malformed nodes**: a `null` or non-object node no longer blanks the
+  whole component; the error boundary catches it and safe mode drops it
+  ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
+
+- **Patches lost to a nodes sync**: a `patch_node_props()` or
+  `patch_node_data()` sent while an older nodes sync is still on its
+  way to the browser is no longer undone by that sync, and one for a
+  node that reaches the browser in the same update is applied once the
+  node arrives instead of being dropped. For example, selecting the new
+  group right after `group_nodes()` in an event callback now works
+  ([#96](https://github.com/panel-extensions/panel-reactflow/pull/96), [#97](https://github.com/panel-extensions/panel-reactflow/pull/97)).
+
+- **Late views**: a node's embedded view that reaches the browser after
+  the node itself is now shown instead of leaving the node empty
+  ([#93](https://github.com/panel-extensions/panel-reactflow/pull/93)).
+
+- **Edges detached from moved handles**: a handle whose `top` reads a
+  CSS variable set through the node's `style` or `className` moves when
+  that changes, but its edges stayed at the old position because React
+  Flow only re-measures handles when a node resizes. Nodes now
+  re-measure their handles when their `style`, `className`,
+  `data.inputs` or `data.outputs` changes, batched into one update per
+  frame
+  ([#99](https://github.com/panel-extensions/panel-reactflow/pull/99), [#100](https://github.com/panel-extensions/panel-reactflow/pull/100)).
+
+- **Selection on re-mount**: mounting a view again, for example when a
+  dynamic tab hides and shows the canvas, no longer clears the
+  selection in Python
+  ([#101](https://github.com/panel-extensions/panel-reactflow/pull/101)).
+
+- **Schema editors**: forms are built for the schemas generated by
+  `param` and `pydantic` (`$ref`, nullable `anyOf`, `const`, enums,
+  `minimum`/`maximum`), a property without a dedicated widget is shown
+  as a literal input instead of replacing the whole form, and nullable
+  fields show and accept `None`. Building an editor no longer switches
+  the global `pn.config.design` to `MaterialDesign`; import
+  `panel_material_ui` first, or set `pn.config.design`, if your app
+  relies on that. `jsonschema` is now a dependency, so node and edge
+  data is always validated against its schema, and `panel-material-ui`
+  is declared through the `material` extra
+  ([#87](https://github.com/panel-extensions/panel-reactflow/pull/87)).
+
+- **Editor refresh**: the side panel refreshes when node or edge
+  editors are rebuilt while something is selected, changing an edge's
+  type re-resolves its editor, and toggling `editable` at runtime
+  re-renders nodes with embedded views
+  ([#81](https://github.com/panel-extensions/panel-reactflow/pull/81)).
+
+- **Connection validation**: validation requests always get a reply,
+  so a malformed request no longer rejects every handle after a
+  timeout. Validators and event callbacks with extra optional
+  parameters are called with the right arguments, a single handle
+  string in `inputs`/`outputs` is no longer split into one handle per
+  character, and unconnectable nodes and handles are skipped. In the
+  browser, connection policies are computed once per graph snapshot
+  instead of for every handle during a drag
+  ([#90](https://github.com/panel-extensions/panel-reactflow/pull/90)).
+
+- **`from_networkx` id collisions**: a graph whose node ids collide
+  once stringified (`1` and `"1"`) raises a `ValueError` instead of
+  silently merging the nodes, and parallel edges in a multigraph get
+  unique edge ids
+  ([#90](https://github.com/panel-extensions/panel-reactflow/pull/90)).
 
 ## Version 0.5.1
 
