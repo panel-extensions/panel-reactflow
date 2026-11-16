@@ -5,7 +5,7 @@ import base64
 import pytest
 from panel.tests.util import serve_component, wait_until
 
-from panel_reactflow import ReactFlow
+from panel_reactflow import ReactFlow, drop_file_bytes
 
 pytest.importorskip("playwright")
 
@@ -153,6 +153,103 @@ def test_binary_file_drop_is_base64_encoded(page):
     assert base64.b64decode(image["content"]) == bytes([0, 255, 1, 2, 137, 80])
     assert notes == {"name": "notes.txt", "type": "text/plain", "size": 6, "encoding": "text", "content": "héllo"}
     assert drops[0]["rejected"] == []
+
+
+def _drop_raw_files(locator, files):
+    """Drop files given as ``(name, mime_type, list of byte values)`` on *locator*."""
+    return locator.evaluate(
+        """(el, files) => {
+          const rect = el.getBoundingClientRect()
+          const dt = new DataTransfer()
+          for (const [name, type, bytes] of files) {
+            dt.items.add(new File([new Uint8Array(bytes)], name, { type }))
+          }
+          const init = { dataTransfer: dt, bubbles: true, cancelable: true, composed: true, clientX: rect.left + 5, clientY: rect.top + 5 }
+          el.dispatchEvent(new DragEvent("dragover", init))
+          el.dispatchEvent(new DragEvent("drop", init))
+        }""",
+        [[name, mime, list(data)] for name, mime, data in files],
+    )
+
+
+def test_text_file_with_vendor_mime_type_is_sent_as_text(page):
+    # Windows reports .csv files as application/vnd.ms-excel.
+    flow = _flow(n=1, drop_types=["Files"])
+    drops = []
+    flow.on("drop", drops.append)
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    csv = "name,city\nZoë,Köln\n".encode()
+    _drop_raw_files(
+        pane,
+        [
+            ("data.csv", "application/vnd.ms-excel", csv),
+            ("notes.cfg", "application/octet-stream", b"key = value"),
+        ],
+    )
+
+    wait_until(lambda: len(drops) == 1, page)
+    data_csv, notes = drops[0]["data"]
+    assert data_csv["encoding"] == "text"
+    assert data_csv["content"] == "name,city\nZoë,Köln\n"
+    assert notes["encoding"] == "text"
+    assert notes["content"] == "key = value"
+    assert drop_file_bytes(data_csv) == csv
+
+
+def test_file_with_text_mime_type_that_is_not_utf8_is_base64_encoded(page):
+    flow = _flow(n=1, drop_types=["Files"])
+    drops = []
+    flow.on("drop", drops.append)
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    latin1 = "Köln".encode("latin-1")
+    _drop_raw_files(pane, [("latin1.csv", "text/csv", latin1), ("blob", "", bytes([0xFF, 0xFE, 0x00]))])
+
+    wait_until(lambda: len(drops) == 1, page)
+    csv_file, blob = drops[0]["data"]
+    assert csv_file["encoding"] == "base64"
+    assert drop_file_bytes(csv_file) == latin1
+    assert blob["encoding"] == "base64"
+    assert drop_file_bytes(blob) == bytes([0xFF, 0xFE, 0x00])
+
+
+def test_non_file_drop_limit_counts_utf8_bytes(page):
+    flow = _flow(n=1, drop_types=["application/x-test"], max_drop_size=10)
+    drops = []
+    flow.on("drop", drops.append)
+    serve_component(page, flow)
+    pane = page.locator(".react-flow__pane")
+    expect(pane).to_be_visible()
+
+    def drop(raw):
+        pane.evaluate(
+            """(el, raw) => {
+              const rect = el.getBoundingClientRect()
+              const dt = new DataTransfer()
+              dt.setData("application/x-test", raw)
+              const init = { dataTransfer: dt, bubbles: true, cancelable: true, composed: true, clientX: rect.left + 5, clientY: rect.top + 5 }
+              el.dispatchEvent(new DragEvent("dragover", init))
+              el.dispatchEvent(new DragEvent("drop", init))
+            }""",
+            raw,
+        )
+
+    # Seven characters, but fourteen bytes in UTF-8.
+    drop("ééééééé")
+    wait_until(lambda: len(drops) == 1, page)
+    assert drops[0]["data"] is None
+    [rejected] = drops[0]["rejected"]
+    assert rejected["size"] == 14
+
+    drop("abcdefghij")
+    wait_until(lambda: len(drops) == 2, page)
+    assert drops[1]["data"] == "abcdefghij"
+    assert drops[1]["rejected"] == []
 
 
 def test_oversized_file_drop_is_rejected_without_losing_the_session(page):

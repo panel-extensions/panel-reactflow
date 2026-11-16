@@ -127,7 +127,8 @@ function popupCloseDistance(event) {
 // The DataTransfer type browsers report for files dragged in from the OS.
 const FILES_DROP_TYPE = "Files";
 
-const TEXT_MIME_PATTERN = /^text\/|[/+](json|xml|javascript|ecmascript|csv|yaml|x-yaml|toml|x-toml|svg\+xml|x-sh|sql|graphql|markdown)$/;
+// Types that are never text, so their bytes skip the UTF-8 decode attempt.
+const BINARY_MIME_PATTERN = /^(image\/(?!svg\+xml$)|audio\/|video\/|font\/)|^application\/(pdf|zip|gzip|x-gzip|x-tar|x-bzip2|x-7z-compressed|x-rar-compressed|wasm)$/;
 
 function bytesToBase64(bytes) {
   const chunks = [];
@@ -139,9 +140,11 @@ function bytesToBase64(bytes) {
 
 async function readDroppedFile(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
-  // An untyped file is sent as text only when it decodes cleanly, so binaries
-  // are never mangled by replacement characters.
-  if (!file.type || TEXT_MIME_PATTERN.test(file.type)) {
+  // The reported MIME type is unreliable (Windows reports .csv as
+  // application/vnd.ms-excel), so any file that decodes cleanly as UTF-8 is
+  // sent as text and only the rest base64 encoded, which also keeps binaries
+  // from being mangled by replacement characters.
+  if (!BINARY_MIME_PATTERN.test(file.type)) {
     try {
       const content = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       return { name: file.name, type: file.type, size: file.size, encoding: "text", content };
@@ -1156,14 +1159,16 @@ function FlowInner({
     const target = dropTarget(event.target);
     const files = dropType === FILES_DROP_TYPE ? event.dataTransfer.files : null;
     const raw = files ? null : event.dataTransfer.getData(dropType);
+    // The limit is in bytes, so measure the UTF-8 encoding rather than UTF-16 code units.
+    const rawSize = raw !== null && maxDropSize > 0 ? new TextEncoder().encode(raw).length : 0;
     try {
       let data;
       let rejected = [];
       if (files) {
         ({ data, rejected } = await readDroppedFiles(files, maxDropSize));
-      } else if (maxDropSize > 0 && raw.length > maxDropSize) {
+      } else if (rawSize > maxDropSize) {
         data = null;
-        rejected = [{ type: dropType, size: raw.length, reason: `Data exceeds the drop size limit of ${maxDropSize} bytes` }];
+        rejected = [{ type: dropType, size: rawSize, reason: `Data exceeds the drop size limit of ${maxDropSize} bytes` }];
       } else {
         data = raw;
         try {
