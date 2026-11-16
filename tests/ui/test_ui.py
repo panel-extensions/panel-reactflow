@@ -79,6 +79,23 @@ def _node_locator(page, label):
     return page.locator(".react-flow__node").filter(has_text=label)
 
 
+def _wait_for_viewport(page):
+    """Wait until React Flow measured the nodes and the initial fitView settled.
+
+    Drags resolve handle positions up front, so a fitView landing between
+    resolving the handle and pressing the mouse turns the drag into a pan.
+    """
+    expect(page.locator(".react-flow__node").first).to_be_visible()
+    viewport = page.locator(".react-flow__viewport")
+    previous = None
+    for _ in range(50):
+        current = viewport.evaluate("el => el.style.transform")
+        if current == previous:
+            return
+        previous = current
+        page.wait_for_timeout(100)
+
+
 def _edge_label_locator(page, label):
     return page.locator(".react-flow__edge-text").filter(has_text=label)
 
@@ -1062,6 +1079,7 @@ def test_connectable_handles_data_source_to_sink(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect from source output to sink input
     source_handle = _node_locator(page, "Data Source").locator(".react-flow__handle-right").first
@@ -1097,6 +1115,7 @@ def test_connectable_handles_transform_node(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect from first transform output to second transform input
     source_handle = _node_locator(page, "Transform").first.locator(".react-flow__handle-right").first
@@ -1150,6 +1169,7 @@ def test_connectable_handles_monitor_node(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect source to monitor input (should work)
     source_handle = _node_locator(page, "Source").locator(".react-flow__handle-right").first
@@ -1207,6 +1227,7 @@ def test_connectable_handles_multiple_inputs_outputs(page):
         height=600,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     # Connect basic1 output to multi input
     basic1_handle = _node_locator(page, "Basic").first.locator(".react-flow__handle-right").first

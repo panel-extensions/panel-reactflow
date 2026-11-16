@@ -4,7 +4,7 @@ import panel as pn
 import param
 import pytest
 
-from panel_reactflow import Edge, EdgeType, Node, NodeSpec, NodeType, ReactFlow
+from panel_reactflow import Edge, Node, NodeSpec, NodeType, ReactFlow
 from panel_reactflow.base import Editor, JsonEditor
 
 
@@ -73,11 +73,11 @@ def test_add_nodes_payloads_match_add_node() -> None:
 
 
 def test_add_nodes_is_atomic_on_validation_error() -> None:
-    schema = {"type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]}
-    flow = ReactFlow(node_types={"typed": NodeType(type="typed", schema=schema)})
-    node = Node(id="ok", type="typed", data={"x": 1})
+    flow = ReactFlow()
+    node = Node(id="ok", data={"x": 1})
+    # A node without an id fails validation without needing jsonschema.
     with pytest.raises(ValueError):
-        flow.add_nodes([node, {"id": "bad", "type": "typed", "position": {"x": 0, "y": 0}, "data": {"x": "nope"}}])
+        flow.add_nodes([node, {"position": {"x": 0, "y": 0}, "data": {}}])
     assert flow.nodes == []
     assert node.flow is None
 
@@ -114,13 +114,12 @@ def test_add_edges_assigns_edges_once_and_emits_per_edge() -> None:
 
 
 def test_add_edges_is_atomic_on_validation_error() -> None:
-    schema = {"type": "object", "properties": {"w": {"type": "number"}}}
-    flow = ReactFlow(nodes=_nodes(2), edge_types={"weighted": EdgeType(type="weighted", schema=schema)})
+    flow = ReactFlow(nodes=_nodes(2))
     with pytest.raises(ValueError):
         flow.add_edges(
             [
-                {"id": "a", "source": "n0", "target": "n1", "type": "weighted", "data": {"w": 1}},
-                {"id": "b", "source": "n0", "target": "n1", "type": "weighted", "data": {"w": "heavy"}},
+                {"id": "a", "source": "n0", "target": "n1"},
+                {"id": "b", "source": "n0"},
             ]
         )
     assert flow.edges == []
