@@ -444,11 +444,23 @@ from panel_reactflow import NodeSpec, EdgeSpec
 flow.add_node(NodeSpec(id="n4", position={"x": 780, "y": 0}, label="Another"))
 flow.add_edge(EdgeSpec(id="e2", source="n3", target="n4"))
 
-flow.remove_node("n3")   # also removes connected edges
+flow.remove_node("n3")   # also removes connected edges and nested nodes
 flow.remove_edge("e1")
 ```
 
-`add_node()` and `add_edge()` raise a `ValueError` for an id that is already
+To add many nodes or edges, use `add_nodes()` and `add_edges()`. They validate
+every item first, add them all in a single update and still emit one
+`node_added`/`edge_added` event per item:
+
+```python
+flow.add_nodes([
+    {"id": "n5", "position": {"x": 0, "y": 200}, "label": "Five", "data": {}},
+    {"id": "n6", "position": {"x": 260, "y": 200}, "label": "Six", "data": {}},
+])
+flow.add_edges([{"source": "n5", "target": "n6", "data": {}}])
+```
+
+`add_node()`, `add_edge()` and their batch variants raise a `ValueError` for an id that is already
 in use, an edge whose `source` or `target` is not a node of the graph, and data
 that cannot be sent to the browser. Anything Bokeh can serialize is accepted,
 including NumPy scalars and arrays and datetimes; arbitrary objects, sets and
