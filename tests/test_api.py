@@ -1931,12 +1931,17 @@ def test_remove_edge_batch_detaches_edge_instances() -> None:
     assert edges[1].flow is None
 
 
+HOLD_POLICIES = ("combine", "collect")
+
+
 def test_hold_combines_loop_removal_into_one_patch(document) -> None:
     """``pn.io.hold`` is the supported way to batch a sequence of updates.
 
-    Bokeh's ``combine`` hold policy replaces an earlier event for the same
-    property, so repeated ``nodes`` assignments collapse into a single patch
-    and the browser renders the removal once instead of once per node.
+    Events setting the same property are combined (either by Bokeh's
+    ``combine`` hold policy or, in newer Panel versions, by collecting and
+    combining them on release), so repeated ``nodes`` assignments collapse
+    into a single patch and the browser renders the removal once instead of
+    once per node.
     """
     from panel.io import hold
     from panel.io.state import set_curdoc
@@ -1946,7 +1951,7 @@ def test_hold_combines_loop_removal_into_one_patch(document) -> None:
     with set_curdoc(document):
         assert document.callbacks.hold_value is None
         with hold():
-            assert document.callbacks.hold_value == "combine"
+            assert document.callbacks.hold_value in HOLD_POLICIES
             for node_id in ["n1", "n2", "n3"]:
                 flow.remove_node(node_id)
         assert document.callbacks.hold_value is None
@@ -1970,7 +1975,7 @@ def test_handle_msg_is_held(document) -> None:
     flow._process_msg = record
     with set_curdoc(document):
         flow._handle_msg({"type": "node_deleted", "node_id": None, "node_ids": ["n1", "n2"]})
-    assert holds == ["combine"]
+    assert len(holds) == 1 and holds[0] in HOLD_POLICIES
     assert [n["id"] for n in flow.nodes] == ["n0", "n3", "n4"]
 
 

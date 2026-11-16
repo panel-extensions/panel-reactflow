@@ -1,5 +1,7 @@
 """Holds fixtures and configuration for the test suite."""
 
+import logging
+
 import pytest
 from panel.config import config
 from panel.tests.conftest import comm, document  # noqa: F401
@@ -15,11 +17,28 @@ optional_markers = {
 
 @pytest.fixture(autouse=True)
 def reset_design():
-    """Importing panel_material_ui sets a global design, so start every test without one."""
-    design = config.design
+    """Isolate tests from a global design or theme set by an earlier test or import."""
+    design, theme = config.design, config.theme
     config.design = None
+    config.theme = "default"
     yield
     config.design = design
+    config.theme = theme
+
+
+@pytest.fixture(autouse=True)
+def propagate_panel_logs():
+    """Let caplog see ``panel.reactflow`` records.
+
+    Some Panel versions configure the ``panel`` logger with
+    ``propagate=False``, which hides its records from the root handler
+    that caplog installs.
+    """
+    logger = logging.getLogger("panel")
+    propagate = logger.propagate
+    logger.propagate = True
+    yield
+    logger.propagate = propagate
 
 
 @pytest.fixture
