@@ -239,6 +239,13 @@ flow.on("node_added", recalculate_layout)
 
 - Callbacks run on the server in the Panel event loop.  Keep them fast;
   offload heavy work with `pn.state.execute()` or background threads.
+- `ReactFlow` is not thread-safe. Change the graph (`add_node()`,
+  `patch_node_data()`, assigning `nodes`, ...) only from the session's own
+  callbacks, not from a background thread; hand results back with
+  `pn.state.execute(callback)` instead.
+- An exception in a callback or `Node`/`Edge` hook is logged on the
+  `panel.reactflow` logger and the remaining callbacks still run. The graph
+  change that emitted the event has already been applied.
 - Use `"*"` during development for a quick audit trail, then switch to
   specific event names in production.
 - The `selection` parameter on `ReactFlow` also updates reactively.  If

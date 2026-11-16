@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import os
+import weakref
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -92,6 +93,39 @@ def _decode_dropped_files(files: Any) -> Any:
                 entry["content"] = base64.b64decode(entry["content"])
         decoded.append(entry)
     return decoded
+
+
+class _GraphConflictError(ValueError):
+    """A node or edge conflicts with the graph: duplicate id or unknown endpoint."""
+
+
+_ACCEPTS_FLOW: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+
+
+def _accepts_flow(callback: Callable) -> bool:
+    """Whether *callback* can be called as ``callback(payload, flow)``.
+
+    Binding against the signature (rather than counting parameters) handles
+    defaults, ``*args`` and callable instances. The result is cached per
+    function, so bound methods of the same function share one entry and no
+    instance is kept alive.
+    """
+    key = getattr(callback, "__func__", callback)
+    try:
+        return _ACCEPTS_FLOW[key]
+    except (KeyError, TypeError):
+        pass
+    try:
+        inspect.signature(callback).bind(None, None)
+    except (TypeError, ValueError):
+        accepts = False
+    else:
+        accepts = True
+    try:
+        _ACCEPTS_FLOW[key] = accepts
+    except TypeError:
+        pass
+    return accepts
 
 
 def _is_param_class(obj: Any) -> bool:
@@ -203,6 +237,14 @@ def _coerce_spec_map(specs: dict[str, Any] | None, *, edge: bool = False) -> dic
             normalized[key] = klass(type=key, schema=value).to_dict()
         else:
             raise ValueError(f"Unsupported spec type for '{key}'.")
+        spec = normalized[key]
+        # A lone handle (``inputs="in"``) would otherwise be iterated per character.
+        if any(isinstance(spec.get(port), (str, dict)) for port in ("inputs", "outputs")):
+            spec = dict(spec)
+            for port in ("inputs", "outputs"):
+                if isinstance(spec.get(port), (str, dict)):
+                    spec[port] = [spec[port]]
+            normalized[key] = spec
     return normalized
 
 
@@ -1659,6 +1701,13 @@ class ReactFlow(ReactComponent):
     - Using ``sync_mode='debounce'`` with appropriate ``debounce_ms``
     - Setting ``validate_on_patch=False`` if validation is expensive
     - Disabling ``show_minimap`` if not needed
+
+    ReactFlow is not thread-safe. Methods such as ``add_node`` read, modify
+    and reassign ``nodes``/``edges``, so concurrent calls from several
+    threads lose updates. Modify a flow only from the thread that owns its
+    session, e.g. from Panel callbacks; work done in a background thread
+    should hand its result back with ``pn.state.execute(callback)`` or
+    ``doc.add_next_tick_callback(callback)``.
     """
 
     nodes = param.List(default=[], doc="Canonical list of node dictionaries or Node instances.")
@@ -1825,6 +1874,7 @@ class ReactFlow(ReactComponent):
             params["nodes"] = [ReactFlow._coerce_node(node) for node in params["nodes"]]
         if "edges" in params:
             params["edges"] = [ReactFlow._coerce_edge(edge) for edge in params["edges"]]
+        self._check_graph(params.get("nodes", []), params.get("edges", []))
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self._connection_validators: list[Callable] = []
@@ -2217,7 +2267,15 @@ class ReactFlow(ReactComponent):
 
     @staticmethod
     def _invoke_node_callback(callback: Callable, payload: dict[str, Any], flow: "ReactFlow") -> None:
-        if len(inspect.signature(callback).parameters) == 2:
+        """Run an event callback or hook, logging instead of raising.
+
+        The graph change that triggered the event has already been applied,
+        so letting one failing callback raise would skip every later callback
+        and hook for the same event (and, for multi-id operations such as
+        ``remove_node("a", "b")``, every later id) while the state stays
+        committed.
+        """
+        if _accepts_flow(callback):
             cb = partial(callback, payload, flow)
         else:
             cb = partial(callback, payload)
@@ -2228,7 +2286,14 @@ class ReactFlow(ReactComponent):
         # show_popup) made from inside a hook, since the model reconciliation
         # that turns a Viewable into its Bokeh model expects to run in the
         # same pass as the triggering event.
-        pn.state.execute(cb, schedule=False)
+        try:
+            pn.state.execute(cb, schedule=False)
+        except Exception:
+            _LOGGER.exception(
+                "panel-reactflow %r callback %r failed",
+                payload.get("type") if isinstance(payload, dict) else None,
+                getattr(callback, "__qualname__", callback),
+            )
 
     def _invoke_node_hook(self, node: Node, hook_name: str, payload: dict[str, Any]) -> None:
         hook = getattr(node, hook_name, None)
@@ -2671,8 +2736,10 @@ class ReactFlow(ReactComponent):
         Raises
         ------
         ValueError
-            If the node is missing the required ``id`` field or if
-            validation is enabled and the data doesn't match the schema.
+            If the node is missing the required ``id`` field, a node with
+            the same ``id`` already exists, any field other than ``view`` is
+            not JSON-serializable, or validation is enabled and the data
+            doesn't match the schema.
 
         Examples
         --------
@@ -2757,7 +2824,10 @@ class ReactFlow(ReactComponent):
         add_edges : Add several edges in a single update
         remove_node : Remove one or more nodes in a single update
         """
-        prepared = [self._prepare_node(node) for node in nodes]
+        # One id set for the whole batch, grown as nodes are accepted, so that
+        # duplicates within the batch are caught without rescanning the graph.
+        node_ids = {self._node_id(node) for node in self.nodes}
+        prepared = [self._prepare_node(node, node_ids) for node in nodes]
         if not prepared:
             return
         for raw_node, payload in prepared:
@@ -2775,8 +2845,12 @@ class ReactFlow(ReactComponent):
         for _, payload in prepared:
             self._emit("node_added", {"type": "node_added", "node": payload})
 
-    def _prepare_node(self, node: dict[str, Any] | NodeSpec | Node) -> tuple[dict[str, Any] | Node, dict[str, Any]]:
-        """Coerce and validate a node to add, returning it with its payload."""
+    def _prepare_node(self, node: dict[str, Any] | NodeSpec | Node, node_ids: set[Any]) -> tuple[dict[str, Any] | Node, dict[str, Any]]:
+        """Coerce and validate a node to add, returning it with its payload.
+
+        *node_ids* holds the ids of the graph plus the nodes accepted earlier
+        in the batch; the node's id is added to it once it passes.
+        """
         raw_node = self._coerce_node(node)
         payload = self._node_payload(raw_node)
         payload.setdefault("type", "panel")
@@ -2786,10 +2860,12 @@ class ReactFlow(ReactComponent):
         payload.setdefault("draggable", True)
         payload.setdefault("connectable", True)
         payload.setdefault("deletable", True)
+        self._check_node_payload(payload, node_ids)
         self._validate_graph_payload(payload, kind="node")
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
+        node_ids.add(payload["id"])
         return raw_node, payload
 
     def _apply_selection(self, node_ids: Sequence[str], edge_ids: Sequence[str]) -> None:
@@ -2912,10 +2988,7 @@ class ReactFlow(ReactComponent):
                 self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
                 self._emit("selection_changed", msg)
             case "edge_added":
-                edge = msg.get("edge")
-                if edge is None:
-                    return
-                self.add_edge(edge)
+                self._add_edge_from_browser(msg.get("edge"))
             case "node_deleted":
                 node_ids = list(msg.get("node_ids") or [])
                 if msg.get("node_id") and msg["node_id"] not in node_ids:
@@ -2982,14 +3055,48 @@ class ReactFlow(ReactComponent):
             case _:
                 return
 
+    def _add_edge_from_browser(self, edge: Any) -> None:
+        """Add an edge the user connected, or undo it in the browser.
+
+        The browser draws a new connection before Python sees it. Validators
+        are re-run on the final connection since the graph may have changed
+        since the drag started, and a client is not trusted to have applied
+        them. A rejected edge is removed from the browser again instead of
+        lingering there without existing in ``edges``.
+        """
+        if not isinstance(edge, dict):
+            return
+        reason = None
+        if self._connection_validators:
+            reason = self._connection_reason(
+                {
+                    "source": edge.get("source"),
+                    "target": edge.get("target"),
+                    "sourceHandle": edge.get("sourceHandle"),
+                    "targetHandle": edge.get("targetHandle"),
+                }
+            )
+        if reason is None:
+            try:
+                self.add_edge(edge)
+                return
+            except ValueError as exc:
+                reason = str(exc)
+        _LOGGER.warning("panel-reactflow rejected edge %r from the browser: %s", edge.get("id"), reason)
+        self._send_msg({"type": "edge_rejected", "edge_id": edge.get("id"), "reason": reason})
+
     def add_connection_validator(self, callback: Callable) -> None:
         """Register a validator returning None to allow or a reason to reject.
 
         Callbacks accept either a connection payload or (payload, flow).
-        They run in registration order for each candidate during a drag.
+        They run in registration order for each candidate when a drag starts,
+        and again for the final connection when the browser reports the new
+        edge; an edge rejected then is removed from the browser. Edges added
+        from Python with :meth:`add_edge` or ``edges`` are not checked.
         """
         if not callable(callback):
             raise TypeError("Connection validator must be callable.")
+        _accepts_flow(callback)
         self._connection_validators.append(callback)
         self.has_connection_validators = True
 
@@ -2998,43 +3105,73 @@ class ReactFlow(ReactComponent):
         self._connection_validators.remove(callback)
         self.has_connection_validators = bool(self._connection_validators)
 
+    def _connection_reason(self, payload: dict[str, Any]) -> str | None:
+        """Run the connection validators for one candidate connection."""
+        for callback in self._connection_validators:
+            try:
+                if _accepts_flow(callback):
+                    reason = callback(payload, self)
+                else:
+                    reason = callback(payload)
+                if reason is not None and not isinstance(reason, str):
+                    reason = "Connection validator must return None or a reason string."
+                elif reason == "":
+                    reason = "Connection rejected."
+            except Exception as exc:
+                _LOGGER.exception("Connection validator failed")
+                reason = str(exc) or "Connection validator failed."
+            if reason is not None:
+                return reason
+        return None
+
+    @staticmethod
+    def _handle_ids(handles: Any) -> list[Any]:
+        if handles is None:
+            return [None]
+        if isinstance(handles, (str, dict)):
+            handles = [handles]
+        return [handle.get("id") if isinstance(handle, dict) else handle for handle in handles]
+
     def _validate_connection_request(self, msg: dict[str, Any]) -> None:
-        node_id = msg["node_id"]
-        handle_id = msg["handle_id"]
-        handle_type = msg["handle_type"]
+        # The browser blocks every connection until this reply arrives (or
+        # times out after three seconds), so always answer, with an ``error``
+        # the browser can show if the request could not be evaluated.
+        reply: dict[str, Any] = {"type": "connection_validation_result", "request_id": msg.get("request_id"), "results": []}
+        handle_type = msg.get("handle_type")
+        if msg.get("node_id") is None or handle_type not in ("source", "target"):
+            reply["error"] = "Malformed connection validation request."
+            self._send_msg(reply)
+            return
+        try:
+            reply["results"] = self._connection_candidates(msg["node_id"], msg.get("handle_id"), handle_type)
+        except Exception:
+            _LOGGER.exception("Connection validation failed")
+            reply["results"] = []
+            reply["error"] = "Connection validation failed."
+        self._send_msg(reply)
+
+    def _connection_candidates(self, node_id: str, handle_id: str | None, handle_type: str) -> list[dict[str, Any]]:
         opposite_type = "target" if handle_type == "source" else "source"
         port_key = "inputs" if opposite_type == "target" else "outputs"
+        prefix = "input" if opposite_type == "target" else "output"
         results = []
         for node in self.nodes:
+            connectable = node.connectable if isinstance(node, Node) else node.get("connectable", True)
+            if connectable is False:
+                continue
             candidate_id = self._node_id(node)
             node_type = self.node_types.get(self._node_type(node), {})
-            handles = node_type.get(port_key)
-            if handles is None:
-                handles = [None]
-            for handle in handles:
-                candidate_handle = handle.get("id") if isinstance(handle, dict) else handle
+            # Handles the browser never lets a connection end on need no answer.
+            if node_type.get(f"{prefix}Connectable") is False or node_type.get(f"{prefix}ConnectableEnd") is False:
+                continue
+            for candidate_handle in self._handle_ids(node_type.get(port_key)):
                 if handle_type == "source":
                     payload = {"source": node_id, "target": candidate_id, "sourceHandle": handle_id, "targetHandle": candidate_handle}
                 else:
                     payload = {"source": candidate_id, "target": node_id, "sourceHandle": candidate_handle, "targetHandle": handle_id}
-                reason = None
-                for callback in self._connection_validators:
-                    try:
-                        if len(inspect.signature(callback).parameters) == 2:
-                            reason = callback(payload, self)
-                        else:
-                            reason = callback(payload)
-                        if reason is not None and not isinstance(reason, str):
-                            reason = "Connection validator must return None or a reason string."
-                        elif reason == "":
-                            reason = "Connection rejected."
-                    except Exception as exc:
-                        _LOGGER.exception("Connection validator failed")
-                        reason = str(exc) or "Connection validator failed."
-                    if reason is not None:
-                        break
+                reason = self._connection_reason(payload)
                 results.append({"node_id": candidate_id, "handle_id": candidate_handle, "handle_type": opposite_type, "reason": reason})
-        self._send_msg({"type": "connection_validation_result", "request_id": msg["request_id"], "results": results})
+        return results
 
     def _handle_client_error(self, msg: dict[str, Any]) -> None:
         """Log a client-side error reported by the frontend and re-emit it.
@@ -3177,14 +3314,22 @@ class ReactFlow(ReactComponent):
         Raises
         ------
         ValueError
-            If the edge is missing required fields (``source``, ``target``)
-            or if validation is enabled and the data doesn't match the schema.
+            If the edge is missing required fields (``source``, ``target``),
+            either endpoint is not a node of the graph, an edge with the same
+            ``id`` already exists, the edge is not JSON-serializable, or
+            validation is enabled and the data doesn't match the schema.
+            Self-loops are allowed.
+
+        Notes
+        -----
+        Connection validators (:meth:`add_connection_validator`) only check
+        connections made in the browser, not edges added from Python.
 
         Examples
         --------
         Add a simple edge:
 
-        >>> flow = ReactFlow()
+        >>> flow = ReactFlow(nodes=[NodeSpec(id=f"n{i}") for i in range(1, 5)])
         >>> flow.add_edge({
         ...     "id": "e1",
         ...     "source": "n1",
@@ -3263,7 +3408,9 @@ class ReactFlow(ReactComponent):
         add_nodes : Add several nodes in a single update
         remove_edge : Remove one or more edges in a single update
         """
-        prepared = [self._prepare_edge(edge) for edge in edges]
+        node_ids = {self._node_id(node) for node in self.nodes}
+        edge_ids = {self._edge_id(edge) for edge in self.edges}
+        prepared = [self._prepare_edge(edge, node_ids, edge_ids) for edge in edges]
         if not prepared:
             return
         for raw_edge, payload in prepared:
@@ -3276,11 +3423,19 @@ class ReactFlow(ReactComponent):
         for _, payload in prepared:
             self._emit("edge_added", {"type": "edge_added", "edge": payload})
 
-    def _prepare_edge(self, edge: dict[str, Any] | EdgeSpec | Edge) -> tuple[dict[str, Any] | Edge, dict[str, Any]]:
-        """Coerce and validate an edge to add, returning it with its payload."""
+    def _prepare_edge(
+        self, edge: dict[str, Any] | EdgeSpec | Edge, node_ids: set[Any], edge_ids: set[Any]
+    ) -> tuple[dict[str, Any] | Edge, dict[str, Any]]:
+        """Coerce and validate an edge to add, returning it with its payload.
+
+        *node_ids* are the ids of the graph's nodes and *edge_ids* those of its
+        edges plus the edges accepted earlier in the batch; the edge's id is
+        added to *edge_ids* once it passes.
+        """
         raw_edge = self._coerce_edge(edge)
         payload = self._edge_payload(raw_edge)
         payload.setdefault("data", {})
+        self._check_edge_payload(payload, node_ids, edge_ids)
         if not payload.get("id"):
             payload["id"] = self._generate_edge_id(payload["source"], payload["target"])
         self._validate_graph_payload(payload, kind="edge")
@@ -3288,6 +3443,7 @@ class ReactFlow(ReactComponent):
             edge_type = payload.get("type")
             schema = self._get_edge_schema(edge_type) if edge_type else None
             _validate_data(payload.get("data", {}), schema)
+        edge_ids.add(payload["id"])
         return raw_edge, payload
 
     def remove_edge(self, *edge_ids: str | Sequence[str]) -> None:
@@ -3308,7 +3464,7 @@ class ReactFlow(ReactComponent):
         --------
         Remove an edge:
 
-        >>> flow = ReactFlow()
+        >>> flow = ReactFlow(nodes=[NodeSpec(id="n1"), NodeSpec(id="n2")])
         >>> flow.add_edge(EdgeSpec(id="e1", source="n1", target="n2"))
         >>> flow.remove_edge("e1")
 
@@ -3368,6 +3524,7 @@ class ReactFlow(ReactComponent):
         Top-level React Flow fields are patched separately, by
         ``patch_node_props``/``patch_edge_props``.
         """
+        _ensure_jsonable(patch, f"patch for {item_id!r}")
         item = get_item(item_id)
         if item is None:
             return
@@ -3551,6 +3708,7 @@ class ReactFlow(ReactComponent):
     def _validate_prop_patch(self, patch: dict[str, Any], *, kind: str, allowed: tuple[str, ...]) -> None:
         unknown = [key for key in patch if key not in allowed]
         if not unknown:
+            _ensure_jsonable(patch, f"{kind} property patch")
             return
         hint = f"Use patch_{kind}_data to update the {kind}'s data dictionary."
         prop_name = "property" if len(unknown) == 1 else "properties"
@@ -3967,7 +4125,15 @@ class ReactFlow(ReactComponent):
         """
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
+        original_ids: dict[str, Any] = {}
         for node_id, attrs in graph.nodes(data=True):
+            # Ids are stringified for the browser, so e.g. 1 and "1" would
+            # silently become one node.
+            if str(node_id) in original_ids:
+                raise ValueError(
+                    f"Nodes {original_ids[str(node_id)]!r} and {node_id!r} both map to the id {str(node_id)!r}; relabel the graph so node ids are unique as strings."
+                )
+            original_ids[str(node_id)] = node_id
             attrs = dict(attrs)  # avoids mutating the original graph
             position = attrs.pop("position", {"x": default_position[0], "y": default_position[1]})
             if isinstance(position, (tuple, list)):
@@ -3982,6 +4148,7 @@ class ReactFlow(ReactComponent):
             if label is not None:
                 node_payload["label"] = label
             nodes.append(node_payload)
+        edge_ids: set[str] = set()
         if graph.is_multigraph():
             edge_iter = graph.edges(keys=True, data=True)
         else:
@@ -3995,9 +4162,14 @@ class ReactFlow(ReactComponent):
             edge_type = edge_data.pop("type", None)
             source_handle = edge_data.pop("sourceHandle", None)
             target_handle = edge_data.pop("targetHandle", None)
-            edge_id = key if key is not None else f"{source}->{target}"
+            edge_id = str(key if key is not None else f"{source}->{target}")
+            if edge_id in edge_ids:
+                # Multigraph keys are only unique per node pair (networkx
+                # numbers parallel edges 0, 1, ...).
+                edge_id = f"{source}->{target}:{key}"
+            edge_ids.add(edge_id)
             edge = {
-                "id": str(edge_id),
+                "id": edge_id,
                 "source": str(source),
                 "target": str(target),
                 "data": edge_data,
@@ -4122,7 +4294,9 @@ class ReactFlow(ReactComponent):
             Function called when the event occurs. Receives the event payload
             dictionary as the first argument. The callback may optionally
             accept the ``ReactFlow`` instance as a second argument, e.g.
-            ``callback(payload, flow)``.
+            ``callback(payload, flow)``. An exception raised by a callback
+            is logged and does not stop the remaining callbacks or hooks;
+            the change that triggered the event is applied either way.
 
         Examples
         --------
@@ -4201,6 +4375,7 @@ class ReactFlow(ReactComponent):
         Event payloads always include a ``"type"`` field indicating the
         event type, plus event-specific fields.
         """
+        _accepts_flow(callback)
         self._event_handlers.setdefault(event_type, []).append(callback)
 
     def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
@@ -4208,18 +4383,12 @@ class ReactFlow(ReactComponent):
         # This runs the message handling that triggered the event, so
         # deferring to the next tick would break Child-param updates (e.g.
         # via show_popup) made from inside a registered callback.
-        for callback in self._event_handlers.get(event_type, []):
-            if len(inspect.signature(callback).parameters) == 2:
-                cb = partial(callback, payload, self)
-            else:
-                cb = partial(callback, payload)
-            pn.state.execute(cb, schedule=False)
-        for callback in self._event_handlers.get("*", []):
-            if len(inspect.signature(callback).parameters) == 2:
-                cb = partial(callback, payload, self)
-            else:
-                cb = partial(callback, payload)
-            pn.state.execute(cb, schedule=False)
+        # Callbacks are isolated from each other: a raising callback is
+        # logged and the remaining callbacks and hooks still run.
+        for callback in list(self._event_handlers.get(event_type, [])):
+            self._invoke_node_callback(callback, payload, self)
+        for callback in list(self._event_handlers.get("*", [])):
+            self._invoke_node_callback(callback, payload, self)
         self._dispatch_node_hooks(event_type, payload)
         self._dispatch_edge_hooks(event_type, payload)
 
@@ -4277,6 +4446,82 @@ class ReactFlow(ReactComponent):
         if isinstance(edge, EdgeSpec):
             return edge.to_dict()
         return edge.to_dict() if hasattr(edge, "to_dict") else edge
+
+    def _check_node_payload(self, payload: dict[str, Any], node_ids: set[Any] | None = None) -> None:
+        """Raise ValueError if *payload* cannot be added as a new node.
+
+        Rejects a missing or duplicate id and data that cannot be synced to
+        the browser. *node_ids* are the ids already in the graph; pass a set
+        when checking many nodes to avoid rebuilding it per node.
+        """
+        node_id = payload.get("id")
+        if node_id is None or node_id == "":
+            raise ValueError("Missing 'id' in node payload.")
+        # The view is rendered as a Bokeh model, everything else is sent as JSON.
+        _ensure_jsonable({key: value for key, value in payload.items() if key != "view"}, f"node {node_id!r}")
+        if node_ids is None:
+            node_ids = {self._node_id(node) for node in self.nodes}
+        if node_id in node_ids:
+            raise _GraphConflictError(f"A node with id {node_id!r} already exists.")
+
+    def _check_edge_payload(
+        self,
+        payload: dict[str, Any],
+        node_ids: set[Any] | None = None,
+        edge_ids: set[Any] | None = None,
+    ) -> None:
+        """Raise ValueError if *payload* cannot be added as a new edge.
+
+        Rejects a missing ``source``/``target``, endpoints that are not nodes
+        of the graph, a duplicate id and data that cannot be synced to the
+        browser. Self-loops are allowed. *node_ids* and *edge_ids* are the ids
+        already in the graph; pass sets when checking many edges.
+        """
+        for key in ("source", "target"):
+            if payload.get(key) is None:
+                raise ValueError(f"Missing '{key}' in edge payload.")
+        edge_id = payload.get("id")
+        _ensure_jsonable(payload, f"edge {edge_id!r}")
+        if node_ids is None:
+            node_ids = {self._node_id(node) for node in self.nodes}
+        for key in ("source", "target"):
+            if payload[key] not in node_ids:
+                raise _GraphConflictError(f"Edge {payload.get('id')!r} references unknown {key} node {payload[key]!r}.")
+        if edge_id:
+            if edge_ids is None:
+                edge_ids = {self._edge_id(edge) for edge in self.edges}
+            if edge_id in edge_ids:
+                raise _GraphConflictError(f"An edge with id {edge_id!r} already exists.")
+
+    def _check_graph(self, nodes: list[Any], edges: list[Any]) -> None:
+        """Validate a complete graph passed to the constructor.
+
+        Malformed or non-JSON items raise, since they break every sync.
+        Duplicate ids and edges pointing at missing nodes only warn, to keep
+        accepting graphs that rendered before these checks existed.
+        """
+        node_ids: set[Any] = set()
+        for node in nodes:
+            if isinstance(node, Node):
+                # Node.to_dict() would build the node's view just for the check.
+                data = dict(node.data or {})
+                data.update({name: getattr(node, name) for name in node._data_param_names()})
+                payload = {"id": node.id, "position": node.position, "label": node.label, "style": node.style, "data": data}
+            else:
+                payload = self._node_payload(node)
+            try:
+                self._check_node_payload(payload, node_ids)
+            except _GraphConflictError as exc:
+                _LOGGER.warning("panel-reactflow %s", exc)
+            node_ids.add(payload["id"])
+        edge_ids: set[Any] = set()
+        for edge in edges:
+            payload = self._edge_payload(edge)
+            try:
+                self._check_edge_payload(payload, node_ids, edge_ids)
+            except _GraphConflictError as exc:
+                _LOGGER.warning("panel-reactflow %s", exc)
+            edge_ids.add(payload.get("id"))
 
     def _validate_graph_payload(self, payload: dict[str, Any], *, kind: str) -> None:
         required = {"node": ["id", "position", "data"], "edge": ["id", "source", "target"]}[kind]

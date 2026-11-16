@@ -36,40 +36,81 @@ function getHandle(spec, direction, id) {
   return handles.find((handle) => (typeof handle === "string" ? handle : handle.id) === id) ?? null;
 }
 
-function localConnectionReason(connection, nodes, edges, nodeTypeSpecs, policy) {
+const graphIndexCache = new WeakMap();
+
+// Lookups the connection policies need per candidate handle. Built once per
+// nodes/edges snapshot, so a drag evaluating every handle in the graph does
+// not rescan the edges (and rerun a BFS) for each handle.
+function graphIndex(nodes, edges) {
+  let byNodes = graphIndexCache.get(edges);
+  if (!byNodes) {
+    byNodes = new WeakMap();
+    graphIndexCache.set(edges, byNodes);
+  }
+  let index = byNodes.get(nodes);
+  if (index) return index;
+  const successors = new Map();
+  const predecessors = new Map();
+  const edgeKeys = new Set();
+  const targetCounts = new Map();
+  edges.forEach((edge) => {
+    if (!successors.has(edge.source)) successors.set(edge.source, []);
+    successors.get(edge.source).push(edge.target);
+    if (!predecessors.has(edge.target)) predecessors.set(edge.target, []);
+    predecessors.get(edge.target).push(edge.source);
+    edgeKeys.add(JSON.stringify([edge.source, edge.target, edge.sourceHandle ?? null, edge.targetHandle ?? null]));
+    const targetKey = JSON.stringify([edge.target, edge.targetHandle ?? null]);
+    targetCounts.set(targetKey, (targetCounts.get(targetKey) || 0) + 1);
+  });
+  const reachCache = new Map();
+  const reachable = (start, adjacency, tag) => {
+    const key = `${tag}:${start}`;
+    let visited = reachCache.get(key);
+    if (visited) return visited;
+    visited = new Set();
+    const queue = [start];
+    while (queue.length) {
+      const current = queue.pop();
+      if (visited.has(current)) continue;
+      visited.add(current);
+      queue.push(...(adjacency.get(current) || []));
+    }
+    reachCache.set(key, visited);
+    return visited;
+  };
+  index = {
+    byId: new Map(nodes.map((node) => [node.id, node])),
+    edgeKeys,
+    targetCounts,
+    // Reaching the fixed end of the drag reuses one traversal for every candidate.
+    wouldCycle: (sourceId, targetId, pinned) => (pinned === "source"
+      ? reachable(sourceId, predecessors, "up").has(targetId)
+      : reachable(targetId, successors, "down").has(sourceId)),
+  };
+  byNodes.set(nodes, index);
+  return index;
+}
+
+function localConnectionReason(connection, nodes, edges, nodeTypeSpecs, policy, pinned) {
   if (!Object.values(policy || {}).some(Boolean)) return null;
-  const source = nodes.find((node) => node.id === connection.source);
-  const target = nodes.find((node) => node.id === connection.target);
+  const index = graphIndex(nodes, edges);
+  const source = index.byId.get(connection.source);
+  const target = index.byId.get(connection.target);
   if (!source || !target) return "Node not found";
   const sourceHandle = getHandle(nodeTypeSpecs[source.type], "source", connection.sourceHandle);
   const targetHandle = getHandle(nodeTypeSpecs[target.type], "target", connection.targetHandle);
   if (policy.direction && (!sourceHandle || !targetHandle)) return "Connect an output to an input";
   if (policy.cycles) {
     if (source.id === target.id) return "Connection would create a cycle";
-    const successors = new Map();
-    edges.forEach((edge) => {
-      if (!successors.has(edge.source)) successors.set(edge.source, []);
-      successors.get(edge.source).push(edge.target);
-    });
-    const visited = new Set();
-    const queue = [target.id];
-    while (queue.length) {
-      const current = queue.pop();
-      if (current === source.id) return "Connection would create a cycle";
-      if (visited.has(current)) continue;
-      visited.add(current);
-      queue.push(...(successors.get(current) || []));
-    }
+    if (index.wouldCycle(source.id, target.id, pinned)) return "Connection would create a cycle";
   }
-  if (policy.duplicates && edges.some((edge) =>
-    edge.source === source.id && edge.target === target.id &&
-    (edge.sourceHandle ?? null) === (connection.sourceHandle ?? null) &&
-    (edge.targetHandle ?? null) === (connection.targetHandle ?? null)
-  )) return "Connection already exists";
+  if (policy.duplicates && index.edgeKeys.has(JSON.stringify([
+    source.id, target.id, connection.sourceHandle ?? null, connection.targetHandle ?? null,
+  ]))) return "Connection already exists";
   if (policy.capacity && targetHandle && typeof targetHandle === "object") {
     const limit = targetHandle.maxConnections;
     if (Number.isInteger(limit) && limit > 0 &&
-      edges.filter((edge) => edge.target === target.id && (edge.targetHandle ?? null) === (connection.targetHandle ?? null)).length >= limit
+      (index.targetCounts.get(JSON.stringify([target.id, connection.targetHandle ?? null])) || 0) >= limit
     ) return "Input already has a connection";
   }
   if (policy.types && sourceHandle && targetHandle && typeof sourceHandle === "object" && typeof targetHandle === "object") {
@@ -1095,7 +1136,9 @@ function FlowInner({
   const requestIdRef = useRef(0);
 
   const candidateReason = useCallback((connection) => {
-    const local = localConnectionReason(connection, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation);
+    const local = localConnectionReason(
+      connection, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation, dragRef.current?.handleType,
+    );
     if (local) return local;
     if (!hasConnectionValidators) return null;
     const current = dragRef.current;
@@ -1213,6 +1256,11 @@ function FlowInner({
         };
         resultsRef.current = result;
         setValidationResults(result);
+        return;
+      }
+      if (msg.type === "edge_rejected") {
+        // Python refused a connection the browser already drew.
+        setEdges((current) => current.filter((edge) => edge.id !== msg.edge_id));
         return;
       }
       if (msg.type === "fit_view") {
