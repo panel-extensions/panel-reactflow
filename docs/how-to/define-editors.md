@@ -23,6 +23,12 @@ without a dedicated widget, such as a nested object, is shown as a literal
 input rather than replacing the whole form. Dates are written back to the
 node data as ISO 8601 strings.
 
+When `panel-material-ui` is installed the form uses its widgets, but loading
+it for the editor does not switch the global `pn.config.design` to
+`MaterialDesign` the way importing `panel_material_ui` normally does. If the
+rest of your app should use the Material design, import `panel_material_ui`
+before building the first editor, or set `pn.config.design` explicitly.
+
 ![Screenshot: a node with schema-driven form editor open in the side panel](../assets/screenshots/define-editors-node.png)
 
 ---
