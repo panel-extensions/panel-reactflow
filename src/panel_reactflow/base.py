@@ -1766,7 +1766,8 @@ class ReactFlow(ReactComponent):
 
     # Internal view parameters
     _node_editors = param.Dict(default={}, doc="Per-node editors.", precedence=-1)
-    _node_editor_views = Children(default=[], doc="Node editor views (one per node, same order).")
+    _node_editor_views = Children(default=[], doc="Node editor views, in the order of _node_editor_ids.")
+    _node_editor_ids = param.List(default=[], doc="Ids of the nodes whose editors are in _node_editor_views.")
     _edge_editors = param.Dict(default={}, doc="Per-edge editors.", precedence=-1)
     _selected_editor = Child(doc="Active editor for the selected node/edge in side mode.")
     _context_menu = Child(doc="Context menu component rendered on node right-click.")
@@ -1790,14 +1791,29 @@ class ReactFlow(ReactComponent):
     def __init__(self, **params: Any):
         if "color_mode" not in params:
             params["color_mode"] = "dark" if pn.config.theme == "dark" else "light"
-        self._node_ids: list[str] = []
-        self._edge_keys: list[tuple[str, str]] = []
         self._attached_node_instances: dict[int, Node] = {}
         self._attached_edge_instances: dict[int, Edge] = {}
         self._node_data_param_watchers: dict[str, tuple[Node, list[Any]]] = {}
         self._edge_data_param_watchers: dict[str, tuple[Edge, list[Any]]] = {}
         self._suppress_prop_sync = False
         self._node_view_cache: dict[str, tuple[int, Any]] = {}
+        # id -> node/edge indexes, rebuilt once per structural change so that
+        # lookups by id do not scan the graph.
+        self._node_index: dict[str, dict[str, Any] | Node] = {}
+        self._edge_index: dict[str, dict[str, Any] | Edge] = {}
+        self._first_node_by_type: dict[str, Node] = {}
+        self._first_edge_by_type: dict[str, Edge] = {}
+        self._schema_cache: dict[tuple[str, str], dict[str, Any] | None] = {}
+        # Editors are built lazily and cached under a key describing what
+        # they were built from, so that a replaced node or a type change
+        # builds a fresh editor.
+        self._editor_keys: dict[tuple[str, str], tuple[Any, ...]] = {}
+        self._requested_node_editors: dict[str, None] = {}
+        self._editor_data: dict[tuple[str, str], dict[str, Any]] = {}
+        self._view_refs: list[int] = []
+        self._editor_view_refs: list[int] = []
+        self._patching_editor: tuple[str, str] | None = None
+        self._selected_editor_source: Any = None
         # Normalize type specs before parent init so the frontend receives
         # JSON-serializable descriptors from the start.
         if "node_types" in params:
@@ -1812,31 +1828,22 @@ class ReactFlow(ReactComponent):
         super().__init__(**params)
         self._event_handlers: dict[str, list[Callable]] = {"*": []}
         self._connection_validators: list[Callable] = []
-        self.param.watch(self._sync_instance_flow_refs, ["nodes", "edges"])
-        self.param.watch(self._normalize_nodes, ["nodes"])
-        self.param.watch(self._normalize_edges, ["edges"])
-        self.param.watch(self._update_instance_data_param_watchers, ["nodes", "edges"])
-        self.param.watch(self._update_selection_from_graph, ["nodes", "edges"])
+        with param.discard_events(self):
+            self._node_editors = {}
+            self._edge_editors = {}
+        # A single watcher handles every structural change: param deep
+        # compares old and new values once per watcher, which for large
+        # graphs costs more than the bookkeeping itself. The handler does
+        # its own (identity based) change detection instead.
+        self.param.watch(self._on_graph_change, ["nodes", "edges"], onlychanged=False)
         self.param.watch(self._normalize_specs, ["node_types", "edge_types"])
         self.param.watch(
-            self._update_node_editors,
-            ["nodes", "editor_mode", "node_editors", "default_node_editor"],
+            self._on_editor_config_change,
+            ["editor_mode", "node_types", "edge_types", "node_editors", "edge_editors", "default_node_editor", "default_edge_editor"],
         )
-        self.param.watch(
-            self._update_edge_editors,
-            ["edges", "edge_types", "edge_editors", "default_edge_editor"],
-        )
-        self.param.watch(
-            self._update_selected_editor,
-            ["selection", "editor_mode", "editable", "nodes", "edges"],
-        )
-        self.param.watch(self._update_views, ["nodes"])
+        self.param.watch(self._update_selected_editor, ["selection", "editable"])
         self.param.watch(self._clear_selection_if_unselectable, ["selectable"])
-        self._sync_instance_flow_refs()
-        self._update_node_editors()
-        self._update_edge_editors()
-        self._update_selected_editor()
-        self._update_instance_data_param_watchers()
+        self._on_graph_change()
 
     @classmethod
     def _esm_path(cls, compiled: bool | Literal["compiling"] = True) -> os.PathLike | None:
@@ -1866,26 +1873,24 @@ class ReactFlow(ReactComponent):
         type_spec = self.node_types.get(node_type)
         if type_spec is not None and type_spec.get("schema") is not None:
             return type_spec.get("schema")
-        for node in self.nodes:
-            if isinstance(node, Node) and node.type == node_type:
-                schema = node._data_schema()
-                if schema.get("properties"):
-                    return schema
-                break
-        return None
+        key = ("node", node_type)
+        if key not in self._schema_cache:
+            node = self._first_node_by_type.get(node_type)
+            schema = node._data_schema() if node is not None else None
+            self._schema_cache[key] = schema if schema and schema.get("properties") else None
+        return self._schema_cache[key]
 
     def _get_edge_schema(self, edge_type: str) -> dict[str, Any] | None:
         """Return the normalized JSON Schema for *edge_type*, or ``None``."""
         type_spec = self.edge_types.get(edge_type)
         if type_spec is not None and type_spec.get("schema") is not None:
             return type_spec.get("schema")
-        for edge in self.edges:
-            if isinstance(edge, Edge) and (edge.type or "") == edge_type:
-                schema = edge._data_schema()
-                if schema.get("properties"):
-                    return schema
-                break
-        return None
+        key = ("edge", edge_type)
+        if key not in self._schema_cache:
+            edge = self._first_edge_by_type.get(edge_type)
+            schema = edge._data_schema() if edge is not None else None
+            self._schema_cache[key] = schema if schema and schema.get("properties") else None
+        return self._schema_cache[key]
 
     def _create_editor(
         self,
@@ -1895,22 +1900,29 @@ class ReactFlow(ReactComponent):
         schema: dict | None,
         item_type: str,
         *,
-        patch_fn: Callable[..., None],
+        kind: str,
     ) -> Any:
         """Instantiate an editor from *factory*.
 
         All editors (classes and plain callables) receive the unified
         signature ``(data, schema, *, id, type, on_patch)``.
 
-        *patch_fn* is the method to call when data changes –
-        ``patch_node_data`` for nodes, ``patch_edge_data`` for edges.
+        Patches reported by the editor are applied with ``patch_node_data``
+        for nodes and ``patch_edge_data`` for edges, without echoing the
+        resulting data back into the editor that produced them.
         """
+        patch_fn = self.patch_node_data if kind == "node" else self.patch_edge_data
 
         def on_patch(patch: dict, *, remove: Sequence[str] | None = None) -> None:
-            if remove:
-                patch_fn(item_id, patch, remove=remove)
-            else:
-                patch_fn(item_id, patch)
+            previous = self._patching_editor
+            self._patching_editor = (kind, item_id)
+            try:
+                if remove:
+                    patch_fn(item_id, patch, remove=remove)
+                else:
+                    patch_fn(item_id, patch)
+            finally:
+                self._patching_editor = previous
 
         return factory(data, schema, id=item_id, type=item_type, on_patch=on_patch)
 
@@ -1956,13 +1968,6 @@ class ReactFlow(ReactComponent):
             node["position"] = position
 
     @staticmethod
-    def _node_set_selected(node: dict[str, Any] | Node, selected: bool) -> None:
-        if isinstance(node, Node):
-            node.selected = selected
-        else:
-            node["selected"] = selected
-
-    @staticmethod
     def _node_set_data(node: dict[str, Any] | Node, data: dict[str, Any]) -> None:
         if isinstance(node, Node):
             node.data = dict(data)
@@ -1994,13 +1999,6 @@ class ReactFlow(ReactComponent):
         return dict(edge.get("data", {}))
 
     @staticmethod
-    def _edge_set_selected(edge: dict[str, Any] | Edge, selected: bool) -> None:
-        if isinstance(edge, Edge):
-            edge.selected = selected
-        else:
-            edge["selected"] = selected
-
-    @staticmethod
     def _edge_set_data(edge: dict[str, Any] | Edge, data: dict[str, Any]) -> None:
         if isinstance(edge, Edge):
             edge.data = dict(data)
@@ -2015,17 +2013,56 @@ class ReactFlow(ReactComponent):
             return edge.to_dict()
         return dict(edge)
 
-    def _get_node_instance(self, node_id: str) -> Node | None:
+    def _rebuild_node_index(self) -> None:
+        index: dict[str, dict[str, Any] | Node] = {}
+        first_by_type: dict[str, Node] = {}
         for node in self.nodes:
-            if isinstance(node, Node) and node.id == node_id:
-                return node
+            node_id = self._node_id(node)
+            if node_id is not None:
+                index.setdefault(node_id, node)
+            if isinstance(node, Node):
+                first_by_type.setdefault(node.type, node)
+        self._node_index = index
+        self._first_node_by_type = first_by_type
+
+    def _rebuild_edge_index(self) -> None:
+        index: dict[str, dict[str, Any] | Edge] = {}
+        first_by_type: dict[str, Edge] = {}
+        for edge in self.edges:
+            edge_id = self._edge_id(edge)
+            if edge_id is not None:
+                index.setdefault(edge_id, edge)
+            if isinstance(edge, Edge):
+                first_by_type.setdefault(edge.type or "", edge)
+        self._edge_index = index
+        self._first_edge_by_type = first_by_type
+
+    def _get_node(self, node_id: str) -> dict[str, Any] | Node | None:
+        node = self._node_index.get(node_id)
+        if node is not None and self._node_id(node) == node_id:
+            return node
+        # The id of a Node instance may have been reassigned in place.
+        if node is not None or any(instance.id == node_id for instance in self._attached_node_instances.values()):
+            self._rebuild_node_index()
+            return self._node_index.get(node_id)
         return None
 
-    def _get_edge_instance(self, edge_id: str) -> Edge | None:
-        for edge in self.edges:
-            if isinstance(edge, Edge) and edge.id == edge_id:
-                return edge
+    def _get_edge(self, edge_id: str) -> dict[str, Any] | Edge | None:
+        edge = self._edge_index.get(edge_id)
+        if edge is not None and self._edge_id(edge) == edge_id:
+            return edge
+        if edge is not None or any(instance.id == edge_id for instance in self._attached_edge_instances.values()):
+            self._rebuild_edge_index()
+            return self._edge_index.get(edge_id)
         return None
+
+    def _get_node_instance(self, node_id: str) -> Node | None:
+        node = self._get_node(node_id)
+        return node if isinstance(node, Node) else None
+
+    def _get_edge_instance(self, edge_id: str) -> Edge | None:
+        edge = self._get_edge(edge_id)
+        return edge if isinstance(edge, Edge) else None
 
     @staticmethod
     def _sync_node_data_params_from_data(node: Node) -> None:
@@ -2050,10 +2087,6 @@ class ReactFlow(ReactComponent):
                 item.param.unwatch(watcher)
             except Exception:
                 pass
-
-    def _update_instance_data_param_watchers(self, *_: param.parameterized.Event) -> None:
-        self._update_node_data_param_watchers()
-        self._update_edge_data_param_watchers()
 
     def _sync_instance_flow_refs(self, *_: param.parameterized.Event) -> None:
         current_nodes = {id(node): node for node in self.nodes if isinstance(node, Node)}
@@ -2270,100 +2303,221 @@ class ReactFlow(ReactComponent):
                 self._invoke_edge_hook(edge, hook_name, payload)
             self._invoke_edge_hook(edge, "on_event", payload)
 
-    def _update_node_editors(self, *events: tuple[param.parameterized.Event]) -> None:
-        node_ids = [self._node_id(node) for node in self.nodes]
-        node_ids = [node_id for node_id in node_ids if node_id is not None]
-        config_changed = any(event.name in ("editor_mode", "node_editors", "default_node_editor") for event in events)
-        if node_ids == self._node_ids and not config_changed:
-            return
-        self._node_ids = node_ids
+    def _on_graph_change(self, *events: param.parameterized.Event) -> None:
+        """Bring all derived state up to date after ``nodes``/``edges`` change.
 
-        editors = {}
-        for node in self.nodes:
-            node_id = self._node_id(node)
-            if node_id is None:
-                continue
-            if node_id in self._node_editors and not config_changed:
-                editors[node_id] = self._node_editors[node_id]
-                continue
-            node_type = self._node_type(node)
-            editor_factory = None
-            if isinstance(node, Node) and type(node).editor is not Node.editor:
-                editor_factory = node.editor
-            if editor_factory is None:
-                editor_factory = self.node_editors.get(node_type) or self.default_node_editor or SchemaEditor
-            schema = self._get_node_schema(node_type)
-            data = self._node_data(node)
-            if callable(editor_factory):
-                editor = self._create_editor(
-                    editor_factory,
-                    node_id,
-                    data,
-                    schema,
-                    node_type,
-                    patch_fn=self.patch_node_data,
-                )
-            else:
-                editor = editor_factory
-            editors[node_id] = editor
-        self._node_editors = editors
-        self.param.trigger("_node_editor_views")
-        if self.selection.get("nodes"):
+        Everything derived from the graph (indexes, instance bookkeeping,
+        selection, editors and views) is updated here, in one pass, instead
+        of in a watcher per concern.
+        """
+        if events:
+            names = {event.name for event in events if event.type == "triggered" or not self._same_items(event.old, event.new)}
+            if not names:
+                return
+        else:
+            names = {"nodes", "edges"}
+        updates: dict[str, list[Any]] = {}
+        if "nodes" in names:
+            normalized_nodes = [self._coerce_node(node) for node in self.nodes]
+            if any(n1 is not n2 for n1, n2 in zip(normalized_nodes, self.nodes, strict=False)):
+                updates["nodes"] = normalized_nodes
+        if "edges" in names:
+            normalized_edges = [self._coerce_edge(edge) for edge in self.edges]
+            if any(e1 is not e2 for e1, e2 in zip(normalized_edges, self.edges, strict=False)):
+                updates["edges"] = normalized_edges
+        if updates:
+            # Re-enters this handler with the normalized lists.
+            self.param.update(**updates)
+            names -= set(updates)
+            if not names:
+                return
+        self._schema_cache.clear()
+        if "nodes" in names:
+            self._rebuild_node_index()
+        if "edges" in names:
+            self._rebuild_edge_index()
+        self._sync_instance_flow_refs()
+        if "nodes" in names:
+            self._update_node_data_param_watchers()
+        if "edges" in names:
+            self._update_edge_data_param_watchers()
+        self._update_selection_from_graph()
+        self._prune_editors()
+        if "nodes" in names:
+            self._update_views()
+            self._refresh_node_editor_views()
+        self._update_selected_editor()
+
+    @staticmethod
+    def _same_items(old: Any, new: Any) -> bool:
+        return old is new or (isinstance(old, list) and isinstance(new, list) and len(old) == len(new) and all(o is n for o, n in zip(old, new, strict=True)))
+
+    def _on_editor_config_change(self, *events: param.parameterized.Event) -> None:
+        names = {event.name for event in events}
+        self._schema_cache.clear()
+        if names & {"editor_mode", "node_types", "node_editors", "default_node_editor"}:
+            self._drop_editors("node")
+        if names & {"edge_types", "edge_editors", "default_edge_editor"}:
+            self._drop_editors("edge")
+        if "editor_mode" in names:
+            # Node components remount when the mode changes, which closes
+            # every open toolbar.
+            self._requested_node_editors.clear()
+        self._refresh_node_editor_views()
+        self._update_selected_editor()
+
+    def _editor_cache(self, kind: str) -> dict[str, Any]:
+        return self._node_editors if kind == "node" else self._edge_editors
+
+    def _drop_editors(self, kind: str, item_ids: Sequence[str] | None = None) -> None:
+        cache = self._editor_cache(kind)
+        for item_id in list(cache) if item_ids is None else item_ids:
+            cache.pop(item_id, None)
+            self._editor_keys.pop((kind, item_id), None)
+            self._editor_data.pop((kind, item_id), None)
+
+    def _editor_key(self, kind: str, item: dict[str, Any] | Node | Edge) -> tuple[Any, ...]:
+        """Describe what an editor is built from; a change requires a new editor."""
+        if kind == "node":
+            return (id(item) if isinstance(item, Node) else None, self._node_type(item))
+        return (id(item) if isinstance(item, Edge) else None, self._edge_type(item))
+
+    def _prune_editors(self) -> None:
+        """Drop cached editors whose node/edge was removed, replaced or retyped."""
+        for kind, index in (("node", self._node_index), ("edge", self._edge_index)):
+            stale = []
+            for item_id in self._editor_cache(kind):
+                item = index.get(item_id)
+                if item is None or self._editor_key(kind, item) != self._editor_keys.get((kind, item_id)):
+                    stale.append(item_id)
+                else:
+                    self._sync_editor_data(kind, item_id, item)
+            self._drop_editors(kind, stale)
+        for node_id in [node_id for node_id in self._requested_node_editors if node_id not in self._node_index]:
+            del self._requested_node_editors[node_id]
+
+    def _sync_editor_data(self, kind: str, item_id: str, item: dict[str, Any] | Node | Edge) -> None:
+        """Push data changed outside an editor into the cached editor.
+
+        :class:`Editor` instances receive the new data on ``_data``; editors
+        returned by other factories cannot be updated, so they are dropped and
+        rebuilt the next time they are displayed.
+        """
+        key = (kind, item_id)
+        if key not in self._editor_data:
+            return
+        data = self._node_data(item) if kind == "node" else self._edge_data(item)
+        if data == self._editor_data[key]:
+            return
+        self._editor_data[key] = data
+        if key == self._patching_editor:
+            return
+        editor = self._editor_cache(kind).get(item_id)
+        if isinstance(editor, Editor):
+            editor._data = dict(data)
+        elif editor is not None:
+            self._drop_editors(kind, [item_id])
+            if kind == "node":
+                self._refresh_node_editor_views()
             self._update_selected_editor()
 
-    def _update_edge_editors(self, *events: tuple[param.parameterized.Event]) -> None:
-        # Keyed by type too, so retyping an edge re-resolves its editor.
-        edge_keys = [(self._edge_id(edge), self._edge_type(edge)) for edge in self.edges]
-        edge_keys = [key for key in edge_keys if key[0] is not None]
-        config_changed = any(event.name in ("edge_types", "edge_editors", "default_edge_editor") for event in events)
-        if edge_keys == self._edge_keys and not config_changed:
-            return
-        previous_types = dict(self._edge_keys)
-        self._edge_keys = edge_keys
+    def _build_node_editor(self, node: dict[str, Any] | Node) -> Any:
+        node_id = self._node_id(node)
+        node_type = self._node_type(node)
+        editor_factory = None
+        if isinstance(node, Node) and type(node).editor is not Node.editor:
+            editor_factory = node.editor
+        if editor_factory is None:
+            editor_factory = self.node_editors.get(node_type) or self.default_node_editor or SchemaEditor
+        if not callable(editor_factory):
+            return editor_factory
+        schema = self._get_node_schema(node_type)
+        return self._create_editor(editor_factory, node_id, self._node_data(node), schema, node_type, kind="node")
 
-        editors = {}
-        for edge in self.edges:
-            edge_id = self._edge_id(edge)
-            if edge_id is None:
-                continue
-            edge_type = self._edge_type(edge)
-            if edge_id in self._edge_editors and previous_types.get(edge_id) == edge_type and not config_changed:
-                editors[edge_id] = self._edge_editors[edge_id]
-                continue
-            editor_factory = None
-            if isinstance(edge, Edge) and type(edge).editor is not Edge.editor:
-                editor_factory = edge.editor
-            if editor_factory is None:
-                editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor
-            schema = self._get_edge_schema(edge_type) if edge_type else None
-            if not (schema and schema.get("properties")) and isinstance(edge, Edge):
-                instance_schema = edge._data_schema()
-                if instance_schema.get("properties"):
-                    schema = instance_schema
-            if editor_factory is None:
-                # Edges are usually selected for their own sake, so unlike
-                # nodes (whose editor sits behind a toolbar toggle) only pop
-                # up an editor when there is a schema to build a form from.
-                if not (schema and schema.get("properties")):
-                    editors[edge_id] = None
-                    continue
-                editor_factory = SchemaEditor
-            data = self._edge_data(edge)
-            if callable(editor_factory):
-                editor = self._create_editor(
-                    editor_factory,
-                    edge_id,
-                    data,
-                    schema,
-                    edge_type,
-                    patch_fn=self.patch_edge_data,
-                )
-            else:
-                editor = editor_factory
-            editors[edge_id] = editor
-        self._edge_editors = editors
-        if self.selection.get("edges"):
-            self._update_selected_editor()
+    def _build_edge_editor(self, edge: dict[str, Any] | Edge) -> Any:
+        edge_id = self._edge_id(edge)
+        edge_type = self._edge_type(edge)
+        editor_factory = None
+        if isinstance(edge, Edge) and type(edge).editor is not Edge.editor:
+            editor_factory = edge.editor
+        if editor_factory is None:
+            editor_factory = self.edge_editors.get(edge_type) or self.default_edge_editor
+        schema = self._get_edge_schema(edge_type) if edge_type else None
+        if not (schema and schema.get("properties")) and isinstance(edge, Edge):
+            instance_schema = edge._data_schema()
+            if instance_schema.get("properties"):
+                schema = instance_schema
+        if editor_factory is None:
+            # Edges are usually selected for their own sake, so unlike
+            # nodes (whose editor sits behind a toolbar toggle) only pop
+            # up an editor when there is a schema to build a form from.
+            if not (schema and schema.get("properties")):
+                return None
+            editor_factory = SchemaEditor
+        if not callable(editor_factory):
+            return editor_factory
+        return self._create_editor(editor_factory, edge_id, self._edge_data(edge), schema, edge_type, kind="edge")
+
+    def _get_editor(self, kind: str, item_id: str) -> Any:
+        """Return the (lazily built and cached) editor for a node or edge."""
+        item = self._get_node(item_id) if kind == "node" else self._get_edge(item_id)
+        if item is None:
+            return None
+        cache = self._editor_cache(kind)
+        key = self._editor_key(kind, item)
+        if item_id in cache and self._editor_keys.get((kind, item_id)) == key:
+            return cache[item_id]
+        editor = self._build_node_editor(item) if kind == "node" else self._build_edge_editor(item)
+        cache[item_id] = editor
+        self._editor_keys[(kind, item_id)] = key
+        self._editor_data[(kind, item_id)] = self._node_data(item) if kind == "node" else self._edge_data(item)
+        return editor
+
+    def _get_node_editor(self, node_id: str) -> Any:
+        return self._get_editor("node", node_id)
+
+    def _get_edge_editor(self, edge_id: str) -> Any:
+        return self._get_editor("edge", edge_id)
+
+    def _refresh_node_editor_views(self) -> None:
+        """Ship the node editors the frontend can currently display.
+
+        In ``"node"`` mode every node shows its editor inline. In
+        ``"toolbar"`` mode only editors whose toolbar was opened are built
+        (the frontend sends ``editor_requested``), and in ``"side"`` mode the
+        editor is rendered through ``_selected_editor`` instead.
+        """
+        if self.editor_mode == "node":
+            node_ids = list(self._node_index)
+        elif self.editor_mode == "toolbar":
+            node_ids = [node_id for node_id in self._requested_node_editors if node_id in self._node_index]
+        else:
+            node_ids = []
+        refs = [id(self._get_node_editor(node_id)) for node_id in node_ids]
+        if node_ids == self._node_editor_ids and refs == self._editor_view_refs:
+            return
+        self._editor_view_refs = refs
+        with param.discard_events(self):
+            self._node_editor_ids = node_ids
+        self.param.trigger("_node_editor_ids", "_node_editor_views")
+
+    def _request_node_editor(self, node_id: str | None) -> None:
+        if node_id is None or node_id in self._requested_node_editors or node_id not in self._node_index:
+            return
+        self._requested_node_editors[node_id] = None
+        self._refresh_node_editor_views()
+
+    def _on_retyped(self, kind: str) -> None:
+        """Rebuild what depends on node/edge types after a type patch."""
+        self._schema_cache.clear()
+        if kind == "node":
+            self._rebuild_node_index()
+        else:
+            self._rebuild_edge_index()
+        self._prune_editors()
+        if kind == "node":
+            self._refresh_node_editor_views()
+        self._update_selected_editor()
 
     def _clear_selection_if_unselectable(self, *_: param.parameterized.Event) -> None:
         if self.selectable or self.selection == {"nodes": [], "edges": []}:
@@ -2375,9 +2529,12 @@ class ReactFlow(ReactComponent):
         selected_edges = self.selection.get("edges", [])
         editor = None
         if self.editable and selected_nodes and self.editor_mode == "side":
-            editor = self._node_editors.get(selected_nodes[0])
+            editor = self._get_node_editor(selected_nodes[0])
         elif self.editable and selected_edges and not selected_nodes:
-            editor = self._edge_editors.get(selected_edges[0])
+            editor = self._get_edge_editor(selected_edges[0])
+        if editor is not None and editor is self._selected_editor_source:
+            return
+        self._selected_editor_source = editor
         self._selected_editor = None if editor is None else self._resolve_editor_view(editor)
 
     @staticmethod
@@ -2406,7 +2563,7 @@ class ReactFlow(ReactComponent):
         if self.editor_mode == "side":
             children["_node_editor_views"] = []
         else:
-            node_editors = [self._resolve_editor_view(self._node_editors.get(self._node_id(node))) for node in self.nodes]
+            node_editors = [self._resolve_editor_view(self._get_node_editor(node_id)) for node_id in self._node_editor_ids]
             editor_models, editor_old = self._get_child_model(node_editors, doc, root, parent, comm)
             children["_node_editor_views"] = editor_models
             old_models += editor_old
@@ -2434,16 +2591,14 @@ class ReactFlow(ReactComponent):
                 if BK_FIGURE_CSS not in fig.stylesheets:
                     fig.stylesheets = fig.stylesheets + [BK_FIGURE_CSS]
 
-    def _update_views(self, *events: tuple[param.parameterized.Event]) -> None:
-        event = events[0] if events else None
-        nodes = event.new if event is not None else self.nodes
-        normalized = [self._coerce_node(node) for node in nodes]
-        node_ids = {self._node_id(node) for node in normalized}
-        self._node_view_cache = {node_id: cached for node_id, cached in self._node_view_cache.items() if node_id in node_ids}
-        is_normalized = not any(n1 is not n2 for n1, n2 in zip(normalized, nodes, strict=False))
-        if not is_normalized:
-            return
-        self.param.trigger("_views")
+    def _update_views(self) -> None:
+        self._node_view_cache = {node_id: cached for node_id, cached in self._node_view_cache.items() if node_id in self._node_index}
+        refs = [id(view) for view in map(self._node_view, self.nodes) if view is not None]
+        # Rebuilding the children is expensive, so only do it when the views
+        # themselves (or their order) changed.
+        if refs != self._view_refs:
+            self._view_refs = refs
+            self.param.trigger("_views")
         self._node_update_count += 1
 
     def _process_param_change(self, params):
@@ -2550,6 +2705,64 @@ class ReactFlow(ReactComponent):
         remove_node : Remove a node from the graph
         NodeSpec : Helper for constructing node dictionaries
         """
+        self.add_nodes([node])
+
+    def add_nodes(self, nodes: Sequence[dict[str, Any] | NodeSpec | Node]) -> None:
+        """Add several nodes to the graph in a single update.
+
+        Equivalent to calling :meth:`add_node` for each node, but ``nodes`` is
+        assigned only once, so the graph is synced to the browser once
+        instead of once per node. Use it to build or load large graphs.
+
+        Every node is validated before any of them is added, so if one of
+        them is invalid none are added. A ``node_added`` event is emitted per
+        node, in order, after all of them were added.
+
+        Parameters
+        ----------
+        nodes : sequence of dict or NodeSpec or Node
+            The nodes to add, in any form accepted by :meth:`add_node`.
+
+        Raises
+        ------
+        ValueError
+            If any node is missing a required field or, with
+            ``validate_on_add``, its data does not match its type's schema.
+
+        Examples
+        --------
+        >>> flow = ReactFlow()
+        >>> flow.add_nodes([
+        ...     NodeSpec(id=f"n{i}", position={"x": 100 * i, "y": 0})
+        ...     for i in range(100)
+        ... ])
+
+        See Also
+        --------
+        add_node : Add a single node
+        add_edges : Add several edges in a single update
+        remove_node : Remove one or more nodes in a single update
+        """
+        prepared = [self._prepare_node(node) for node in nodes]
+        if not prepared:
+            return
+        for raw_node, payload in prepared:
+            if isinstance(raw_node, Node):
+                raw_node.type = payload["type"]
+                raw_node.data = dict(payload["data"])
+                raw_node.position = dict(payload["position"])
+                raw_node.selected = payload["selected"]
+                raw_node.draggable = payload["draggable"]
+                raw_node.connectable = payload["connectable"]
+                raw_node.deletable = payload["deletable"]
+                raw_node.flow = self
+                self._sync_node_data_params_from_data(raw_node)
+        self.nodes = self.nodes + [raw_node if isinstance(raw_node, Node) else payload for raw_node, payload in prepared]
+        for _, payload in prepared:
+            self._emit("node_added", {"type": "node_added", "node": payload})
+
+    def _prepare_node(self, node: dict[str, Any] | NodeSpec | Node) -> tuple[dict[str, Any] | Node, dict[str, Any]]:
+        """Coerce and validate a node to add, returning it with its payload."""
         raw_node = self._coerce_node(node)
         payload = self._node_payload(raw_node)
         payload.setdefault("type", "panel")
@@ -2559,22 +2772,29 @@ class ReactFlow(ReactComponent):
         payload.setdefault("draggable", True)
         payload.setdefault("connectable", True)
         payload.setdefault("deletable", True)
-        if isinstance(raw_node, Node):
-            raw_node.type = payload["type"]
-            raw_node.data = dict(payload["data"])
-            raw_node.position = dict(payload["position"])
-            raw_node.selected = payload["selected"]
-            raw_node.draggable = payload["draggable"]
-            raw_node.connectable = payload["connectable"]
-            raw_node.deletable = payload["deletable"]
-            raw_node.flow = self
-            self._sync_node_data_params_from_data(raw_node)
         self._validate_graph_payload(payload, kind="node")
         if self.validate_on_add:
             schema = self._get_node_schema(payload.get("type", "panel"))
             _validate_data(payload.get("data", {}), schema)
-        self.nodes = self.nodes + [raw_node if isinstance(raw_node, Node) else payload]
-        self._emit("node_added", {"type": "node_added", "node": payload})
+        return raw_node, payload
+
+    def _apply_selection(self, node_ids: Sequence[str], edge_ids: Sequence[str]) -> None:
+        """Set the ``selected`` flag of every node and edge from the browser selection.
+
+        Only items whose flag actually changes are touched, and unselected
+        dict items that never had the key are left alone, so that selecting
+        one node in a large graph does not rewrite every node and edge.
+        """
+        node_set, edge_set = set(node_ids), set(edge_ids)
+        with self._suppressed_prop_sync():
+            for items, get_id, selected_ids in ((self.nodes, self._node_id, node_set), (self.edges, self._edge_id, edge_set)):
+                for item in items:
+                    selected = get_id(item) in selected_ids
+                    if isinstance(item, (Node, Edge)):
+                        if item.selected != selected:
+                            item.selected = selected
+                    elif item.get("selected", False) != selected:
+                        item["selected"] = selected
 
     def _apply_sync(self, nodes: list[dict[str, Any]] | None, edges: list[dict[str, Any]] | None) -> None:
         """Apply a full graph payload coming from the frontend."""
@@ -2667,19 +2887,15 @@ class ReactFlow(ReactComponent):
                 position = msg.get("position")
                 if node_id is None or position is None:
                     return
-                for node in self.nodes:
-                    if self._node_id(node) == node_id:
-                        self._node_set_position(node, position)
+                node = self._get_node(node_id)
+                if node is not None:
+                    self._node_set_position(node, position)
                 self._emit("node_moved", msg)
             case "selection_changed":
                 node_ids = msg.get("nodes") or []
                 edge_ids = msg.get("edges") or []
-                for node in self.nodes:
-                    self._node_set_selected(node, self._node_id(node) in node_ids)
-                for edge in self.edges:
-                    self._edge_set_selected(edge, self._edge_id(edge) in edge_ids)
+                self._apply_selection(node_ids, edge_ids)
                 self.selection = {"nodes": list(node_ids), "edges": list(edge_ids)}
-                self._update_selected_editor()
                 self._emit("selection_changed", msg)
             case "edge_added":
                 edge = msg.get("edge")
@@ -2730,8 +2946,8 @@ class ReactFlow(ReactComponent):
                 position = msg.get("position")
                 if node_id is None:
                     return
-                node = next((n for n in self.nodes if self._node_id(n) == node_id), None)
-                if node is None or not isinstance(node, Node):
+                node = self._get_node_instance(node_id)
+                if node is None:
                     return
                 menu = node.context_menu()
                 if menu is None:
@@ -2739,6 +2955,8 @@ class ReactFlow(ReactComponent):
                 self._context_menu = menu
                 self._context_menu_position = position
                 self._emit("node_context_menu", msg)
+            case "editor_requested":
+                self._request_node_editor(msg.get("node_id"))
             case "close_context_menu":
                 self._context_menu = None
                 self._context_menu_position = None
@@ -2890,7 +3108,8 @@ class ReactFlow(ReactComponent):
         if removed_nodes:
             updates["nodes"] = remaining_nodes
         if removed_edges:
-            updates["edges"] = [edge for edge in self.edges if edge not in removed_edges]
+            removed_refs = {id(edge) for edge in removed_edges}
+            updates["edges"] = [edge for edge in self.edges if id(edge) not in removed_refs]
         if updates:
             self.param.update(**updates)
         # Report each edge under the first node that removed it, matching the
@@ -2993,23 +3212,69 @@ class ReactFlow(ReactComponent):
         remove_edge : Remove an edge from the graph
         EdgeSpec : Helper for constructing edge dictionaries
         """
+        self.add_edges([edge])
+
+    def add_edges(self, edges: Sequence[dict[str, Any] | EdgeSpec | Edge]) -> None:
+        """Add several edges to the graph in a single update.
+
+        Equivalent to calling :meth:`add_edge` for each edge, but ``edges`` is
+        assigned only once, so the graph is synced to the browser once
+        instead of once per edge.
+
+        Every edge is validated before any of them is added, so if one of
+        them is invalid none are added. An ``edge_added`` event is emitted per
+        edge, in order, after all of them were added.
+
+        Parameters
+        ----------
+        edges : sequence of dict or EdgeSpec or Edge
+            The edges to add, in any form accepted by :meth:`add_edge`.
+
+        Raises
+        ------
+        ValueError
+            If any edge is missing a required field or, with
+            ``validate_on_add``, its data does not match its type's schema.
+
+        Examples
+        --------
+        >>> flow.add_edges([
+        ...     EdgeSpec(source=f"n{i}", target=f"n{i + 1}")
+        ...     for i in range(99)
+        ... ])
+
+        See Also
+        --------
+        add_edge : Add a single edge
+        add_nodes : Add several nodes in a single update
+        remove_edge : Remove one or more edges in a single update
+        """
+        prepared = [self._prepare_edge(edge) for edge in edges]
+        if not prepared:
+            return
+        for raw_edge, payload in prepared:
+            if isinstance(raw_edge, Edge):
+                raw_edge.id = payload["id"]
+                raw_edge.data = dict(payload["data"])
+                raw_edge.flow = self
+                self._sync_edge_data_params_from_data(raw_edge)
+        self.edges = self.edges + [raw_edge if isinstance(raw_edge, Edge) else payload for raw_edge, payload in prepared]
+        for _, payload in prepared:
+            self._emit("edge_added", {"type": "edge_added", "edge": payload})
+
+    def _prepare_edge(self, edge: dict[str, Any] | EdgeSpec | Edge) -> tuple[dict[str, Any] | Edge, dict[str, Any]]:
+        """Coerce and validate an edge to add, returning it with its payload."""
         raw_edge = self._coerce_edge(edge)
         payload = self._edge_payload(raw_edge)
         payload.setdefault("data", {})
         if not payload.get("id"):
             payload["id"] = self._generate_edge_id(payload["source"], payload["target"])
-        if isinstance(raw_edge, Edge):
-            raw_edge.id = payload["id"]
-            raw_edge.data = dict(payload["data"])
-            raw_edge.flow = self
-            self._sync_edge_data_params_from_data(raw_edge)
         self._validate_graph_payload(payload, kind="edge")
         if self.validate_on_add:
             edge_type = payload.get("type")
             schema = self._get_edge_schema(edge_type) if edge_type else None
             _validate_data(payload.get("data", {}), schema)
-        self.edges = self.edges + [raw_edge if isinstance(raw_edge, Edge) else payload]
-        self._emit("edge_added", {"type": "edge_added", "edge": payload})
+        return raw_edge, payload
 
     def remove_edge(self, *edge_ids: str | Sequence[str]) -> None:
         """Remove one or more edges from the graph by their ID.
@@ -3071,10 +3336,10 @@ class ReactFlow(ReactComponent):
     def _apply_data_patch(
         self,
         *,
-        items: list,
+        kind: str,
         item_id: str,
         patch: dict[str, Any],
-        get_id: Callable[[Any], str | None],
+        get_item: Callable[[str], Any],
         get_data: Callable[[Any], dict[str, Any]],
         set_data: Callable[[Any, dict[str, Any]], None],
         get_schema: Callable[[Any], dict[str, Any] | None],
@@ -3089,19 +3354,19 @@ class ReactFlow(ReactComponent):
         Top-level React Flow fields are patched separately, by
         ``patch_node_props``/``patch_edge_props``.
         """
-        for item in items:
-            if get_id(item) != item_id:
-                continue
-            data = get_data(item)
-            for key in remove:
-                data.pop(key, None)
-            data.update(patch)
-            if self.validate_on_patch:
-                _validate_data(data, get_schema(item))
-            set_data(item, data)
-            if isinstance(item, instance_cls):
-                sync_from_data(item)
-            break
+        item = get_item(item_id)
+        if item is None:
+            return
+        data = get_data(item)
+        for key in remove:
+            data.pop(key, None)
+        data.update(patch)
+        if self.validate_on_patch:
+            _validate_data(data, get_schema(item))
+        set_data(item, data)
+        if isinstance(item, instance_cls):
+            sync_from_data(item)
+        self._sync_editor_data(kind, item_id, item)
 
     def patch_node_data(self, node_id: str, patch: dict[str, Any], *, remove: Sequence[str] | None = None) -> None:
         """Update specific properties in a node's data dictionary.
@@ -3166,10 +3431,10 @@ class ReactFlow(ReactComponent):
         add_node : Add a new node to the graph
         """
         self._apply_data_patch(
-            items=self.nodes,
+            kind="node",
             item_id=node_id,
             patch=patch,
-            get_id=self._node_id,
+            get_item=self._get_node,
             get_data=self._node_data,
             set_data=self._node_set_data,
             get_schema=lambda node: self._get_node_schema(self._node_type(node)),
@@ -3244,10 +3509,10 @@ class ReactFlow(ReactComponent):
         add_edge : Add a new edge to the graph
         """
         self._apply_data_patch(
-            items=self.edges,
+            kind="edge",
             item_id=edge_id,
             patch=patch,
-            get_id=self._edge_id,
+            get_item=self._get_edge,
             get_data=self._edge_data,
             set_data=self._edge_set_data,
             get_schema=lambda edge: self._get_edge_schema(self._edge_type(edge)) if self._edge_type(edge) else None,
@@ -3340,10 +3605,11 @@ class ReactFlow(ReactComponent):
         patch_edge_props : Update top-level edge properties
         """
         self._validate_prop_patch(patch, kind="node", allowed=Node._props)
-        for node in self.nodes:
-            if self._node_id(node) == node_id:
-                self._apply_prop_patch(node, patch)
-                break
+        node = self._get_node(node_id)
+        if node is not None:
+            self._apply_prop_patch(node, patch)
+            if "type" in patch:
+                self._on_retyped("node")
         self._send_msg({"type": "patch_node_props", "node_id": node_id, "patch": patch})
         self._emit("node_props_changed", {"type": "node_props_changed", "node_id": node_id, "patch": patch})
 
@@ -3390,12 +3656,11 @@ class ReactFlow(ReactComponent):
         patch_node_props : Update top-level node properties
         """
         self._validate_prop_patch(patch, kind="edge", allowed=Edge._props)
-        for edge in self.edges:
-            if self._edge_id(edge) == edge_id:
-                self._apply_prop_patch(edge, patch)
-                break
-        if "type" in patch:
-            self._update_edge_editors()
+        edge = self._get_edge(edge_id)
+        if edge is not None:
+            self._apply_prop_patch(edge, patch)
+            if "type" in patch:
+                self._on_retyped("edge")
         self._send_msg({"type": "patch_edge_props", "edge_id": edge_id, "patch": patch})
         self._emit("edge_props_changed", {"type": "edge_props_changed", "edge_id": edge_id, "patch": patch})
 
@@ -3977,20 +4242,6 @@ class ReactFlow(ReactComponent):
             normalized = _coerce_spec_map(event.new, edge=event.name == "edge_types")
             if normalized != event.new:
                 setattr(self, event.name, normalized)
-
-    def _normalize_nodes(self, event: param.parameterized.Event) -> None:
-        """Normalize nodes list by converting NodeSpec objects to dicts."""
-        normalized = [self._coerce_node(node) for node in event.new]
-        # Only update if there were actual changes to avoid infinite recursion
-        if any(n1 is not n2 for n1, n2 in zip(normalized, event.new, strict=False)):
-            self.nodes = normalized
-
-    def _normalize_edges(self, event: param.parameterized.Event) -> None:
-        """Normalize edges list by converting EdgeSpec objects to dicts."""
-        normalized = [self._coerce_edge(edge) for edge in event.new]
-        # Only update if there were actual changes to avoid infinite recursion
-        if any(e1 is not e2 for e1, e2 in zip(normalized, event.new, strict=False)):
-            self.edges = normalized
 
     @staticmethod
     def _generate_edge_id(source: str, target: str) -> str:

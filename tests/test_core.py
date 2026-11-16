@@ -83,7 +83,13 @@ def test_reactflow_add_node_dynamically_creates_views(flow_model):
     flow.add_node({"id": "n1", "position": {"x": 0, "y": 0}, "label": "Viewer Node", "data": {}, "view": Markdown("foo")})
 
     assert len(model.data._views) == 1
+    # Toolbar editors are only built once the frontend opens the toolbar.
+    assert len(model.data._node_editor_views) == 0
+
+    flow._handle_msg({"type": "editor_requested", "node_id": "n1"})
+
     assert len(model.data._node_editor_views) == 1
+    assert model.data._node_editor_ids == ["n1"]
 
 
 def test_bokeh_children_initialize_for_object_views_and_editors(flow_model) -> None:
@@ -104,6 +110,7 @@ def test_bokeh_children_initialize_for_object_views_and_editors(flow_model) -> N
             {"id": "n2", "position": {"x": 150, "y": 0}, "data": {}},
         ],
         edges=[EditorEdge(id="e1", source="n1", target="n2", data={})],
+        editor_mode="node",
     )
 
     model = flow_model(flow)
@@ -120,6 +127,7 @@ def test_bokeh_children_initialize_for_object_views_and_editors(flow_model) -> N
     ]
     assert len(model.data._views) == 1
     assert len(model.data._node_editor_views) == 2
+    assert model.data._node_editor_ids == ["n1", "n2"]
 
     by_id = {node["id"]: node for node in model.data.nodes}
     assert by_id["n1"]["data"]["view_idx"] == 0

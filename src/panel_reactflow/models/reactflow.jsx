@@ -478,6 +478,10 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
 
     const handleGearClick = (e) => {
       e.stopPropagation();
+      if (!toolbarOpen && !data.editor) {
+        // Editors are built on demand, the first time a toolbar is opened.
+        model.send_msg({ type: "editor_requested", node_id: id });
+      }
       toggleToolbar((v) => !v);
     };
 
@@ -1075,7 +1079,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null });
   const lastPySelectedRef = useRef(new Map());
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
@@ -1313,7 +1317,8 @@ function FlowInner({
     if (
       nodeUpdateCount === lastHydrated.current.nodeRevision &&
       nodesSig === lastHydrated.current.nodesSig &&
-      editable === lastHydrated.current.editable
+      editable === lastHydrated.current.editable &&
+      nodeEditors === lastHydrated.current.nodeEditors
     ) {
       return;
     }
@@ -1357,6 +1362,7 @@ function FlowInner({
       lastHydrated.current.nodeRevision = nodeUpdateCount;
       lastHydrated.current.nodesSig = nodesSig;
       lastHydrated.current.editable = editable;
+      lastHydrated.current.nodeEditors = nodeEditors;
       setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
@@ -1473,7 +1479,8 @@ function FlowInner({
       if (areEqual(selection, currentSelection)) {
         return;
       }
-      selectionSetter(selection);
+      // Python updates ``selection`` from this message, syncing it here as
+      // well would make it process every selection change twice.
       schedulePatch({
         type: "selection_changed",
         nodes: selection.nodes,
@@ -1741,6 +1748,16 @@ export function render({ model, view }) {
   const selectedEditor = model.get_child("_selected_editor");
   const views = model.get_child("_views");
   const nodeEditors = model.get_child("_node_editor_views");
+  const [nodeEditorIds] = model.useState("_node_editor_ids");
+  const nodeEditorsById = useMemo(() => {
+    const byId = new Map();
+    (nodeEditorIds || []).forEach((nodeId, idx) => {
+      if (nodeEditors[idx] !== undefined) {
+        byId.set(nodeId, nodeEditors[idx]);
+      }
+    });
+    return byId;
+  }, [nodeEditorIds, nodeEditors]);
   const topPanels = model.get_child("top_panel");
   const bottomPanels = model.get_child("bottom_panel");
   const leftPanels = model.get_child("left_panel");
@@ -1915,7 +1932,7 @@ export function render({ model, view }) {
       const baseView = views[viewIndex];
       const baseViewId = baseView?.key;
       const isViewReady = baseViewId ? Boolean(readyViewMap.get(baseViewId)) : true;
-      const editorView = nodeEditors[idx];
+      const editorView = nodeEditorsById.get(node.id);
       const typeSpec = allNodeTypes[node.type] || {};
       const realKeys = Object.keys(dataWithoutViewIdx);
       const hasEditor = editable && (realKeys.length > 0 || !!typeSpec.schema);
@@ -1936,7 +1953,7 @@ export function render({ model, view }) {
         },
       };
     });
-  }, [pyNodes, nodeEditors, views, editable, editorMode, allNodeTypes]);
+  }, [pyNodes, nodeEditorsById, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
     return (pyEdges || []).map((edge) => {
@@ -2046,7 +2063,7 @@ export function render({ model, view }) {
       nodeTypes={hydratedNodeTypes}
       nodeTypeSpecs={allNodeTypes}
       edgeTypes={hydratedEdgeTypes}
-      nodeEditors={nodeEditors}
+      nodeEditors={nodeEditorsById}
       editable={editable}
       selectable={selectable}
       enableConnect={enableConnect}
