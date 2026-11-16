@@ -1,11 +1,14 @@
 """Graph validation and callback error isolation."""
 
+import dataclasses
 import datetime
 import logging
 
+import numpy as np
 import pytest
 
 from panel_reactflow import Edge, Node, NodeType, ReactFlow
+from panel_reactflow.base import _accepts_flow
 
 
 def _node(node_id, **kwargs):
@@ -116,10 +119,15 @@ def test_from_networkx_multigraph_keys_stay_unique():
 # Non-JSON data
 
 
-@pytest.mark.parametrize("bad", [{"o": object()}, {"s": {1, 2}}, {"d": datetime.date(2024, 1, 1)}])
-def test_add_node_rejects_non_json_data(bad):
+@dataclasses.dataclass
+class _Point:
+    x: int
+
+
+@pytest.mark.parametrize("bad", [{"o": object()}, {"s": {1, 2}}, {"p": _Point(1)}, {"nested": [{"o": object()}]}])
+def test_add_node_rejects_unserializable_data(bad):
     flow = ReactFlow(nodes=[_node("a")])
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+    with pytest.raises(ValueError, match="node 'b'.*cannot be sent to the browser"):
         flow.add_node(_node("b", data=bad))
     assert [n["id"] for n in flow.nodes] == ["a"]
     flow.add_node(_node("c"))
@@ -133,29 +141,83 @@ def test_add_node_with_view_is_not_json_checked():
     assert len(flow.nodes) == 1
 
 
-def test_add_edge_rejects_non_json_data():
+def test_add_edge_rejects_unserializable_data():
     flow = ReactFlow(nodes=[_node("a"), _node("b")])
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+    with pytest.raises(ValueError, match="cannot be sent to the browser"):
         flow.add_edge({"source": "a", "target": "b", "data": {"o": object()}})
     assert flow.edges == []
 
 
-def test_patches_reject_non_json_values():
+def test_patches_reject_unserializable_values():
     flow = ReactFlow(nodes=[_node("a", data={"v": 1}), _node("b")], edges=[{"id": "e", "source": "a", "target": "b", "data": {}}])
     msgs = _capture_msgs(flow)
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+    with pytest.raises(ValueError, match="cannot be sent to the browser"):
         flow.patch_node_data("a", {"v": object()})
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+    with pytest.raises(ValueError, match="cannot be sent to the browser"):
         flow.patch_edge_data("e", {"v": object()})
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+    with pytest.raises(ValueError, match="cannot be sent to the browser"):
         flow.patch_node_props("a", {"style": {"color": object()}})
     assert flow.nodes[0]["data"] == {"v": 1}
     assert msgs == []
 
 
-def test_constructor_rejects_non_json_data():
-    with pytest.raises(ValueError, match="not JSON-serializable"):
+def test_constructor_rejects_unserializable_data():
+    with pytest.raises(ValueError, match="cannot be sent to the browser"):
         ReactFlow(nodes=[_node("a", data={"o": object()})])
+
+
+def test_unserializable_error_names_the_path():
+    flow = ReactFlow()
+    with pytest.raises(ValueError, match=r"node 'a'\['data'\]\['items'\]\[1\]"):
+        flow.add_node(_node("a", data={"items": [1, object()]}))
+
+
+# Values Bokeh serializes, but json.dumps does not
+
+BOKEH_VALUES = {
+    "int64": np.int64(3),
+    "float32": np.float32(1.5),
+    "bool_": np.bool_(True),
+    "array": np.arange(3),
+    "datetime": datetime.datetime(2024, 1, 1, 12, 30),
+    "date": datetime.date(2024, 1, 1),
+}
+
+
+def _assert_serializes(flow):
+    from bokeh.document import Document
+
+    doc = Document()
+    flow.get_root(doc)
+    doc.to_json()
+
+
+@pytest.mark.parametrize("value", BOKEH_VALUES.values(), ids=BOKEH_VALUES.keys())
+def test_bokeh_serializable_values_are_accepted(value):
+    flow = ReactFlow(
+        nodes=[_node("a", data={"v": value}), _node("b")],
+        edges=[{"id": "e", "source": "a", "target": "b", "data": {"v": value}}],
+    )
+    flow.add_node(_node("c", data={"v": value, "nested": [{"v": value}]}))
+    flow.add_edge({"id": "e2", "source": "b", "target": "c", "data": {"v": value}})
+    flow.patch_node_data("b", {"v": value})
+    flow.patch_edge_data("e", {"w": value})
+    flow.patch_node_props("a", {"style": {"v": value}})
+    flow.patch_edge_props("e", {"style": {"v": value}})
+    assert flow.nodes[2]["data"]["v"] is value
+    _assert_serializes(flow)
+
+
+def test_from_networkx_accepts_numpy_attributes():
+    nx = pytest.importorskip("networkx")
+    # Older networkx releases keep NumPy scalars from nx.from_pandas_edgelist.
+    graph = nx.DiGraph()
+    graph.add_node("a", size=np.float64(2.0))
+    graph.add_edge("a", "b", weight=np.int64(1), score=np.float32(0.5))
+    graph.add_edge("b", "c", weight=np.int64(2), score=np.float32(1.5))
+    flow = ReactFlow.from_networkx(graph)
+    assert len(flow.edges) == 2
+    _assert_serializes(flow)
 
 
 # Callback isolation
@@ -239,6 +301,21 @@ def test_event_callbacks_receive_flow_when_they_accept_it(callback_factory):
     flow.on("node_added", callback_factory(seen))
     flow.add_node(_node("a"))
     assert seen == [flow]
+
+
+@pytest.mark.parametrize("bound_first", [True, False])
+def test_accepts_flow_distinguishes_bound_and_plain_method(bound_first):
+    class Handler:
+        def on_add(self, payload):
+            pass
+
+    handler = Handler()
+    if bound_first:
+        assert not _accepts_flow(handler.on_add)
+        assert _accepts_flow(Handler.on_add)
+    else:
+        assert _accepts_flow(Handler.on_add)
+        assert not _accepts_flow(handler.on_add)
 
 
 # Connection validation requests
@@ -373,3 +450,13 @@ def test_browser_self_loop_is_kept_without_validators():
     flow = _typed_flow()
     flow._handle_msg({"type": "edge_added", "edge": {"id": "loop", "source": "a", "target": "a"}})
     assert [e["id"] for e in flow.edges] == ["loop"]
+
+
+def test_browser_edge_with_colliding_id_gets_fresh_id():
+    flow = _typed_flow()
+    flow.add_edge({"id": "a->b", "source": "a", "target": "b"})
+    msgs = _capture_msgs(flow)
+    flow._handle_msg({"type": "edge_added", "edge": {"id": "a->b", "source": "b", "target": "a"}})
+    flow._handle_msg({"type": "edge_added", "edge": {"id": "a->b", "source": "a", "target": "a"}})
+    assert [(e["id"], e["source"], e["target"]) for e in flow.edges] == [("a->b", "a", "b"), ("a->b:1", "b", "a"), ("a->b:2", "a", "a")]
+    assert msgs == []

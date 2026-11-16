@@ -11,7 +11,7 @@ import os
 import weakref
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import panel as pn
 import param
+from bokeh.core.serialization import Serializer
 from bokeh.embed.bundle import extension_dirs
 from bokeh.plotting import figure
 from panel.config import config
@@ -68,12 +69,38 @@ def _flatten_ids(ids: Sequence[str | Sequence[str]]) -> list[str]:
 
 
 def _ensure_jsonable(value: Any, path: str) -> None:
-    """Ensure value can be JSON-serialized for syncing to the frontend."""
+    """Ensure *value* can be synced to the browser.
 
+    Everything Bokeh can serialize is accepted, e.g. NumPy scalars and arrays
+    or datetimes, except sets and dataclasses, which the browser receives as
+    a JS ``Set`` or cannot decode at all. Plain JSON takes a fast path.
+    """
     try:
         json.dumps(value)
+    except (TypeError, ValueError, OverflowError):
+        _check_serializable(value, path, set())
+
+
+def _check_serializable(value: Any, path: str, seen: set[int]) -> None:
+    if isinstance(value, (dict, list, tuple)):
+        if id(value) in seen:
+            raise ValueError(f"Value at {path} contains a circular reference.")
+        seen.add(id(value))
+        if isinstance(value, dict):
+            for key, item in value.items():
+                _check_serializable(key, f"{path} (key {key!r})", seen)
+                _check_serializable(item, f"{path}[{key!r}]", seen)
+        else:
+            for index, item in enumerate(value):
+                _check_serializable(item, f"{path}[{index}]", seen)
+        seen.discard(id(value))
+        return
+    if isinstance(value, (set, frozenset)) or (is_dataclass(value) and not isinstance(value, type)):
+        raise ValueError(f"Value at {path} cannot be sent to the browser: {type(value).__name__} is not supported, convert it to a list or dict.")
+    try:
+        Serializer().encode(value)
     except Exception as exc:
-        raise ValueError(f"Value at {path} is not JSON-serializable.") from exc
+        raise ValueError(f"Value at {path} cannot be sent to the browser: {type(value).__name__} is not serializable.") from exc
 
 
 def _decode_dropped_files(files: Any) -> Any:
@@ -99,20 +126,22 @@ class _GraphConflictError(ValueError):
     """A node or edge conflicts with the graph: duplicate id or unknown endpoint."""
 
 
+# Bound methods are keyed by their function, so no instance is kept alive,
+# but in a separate cache since binding consumes the first parameter.
 _ACCEPTS_FLOW: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_ACCEPTS_FLOW_BOUND: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 
 def _accepts_flow(callback: Callable) -> bool:
     """Whether *callback* can be called as ``callback(payload, flow)``.
 
     Binding against the signature (rather than counting parameters) handles
-    defaults, ``*args`` and callable instances. The result is cached per
-    function, so bound methods of the same function share one entry and no
-    instance is kept alive.
+    defaults, ``*args`` and callable instances.
     """
-    key = getattr(callback, "__func__", callback)
+    func = getattr(callback, "__func__", None)
+    cache, key = (_ACCEPTS_FLOW, callback) if func is None else (_ACCEPTS_FLOW_BOUND, func)
     try:
-        return _ACCEPTS_FLOW[key]
+        return cache[key]
     except (KeyError, TypeError):
         pass
     try:
@@ -122,7 +151,7 @@ def _accepts_flow(callback: Callable) -> bool:
     else:
         accepts = True
     try:
-        _ACCEPTS_FLOW[key] = accepts
+        cache[key] = accepts
     except TypeError:
         pass
     return accepts
@@ -3066,6 +3095,15 @@ class ReactFlow(ReactComponent):
         """
         if not isinstance(edge, dict):
             return
+        edge_id = edge.get("id")
+        if edge_id:
+            # Rejecting a colliding id would make the browser remove every edge
+            # with that id, including the one Python already owns.
+            edge_ids = {self._edge_id(e) for e in self.edges}
+            new_id, suffix = edge_id, 1
+            while new_id in edge_ids:
+                new_id, suffix = f"{edge_id}:{suffix}", suffix + 1
+            edge = {**edge, "id": new_id}
         reason = None
         if self._connection_validators:
             reason = self._connection_reason(
