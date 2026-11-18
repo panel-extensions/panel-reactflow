@@ -14,7 +14,6 @@
 - **Drop size limit**: the new `max_drop_size` parameter (10 MB by default) caps the bytes sent for one drop so a large drop cannot exceed the websocket message limit and disconnect the session. Files over the limit or that cannot be read are listed in the drop event's `rejected` entries ([#88](https://github.com/panel-extensions/panel-reactflow/pull/88)).
 - **Batch graph edits**: `add_nodes()` and `add_edges()` add many nodes or edges in a single update, validating all of them first, and emit one `node_added`/`edge_added` event per item ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
 - **Faster structural updates**: adding, removing and assigning nodes and edges no longer re-renders every embedded view and editor, and node and edge editors are built only when shown (toolbar editors on first open, side panel and edge editors on selection) ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
-
 - **Handle positions**: an input or output handle dict accepts a `top`, in px for a number or as a CSS length for a string, to line a handle up with a port drawn by the node's view instead of spreading the handles evenly over the node's height ([#92](https://github.com/panel-extensions/panel-reactflow/pull/92)).
 
 ### Behavior changes

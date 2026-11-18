@@ -1,5 +1,7 @@
 """Unit tests for NodeType connectable handle configuration."""
 
+import pytest
+
 from panel_reactflow import NodeType
 
 
@@ -291,3 +293,20 @@ def test_node_type_no_handles():
     assert result["outputConnectable"] is True
     assert result["outputConnectableStart"] is True
     assert result["outputConnectableEnd"] is True
+
+
+@pytest.mark.parametrize("top", [52, 12.5, "25%", "calc(50% + 4px)", None])
+def test_node_type_accepts_handle_top(top):
+    from panel_reactflow import ReactFlow
+
+    flow = ReactFlow(node_types={"t": NodeType(type="t", inputs=[{"id": "in", "top": top}], outputs={"id": "out", "top": top})})
+
+    assert flow.node_types["t"]["inputs"][0]["top"] == top
+
+
+@pytest.mark.parametrize("top", [True, [52], {"px": 52}, "", float("nan"), float("inf")])
+def test_node_type_rejects_invalid_handle_top(top):
+    from panel_reactflow import ReactFlow
+
+    with pytest.raises(ValueError, match="invalid 'top'"):
+        ReactFlow(node_types={"t": NodeType(type="t", outputs=[{"id": "out", "top": top}])})

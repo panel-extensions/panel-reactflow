@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import weakref
 from collections.abc import Callable, Sequence
@@ -274,7 +275,24 @@ def _coerce_spec_map(specs: dict[str, Any] | None, *, edge: bool = False) -> dic
                 if isinstance(spec.get(port), (str, dict)):
                     spec[port] = [spec[port]]
             normalized[key] = spec
+        for port in ("inputs", "outputs"):
+            for handle in spec.get(port) or []:
+                _validate_handle_top(key, port, handle)
     return normalized
+
+
+def _validate_handle_top(node_type: str, port: str, handle: Any) -> None:
+    if not isinstance(handle, dict) or handle.get("top") is None:
+        return
+    top = handle["top"]
+    if isinstance(top, str) and top.strip():
+        return
+    if isinstance(top, (int, float)) and not isinstance(top, bool) and math.isfinite(top):
+        return
+    raise ValueError(
+        f"Handle {handle.get('id')!r} in {port} of node type {node_type!r} has an invalid 'top' {top!r}; "
+        "expected a number of px or a CSS length string such as '25%'."
+    )
 
 
 @dataclass
