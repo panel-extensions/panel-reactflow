@@ -15,6 +15,8 @@
 - **Batch graph edits**: `add_nodes()` and `add_edges()` add many nodes or edges in a single update, validating all of them first, and emit one `node_added`/`edge_added` event per item ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
 - **Faster structural updates**: adding, removing and assigning nodes and edges no longer re-renders every embedded view and editor, and node and edge editors are built only when shown (toolbar editors on first open, side panel and edge editors on selection) ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).
 
+- **Handle positions**: an input or output handle dict accepts a `top`, in px for a number or as a CSS length for a string, to line a handle up with a port drawn by the node's view instead of spreading the handles evenly over the node's height.
+
 ### Behavior changes
 
 - Selection changes made in the browser no longer emit `node_props_changed`/`edge_props_changed` for `Node`/`Edge` instances (nor echo a `patch_*_props` message back to the browser); `selection_changed` and `on_selection_changed` still fire ([#89](https://github.com/panel-extensions/panel-reactflow/pull/89)).

@@ -241,6 +241,45 @@ def test_frontend_connection_validation_filters_targets(page):
     assert len(flow.edges) == 1
 
 
+def test_handles_are_placed_at_their_top(page):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="n", type="ports", label="Ports", position={"x": 0, "y": 0}).to_dict()],
+        node_types={
+            "ports": NodeType(
+                type="ports",
+                inputs=[{"id": "a", "top": 12}, {"id": "b", "top": "75%"}, "c"],
+                outputs=[{"id": "x", "top": 30}],
+            )
+        },
+        width=600,
+        height=400,
+    )
+    serve_component(page, flow)
+    node = _node_locator(page, "Ports")
+    expect(node).to_be_visible()
+
+    def centres():
+        return node.evaluate(
+            """(el) => {
+              // Handles are placed within the node's border, like any absolute child.
+              const zoom = el.getBoundingClientRect().height / el.offsetHeight;
+              const top = el.getBoundingClientRect().top + el.clientTop * zoom;
+              const out = {height: el.clientHeight};
+              for (const h of el.querySelectorAll('.react-flow__handle')) {
+                const r = h.getBoundingClientRect();
+                out[h.dataset.handleid] = (r.top + r.height / 2 - top) / zoom;
+              }
+              return out;
+            }"""
+        )
+
+    wait_until(lambda: abs(centres()["a"] - 12) < 1, page)
+    placed = centres()
+    assert abs(placed["x"] - 30) < 1
+    assert abs(placed["b"] - placed["height"] * 0.75) < 1
+    assert abs(placed["c"] - placed["height"] * 0.75) < 1
+
+
 def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     flow = ReactFlow(
         nodes=[

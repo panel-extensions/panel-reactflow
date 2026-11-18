@@ -309,6 +309,8 @@ function renderHandles(direction, handles, opts = {}) {
     const id = typeof handle === "string" ? handle : handle.id;
     const label = typeof handle === "object" ? handle.label : undefined;
     const dtype = typeof handle === "object" ? handle.type : undefined;
+    const offset = typeof handle === "object" ? handle.top : undefined;
+    const top = typeof offset === "number" ? `${offset}px` : typeof offset === "string" ? offset : `${(index + 1) * spacing}%`;
     const tooltip = label && dtype ? `${label} (${dtype})` : label || dtype;
     const reason = cannotReceive ? "Handle cannot accept connections" : validation?.reasonForHandle(opts.nodeId, id, handleType);
     return (
@@ -317,7 +319,7 @@ function renderHandles(direction, handles, opts = {}) {
         id={id}
         type={handleType}
         position={position}
-        style={{ top: `${(index + 1) * spacing}%` }}
+        style={{ top }}
         {...(reason || tooltip ? {"data-tooltip": reason || tooltip, "data-tooltip-pos": tooltipPos} : {})}
         className={reason === "Checking connections..." ? "rf-handle-pending" : reason ? "rf-handle-invalid" : validation?.drag && validation.drag.handleType !== handleType ? "rf-handle-valid" : undefined}
         aria-label={reason || tooltip || id}

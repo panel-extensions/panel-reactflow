@@ -360,12 +360,16 @@ class NodeType:
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
         and ``"type"`` keys. An optional ``"maxConnections"`` integer limits
         connections when ``connection_validation["capacity"]`` is enabled.
-        Labels and types render as tooltips on hover.
+        Labels and types render as tooltips on hover. An optional ``"top"``
+        places the handle's centre that far down the node's left edge, in px
+        for a number or as any CSS length for a string (e.g. ``"25%"``);
+        without one, handles are spread evenly over the node's height.
     outputs : list of str or dict, optional
         List of output port definitions. Each entry can be a plain string
-        (the handle ID) or a dict with ``"id"`` and optional ``"label"``
-        and ``"type"`` keys. When a label and/or type is provided it renders
-        as a tooltip on hover, e.g. ``"Raw data input (DataFrame)"``.
+        (the handle ID) or a dict with ``"id"`` and optional ``"label"``,
+        ``"type"`` and ``"top"`` keys, as for ``inputs``, on the right edge.
+        When a label and/or type is provided it renders as a tooltip on
+        hover, e.g. ``"Raw data input (DataFrame)"``.
     input_connectable : bool, default True
         Whether input handles are connectable. When False, users cannot create
         connections to or from input handles.
