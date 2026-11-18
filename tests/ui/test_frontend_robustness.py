@@ -1,5 +1,6 @@
 """UI tests for debounced sync, file drops, render counts and hydration merging."""
 
+import panel as pn
 import pytest
 from panel.tests.util import serve_component, wait_until
 
@@ -407,3 +408,25 @@ def test_malformed_node_from_server_degrades_to_safe_mode(page):
     doc.add_next_tick_callback(push)
     expect(page.locator(".rf-safe-mode-banner")).to_be_visible(timeout=20000)
     expect(page.locator(".react-flow__node")).to_have_count(1)
+
+
+def test_a_view_arriving_after_its_node_is_shown(page):
+    flow = ReactFlow(
+        nodes=[{"id": "a", "position": {"x": 0, "y": 0}, "label": "A", "data": {}, "view": pn.pane.Markdown("view a")}],
+        width=800,
+        height=400,
+        editor_mode="side",
+    )
+    serve_component(page, flow)
+    expect(page.get_by_text("view a")).to_be_visible()
+
+    # The node arrives on its own; its view follows in a later message.
+    update_views = flow._update_views
+    flow._update_views = lambda: setattr(flow, "_node_update_count", flow._node_update_count + 1)
+    flow.add_node({"id": "b", "position": {"x": 300, "y": 0}, "label": "B", "data": {}, "view": pn.pane.Markdown("view b")})
+    expect(_node(page, "b")).to_be_visible()
+    page.wait_for_timeout(300)
+    flow._update_views = update_views
+    flow.param.trigger("_views")
+
+    expect(page.get_by_text("view b")).to_be_visible()

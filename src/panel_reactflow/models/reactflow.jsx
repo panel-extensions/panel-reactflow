@@ -1121,7 +1121,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null, views: null });
   const lastPySelectedRef = useRef(new Map());
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
@@ -1362,12 +1362,14 @@ function FlowInner({
   useEffect(() => {
     const nodesSig = signature(hydratedNodes);
     // Nodes carrying views or editors do not stringify, so the signature
-    // alone cannot detect an editable toggle hiding their editors.
+    // alone cannot detect an editable toggle hiding their editors, nor views
+    // that arrive after the nodes referring to them.
     if (
       nodeUpdateCount === lastHydrated.current.nodeRevision &&
       nodesSig === lastHydrated.current.nodesSig &&
       editable === lastHydrated.current.editable &&
-      nodeEditors === lastHydrated.current.nodeEditors
+      nodeEditors === lastHydrated.current.nodeEditors &&
+      views === lastHydrated.current.views
     ) {
       return;
     }
@@ -1412,6 +1414,7 @@ function FlowInner({
       lastHydrated.current.nodesSig = nodesSig;
       lastHydrated.current.editable = editable;
       lastHydrated.current.nodeEditors = nodeEditors;
+      lastHydrated.current.views = views;
       setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
