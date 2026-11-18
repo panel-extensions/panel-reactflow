@@ -14,6 +14,7 @@ from .base import (
     SchemaEditor,
     SchemaSource,
 )
+from .pipeline import Pipeline
 
 __all__ = [
     "Edge",
@@ -24,6 +25,7 @@ __all__ = [
     "Node",
     "NodeSpec",
     "NodeType",
+    "Pipeline",
     "ReactFlow",
     "SchemaEditor",
     "SchemaSource",
