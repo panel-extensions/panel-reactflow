@@ -373,6 +373,18 @@ flow = ReactFlow(nodes=nodes, edges=edges, node_types=node_types)
 
 Without `sourceHandle` and `targetHandle`, edges connect to the default (first) handle on each node.
 
+Handles are spread evenly down each edge of a node. When a node's view lays
+out its ports at other heights, e.g. one row per port below a header, give a
+handle dict a `top` to place its centre: a number is in px from the node's
+top, a string is any CSS length such as `"25%"`.
+
+```python
+NodeType(
+    type="consumer",
+    inputs=[{"id": "data", "top": 52}, {"id": "config", "top": 76}],
+)
+```
+
 ---
 
 ## Update data vs. presentation

@@ -55,6 +55,8 @@ pytest-rerunfailures = "<16"
 pytest-xdist = "*"
 networkx = "*"
 mypy = "*"
+# panel.tests.conftest imports pandas, which panel does not require.
+pandas = "*"
 
 [feature.test.tasks]
 test = "pytest"

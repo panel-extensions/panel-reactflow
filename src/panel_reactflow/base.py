@@ -7,6 +7,7 @@ import hashlib
 import inspect
 import json
 import logging
+import math
 import os
 import weakref
 from collections.abc import Callable, Sequence
@@ -274,7 +275,24 @@ def _coerce_spec_map(specs: dict[str, Any] | None, *, edge: bool = False) -> dic
                 if isinstance(spec.get(port), (str, dict)):
                     spec[port] = [spec[port]]
             normalized[key] = spec
+        for port in ("inputs", "outputs"):
+            for handle in spec.get(port) or []:
+                _validate_handle_top(key, port, handle)
     return normalized
+
+
+def _validate_handle_top(node_type: str, port: str, handle: Any) -> None:
+    if not isinstance(handle, dict) or handle.get("top") is None:
+        return
+    top = handle["top"]
+    if isinstance(top, str) and top.strip():
+        return
+    if isinstance(top, (int, float)) and not isinstance(top, bool) and math.isfinite(top):
+        return
+    raise ValueError(
+        f"Handle {handle.get('id')!r} in {port} of node type {node_type!r} has an invalid 'top' {top!r}; "
+        "expected a number of px or a CSS length string such as '25%'."
+    )
 
 
 @dataclass
@@ -360,12 +378,16 @@ class NodeType:
         (the handle ID) or a dict with ``"id"`` and optional ``"label"``
         and ``"type"`` keys. An optional ``"maxConnections"`` integer limits
         connections when ``connection_validation["capacity"]`` is enabled.
-        Labels and types render as tooltips on hover.
+        Labels and types render as tooltips on hover. An optional ``"top"``
+        places the handle's centre that far down the node's left edge, in px
+        for a number or as any CSS length for a string (e.g. ``"25%"``);
+        without one, handles are spread evenly over the node's height.
     outputs : list of str or dict, optional
         List of output port definitions. Each entry can be a plain string
-        (the handle ID) or a dict with ``"id"`` and optional ``"label"``
-        and ``"type"`` keys. When a label and/or type is provided it renders
-        as a tooltip on hover, e.g. ``"Raw data input (DataFrame)"``.
+        (the handle ID) or a dict with ``"id"`` and optional ``"label"``,
+        ``"type"`` and ``"top"`` keys, as for ``inputs``, on the right edge.
+        When a label and/or type is provided it renders as a tooltip on
+        hover, e.g. ``"Raw data input (DataFrame)"``.
     input_connectable : bool, default True
         Whether input handles are connectable. When False, users cannot create
         connections to or from input handles.

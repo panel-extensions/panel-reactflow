@@ -241,6 +241,95 @@ def test_frontend_connection_validation_filters_targets(page):
     assert len(flow.edges) == 1
 
 
+def test_handles_are_placed_at_their_top(page):
+    flow = ReactFlow(
+        nodes=[NodeSpec(id="n", type="ports", label="Ports", position={"x": 0, "y": 0}).to_dict()],
+        node_types={
+            "ports": NodeType(
+                type="ports",
+                inputs=[{"id": "a", "top": 12}, {"id": "b", "top": "40%"}, "c"],
+                outputs=[{"id": "x", "top": 30}],
+            )
+        },
+        width=600,
+        height=400,
+    )
+    serve_component(page, flow)
+    node = _node_locator(page, "Ports")
+    expect(node).to_be_visible()
+
+    def centres():
+        return node.evaluate(
+            """(el) => {
+              // Handles are placed within the node's border, like any absolute child.
+              const zoom = el.getBoundingClientRect().height / el.offsetHeight;
+              const top = el.getBoundingClientRect().top + el.clientTop * zoom;
+              const out = {height: el.clientHeight};
+              for (const h of el.querySelectorAll('.react-flow__handle')) {
+                const r = h.getBoundingClientRect();
+                out[h.dataset.handleid] = (r.top + r.height / 2 - top) / zoom;
+              }
+              return out;
+            }"""
+        )
+
+    wait_until(lambda: abs(centres()["a"] - 12) < 1, page)
+    placed = centres()
+    assert abs(placed["x"] - 30) < 1
+    assert abs(placed["b"] - placed["height"] * 0.4) < 1
+    assert abs(placed["c"] - placed["height"] * 0.75) < 1
+
+
+def _edge_end_y(page, edge_id):
+    return page.locator(f'.react-flow__edge[data-id="{edge_id}"] .react-flow__edge-path').evaluate(
+        """(path) => {
+          const end = path.getPointAtLength(path.getTotalLength());
+          return new DOMPoint(end.x, end.y).matrixTransform(path.getScreenCTM()).y;
+        }"""
+    )
+
+
+def _handle_centre_y(page, label, handle_id):
+    box = _node_locator(page, label).locator(f'.react-flow__handle[data-handleid="{handle_id}"]').bounding_box()
+    return box["y"] + box["height"] / 2
+
+
+def test_edges_follow_handles_placed_with_top_when_node_resizes(page):
+    spacer = pn.Spacer(height=60, width=120)
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", type="ports", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", type="ports", label="B", position={"x": 300, "y": 0}, view=spacer).to_dict(),
+        ],
+        edges=[
+            EdgeSpec(id="px", source="a", target="b", sourceHandle="x", targetHandle="near").to_dict(),
+            EdgeSpec(id="pct", source="a", target="b", sourceHandle="x", targetHandle="far").to_dict(),
+        ],
+        node_types={
+            "ports": NodeType(
+                type="ports",
+                inputs=[{"id": "near", "top": 20}, {"id": "far", "top": "80%"}],
+                outputs=[{"id": "x", "top": 30}],
+            )
+        },
+        width=700,
+        height=500,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(2)
+
+    def attached():
+        return all(abs(_edge_end_y(page, edge) - _handle_centre_y(page, "B", handle)) < 1.5 for edge, handle in (("px", "near"), ("pct", "far")))
+
+    wait_until(attached, page)
+    before = _handle_centre_y(page, "B", "far")
+
+    spacer.height = 200
+
+    wait_until(lambda: _handle_centre_y(page, "B", "far") > before + 50, page)
+    wait_until(attached, page)
+
+
 def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     flow = ReactFlow(
         nodes=[
