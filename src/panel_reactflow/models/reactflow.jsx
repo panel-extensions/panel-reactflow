@@ -1121,7 +1121,7 @@ function FlowInner({
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null, views: null });
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null, viewKeys: null });
   const lastPySelectedRef = useRef(new Map());
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
@@ -1362,14 +1362,23 @@ function FlowInner({
   useEffect(() => {
     const nodesSig = signature(hydratedNodes);
     // Nodes carrying views or editors do not stringify, so the signature
-    // alone cannot detect an editable toggle hiding their editors, nor views
-    // that arrive after the nodes referring to them.
+    // alone cannot detect an editable toggle hiding their editors, nor a view
+    // that arrives after the node referring to it. Views are compared per
+    // node, so a change elsewhere in the list leaves the other nodes alone.
+    // Nodes and their views arrive in separate messages, and a node only
+    // refers to its view by index. Until both agree, which is when the views
+    // list has one view per node that has one, nodes keep the views they show.
+    const viewCount = (pyNodes || []).filter((n) => n?.data?.view_idx != null).length;
+    const viewsInSync = viewCount === views.length;
+    const viewKeys = viewsInSync
+      ? hydratedNodes.map((n) => `${n?.id}:${n?.data?.view?.key ?? ""}`).join("\n")
+      : lastHydrated.current.viewKeys;
     if (
       nodeUpdateCount === lastHydrated.current.nodeRevision &&
       nodesSig === lastHydrated.current.nodesSig &&
       editable === lastHydrated.current.editable &&
       nodeEditors === lastHydrated.current.nodeEditors &&
-      views === lastHydrated.current.views
+      viewKeys === lastHydrated.current.viewKeys
     ) {
       return;
     }
@@ -1389,14 +1398,19 @@ function FlowInner({
           if (!n || typeof n !== "object") return n;
           nextPySelected.set(n.id, Boolean(n.selected));
           const prev = currById.get(n.id);
-          if (!prev) return n;
+          if (!prev) return viewsInSync ? n : { ...n, data: { ...n.data, view: undefined } };
           // Selection is owned by the browser unless Python changed it since
           // the last push; positions of nodes being dragged, or whose move
           // has not been sent yet, stay where the pointer put them.
           const pythonSelected = Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
           const keepPosition = prev.dragging || pendingMoves.has(n.id);
+          // The views list hands out new elements whenever it changes; a
+          // node keeping the same view, or whose view is not in sync yet,
+          // keeps its element, so its view is not rendered again.
+          const keepView = !viewsInSync || (prev.data?.view != null && prev.data.view.key === n.data?.view?.key);
           const next = {
             ...n,
+            ...(keepView ? { data: { ...n.data, view: prev.data?.view, _viewReady: prev.data?._viewReady } } : {}),
             ...(prev.measured ? { measured: prev.measured } : {}),
             ...(keepPosition ? { position: prev.position } : {}),
             selected: pythonSelected ? n.selected : prev.selected,
@@ -1414,7 +1428,7 @@ function FlowInner({
       lastHydrated.current.nodesSig = nodesSig;
       lastHydrated.current.editable = editable;
       lastHydrated.current.nodeEditors = nodeEditors;
-      lastHydrated.current.views = views;
+      lastHydrated.current.viewKeys = viewKeys;
       setHydratedRevision(nodeUpdateCount);
       hydrationFrameRef.current = null;
     });
