@@ -17,6 +17,7 @@ nav = [
     {"Declare Node & Edge Types" = "how-to/declare-types.md"},
     {"Define Editors" = "how-to/define-editors.md"},
     {"Embed Views in Nodes" = "how-to/embed-views-in-nodes.md"},
+    {"Group Nodes" = "how-to/group-nodes.md"},
     {"Style Nodes & Edges" = "how-to/style-nodes-edges.md"},
     {"Validate Connections" = "how-to/validate-connections.md"},
     {"React to Events" = "how-to/react-to-events.md"},

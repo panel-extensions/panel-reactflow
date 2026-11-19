@@ -586,6 +586,23 @@ class EdgeType:
         }
 
 
+# Top-level node fields that are only serialized when set.
+_OPTIONAL_NODE_PROPS = ("parentId", "extent", "expandParent", "hidden", "zIndex")
+
+
+# Height of a group's header, kept clear of its children by ``group_nodes``.
+GROUP_HEADER_HEIGHT = 32
+
+
+def _optional_props(node: Any) -> dict[str, Any]:
+    props = {}
+    for name in _OPTIONAL_NODE_PROPS:
+        value = getattr(node, name)
+        if value is not None:
+            props[name] = list(map(list, value)) if name == "extent" and not isinstance(value, str) else value
+    return props
+
+
 @dataclass
 class NodeSpec:
     """Builder for node dictionaries with validation and type safety.
@@ -625,6 +642,19 @@ class NodeSpec:
     view : Panel viewable, optional
         Optional Panel viewable (widget, pane, layout) to render inside
         the node. The view will be displayed as the node's content.
+    parentId : str, optional
+        Id of the node this node is nested in, usually a ``"group"`` node.
+        The position of a child node is relative to its parent and the
+        child moves with it.
+    extent : str or list, optional
+        ``"parent"`` keeps the node inside its parent's bounds, a
+        ``[[x0, y0], [x1, y1]]`` pair keeps it inside that rectangle.
+    expandParent : bool, optional
+        Grow the parent when the node is dragged against its edge.
+    hidden : bool, optional
+        Hide the node and its edges.
+    zIndex : int, optional
+        Stacking order of the node.
 
     Methods
     -------
@@ -694,6 +724,11 @@ class NodeSpec:
     style: dict[str, Any] | None = None
     className: str | None = None
     view: Any | None = None
+    parentId: str | None = None
+    extent: str | list[list[float]] | None = None
+    expandParent: bool | None = None
+    hidden: bool | None = None
+    zIndex: int | None = None
 
     def __post_init__(self) -> None:
         if self.position is None:
@@ -724,6 +759,7 @@ class NodeSpec:
             payload["style"] = self.style
         if self.className is not None:
             payload["className"] = self.className
+        payload.update(_optional_props(self))
         if self.view is not None:
             payload["view"] = self.view
         return payload
@@ -777,6 +813,11 @@ class Node(param.Parameterized):
         "deletable",
         "style",
         "className",
+        "parentId",
+        "extent",
+        "expandParent",
+        "hidden",
+        "zIndex",
     )
 
     # Subset of ``_props`` pushed to the browser on assignment. ``position``
@@ -791,6 +832,11 @@ class Node(param.Parameterized):
         "deletable",
         "style",
         "className",
+        "parentId",
+        "extent",
+        "expandParent",
+        "hidden",
+        "zIndex",
     )
 
     # ``data`` keys ``ReactFlow.patch_node_data`` mirrors onto a top-level
@@ -810,6 +856,11 @@ class Node(param.Parameterized):
     deletable = param.Boolean(default=True, doc="Whether node is deletable.")
     style = param.Dict(default=None, allow_None=True, doc="Optional node style.")
     className = param.String(default=None, allow_None=True, doc="Optional CSS class.")
+    parentId = param.String(default=None, allow_None=True, doc="Id of the parent (group) node; the position is relative to it.")
+    extent = param.Parameter(default=None, allow_None=True, doc="'parent' or [[x0, y0], [x1, y1]] bounds the node is kept in.")
+    expandParent = param.Boolean(default=None, allow_None=True, doc="Grow the parent when dragged against its edge.")
+    hidden = param.Boolean(default=None, allow_None=True, doc="Hide the node and its edges.")
+    zIndex = param.Integer(default=None, allow_None=True, doc="Stacking order of the node.")
     flow = param.Parameter(default=None, allow_None=True, precedence=-1, doc="Parent ReactFlow instance.")
 
     @classmethod
@@ -840,6 +891,7 @@ class Node(param.Parameterized):
             payload["style"] = dict(self.style)
         if self.className is not None:
             payload["className"] = self.className
+        payload.update(_optional_props(self))
         view = self.__panel__()
         if view is not None:
             payload["view"] = view
@@ -2881,6 +2933,7 @@ class ReactFlow(ReactComponent):
         prepared = [self._prepare_node(node, node_ids) for node in nodes]
         if not prepared:
             return
+        self._check_parents([payload for _, payload in prepared], node_ids)
         for raw_node, payload in prepared:
             if isinstance(raw_node, Node):
                 raw_node.type = payload["type"]
@@ -2960,6 +3013,9 @@ class ReactFlow(ReactComponent):
                     node.style = payload.get("style")
                 if "className" in payload:
                     node.className = payload.get("className")
+                for name in _OPTIONAL_NODE_PROPS:
+                    if name in payload:
+                        setattr(node, name, payload[name])
                 synced_nodes.append(node)
             self.nodes = synced_nodes
         if edges is not None:
@@ -3093,6 +3149,10 @@ class ReactFlow(ReactComponent):
                 self._context_menu = menu
                 self._context_menu_position = position
                 self._emit("node_context_menu", msg)
+            case "group_toggled":
+                node_id = msg.get("node_id")
+                if node_id is not None and self._get_node(node_id) is not None:
+                    self.collapse_group(node_id, bool(msg.get("collapsed")))
             case "editor_requested":
                 self._request_node_editor(msg.get("node_id"))
             case "close_context_menu":
@@ -3210,26 +3270,69 @@ class ReactFlow(ReactComponent):
             reply["error"] = "Connection validation failed."
         self._send_msg(reply)
 
+    @staticmethod
+    def _group_entry_side(entry: dict[str, Any], data: dict[str, Any]) -> str | None:
+        """Return the side a handle_map entry applies to, None for both."""
+        if entry.get("direction") is not None:
+            return entry["direction"]
+        for side, key in (("input", "inputs"), ("output", "outputs")):
+            if entry.get("group_handle") in ReactFlow._handle_ids(data.get(key) or []):
+                return side
+        return None
+
+    def _inner_ends(self, node: dict[str, Any] | Node, handle_id: str | None, direction: str) -> list[tuple[str, str | None]]:
+        """Return the (node, handle) pairs a connection to this handle creates edges to.
+
+        A handle of a collapsed group stands for the inner handles its
+        ``handle_map`` maps to it; any other handle stands for itself.
+        """
+        node_id = self._node_id(node)
+        data = self._node_data(node)
+        if self._node_type(node) != "group" or not data.get("collapsed"):
+            return [(node_id, handle_id)]
+        ends = [
+            (entry.get("node"), entry.get("handle"))
+            for entry in data.get("handle_map") or []
+            if entry.get("group_handle") == handle_id and self._group_entry_side(entry, data) in (None, direction)
+        ]
+        return ends or [(node_id, handle_id)]
+
     def _connection_candidates(self, node_id: str, handle_id: str | None, handle_type: str) -> list[dict[str, Any]]:
         opposite_type = "target" if handle_type == "source" else "source"
         port_key = "inputs" if opposite_type == "target" else "outputs"
         prefix = "input" if opposite_type == "target" else "output"
+        dragged = self._get_node(node_id)
+        dragged_ends = self._inner_ends(dragged, handle_id, "output" if handle_type == "source" else "input") if dragged is not None else [(node_id, handle_id)]
         results = []
         for node in self.nodes:
             connectable = node.connectable if isinstance(node, Node) else node.get("connectable", True)
             if connectable is False:
                 continue
             candidate_id = self._node_id(node)
-            node_type = self.node_types.get(self._node_type(node), {})
+            if self._node_type(node) == "group":
+                # A group declares its handles per node, in its data.
+                node_type = self._node_data(node)
+            else:
+                node_type = self.node_types.get(self._node_type(node), {})
             # Handles the browser never lets a connection end on need no answer.
             if node_type.get(f"{prefix}Connectable") is False or node_type.get(f"{prefix}ConnectableEnd") is False:
                 continue
             for candidate_handle in self._handle_ids(node_type.get(port_key)):
-                if handle_type == "source":
-                    payload = {"source": node_id, "target": candidate_id, "sourceHandle": handle_id, "targetHandle": candidate_handle}
-                else:
-                    payload = {"source": candidate_id, "target": node_id, "sourceHandle": candidate_handle, "targetHandle": handle_id}
-                reason = self._connection_reason(payload)
+                # A connection that fans out through a collapsed group is
+                # valid only if every edge it creates is.
+                reason = None
+                for candidate_end in self._inner_ends(node, candidate_handle, prefix):
+                    for dragged_end in dragged_ends:
+                        if handle_type == "source":
+                            (source, source_handle), (target, target_handle) = dragged_end, candidate_end
+                        else:
+                            (source, source_handle), (target, target_handle) = candidate_end, dragged_end
+                        payload = {"source": source, "target": target, "sourceHandle": source_handle, "targetHandle": target_handle}
+                        reason = self._connection_reason(payload)
+                        if reason is not None:
+                            break
+                    if reason is not None:
+                        break
                 results.append({"node_id": candidate_id, "handle_id": candidate_handle, "handle_type": opposite_type, "reason": reason})
         return results
 
@@ -3266,7 +3369,8 @@ class ReactFlow(ReactComponent):
 
         Removes the specified nodes and automatically removes any edges that
         are connected to them (either as source or target). This ensures the
-        graph remains consistent.
+        graph remains consistent. Nodes nested in a removed node (through
+        ``parentId``) are removed with it.
 
         Ids may be passed as separate arguments or as a single sequence. All
         of them are removed in one update, i.e. ``nodes`` and ``edges`` are
@@ -3305,6 +3409,8 @@ class ReactFlow(ReactComponent):
         ids = list(dict.fromkeys(_flatten_ids(node_ids)))
         if not ids:
             return
+        # Children go with their parent, as when deleting in the browser.
+        ids += [node_id for node_id in self._descendants(ids) if node_id not in ids]
         id_set = set(ids)
         removed_nodes = {}
         remaining_nodes = []
@@ -3806,7 +3912,11 @@ class ReactFlow(ReactComponent):
         patch : dict
             Mapping of property names to new values. Supported keys are
             ``position``, ``type``, ``label``, ``selected``, ``draggable``,
-            ``connectable``, ``deletable``, ``style`` and ``className``.
+            ``connectable``, ``deletable``, ``style``, ``className``,
+            ``parentId``, ``extent``, ``expandParent``, ``hidden`` and
+            ``zIndex``. A new ``parentId`` does not move the node, its
+            position is read relative to the new parent; use
+            :meth:`set_parent` to keep it in place.
             Passing ``None`` clears the property so the node falls back to
             the CSS/theme default.
 
@@ -3893,6 +4003,339 @@ class ReactFlow(ReactComponent):
                 self._on_retyped("edge")
         self._send_msg({"type": "patch_edge_props", "edge_id": edge_id, "patch": patch})
         self._emit("edge_props_changed", {"type": "edge_props_changed", "edge_id": edge_id, "patch": patch})
+
+    @staticmethod
+    def _node_parent(node: dict[str, Any] | Node) -> str | None:
+        return node.parentId if isinstance(node, Node) else node.get("parentId")
+
+    @staticmethod
+    def _node_position(node: dict[str, Any] | Node) -> dict[str, float]:
+        position = (node.position if isinstance(node, Node) else node.get("position")) or {}
+        return {"x": float(position.get("x", 0)), "y": float(position.get("y", 0))}
+
+    def _descendants(self, node_ids: Sequence[str]) -> list[str]:
+        """Return the ids of all nodes nested in *node_ids*, at any depth."""
+        children: dict[str, list[str]] = {}
+        for node in self.nodes:
+            parent = self._node_parent(node)
+            if parent is not None:
+                children.setdefault(parent, []).append(self._node_id(node))
+        if not children:
+            return []
+        found: dict[str, None] = {}
+        stack = list(node_ids)
+        while stack:
+            for child in children.get(stack.pop(), ()):
+                if child not in found:
+                    found[child] = None
+                    stack.append(child)
+        return list(found)
+
+    def _check_parents(self, payloads: Sequence[dict[str, Any]], node_ids: set[Any]) -> None:
+        """Raise ValueError if a new node's parent is missing or nesting would cycle."""
+        parents = {self._node_id(node): self._node_parent(node) for node in self.nodes}
+        parents.update({payload["id"]: payload.get("parentId") for payload in payloads})
+        for payload in payloads:
+            parent = payload.get("parentId")
+            if parent is None:
+                continue
+            if parent not in node_ids:
+                raise ValueError(f"Node {payload['id']!r} references unknown parent node {parent!r}.")
+            seen = {payload["id"]}
+            while parent is not None:
+                if parent in seen:
+                    raise ValueError(f"Node {payload['id']!r} is nested in itself through parentId.")
+                seen.add(parent)
+                parent = parents.get(parent)
+
+    def absolute_position(self, node_id: str) -> dict[str, float]:
+        """Return the position of a node in flow coordinates.
+
+        The ``position`` of a node nested in a group is relative to its
+        parent; this adds up the positions of all of its ancestors.
+
+        Parameters
+        ----------
+        node_id : str
+            Id of the node.
+
+        Returns
+        -------
+        dict
+            The ``{"x": ..., "y": ...}`` position of the node on the canvas.
+
+        Raises
+        ------
+        KeyError
+            If there is no node with that id.
+        """
+        node = self._get_node(node_id)
+        if node is None:
+            raise KeyError(f"No node with id {node_id!r}.")
+        x = y = 0.0
+        seen: set[str] = set()
+        while node is not None and self._node_id(node) not in seen:
+            seen.add(self._node_id(node))
+            position = self._node_position(node)
+            x += position["x"]
+            y += position["y"]
+            parent = self._node_parent(node)
+            node = self._get_node(parent) if parent is not None else None
+        return {"x": x, "y": y}
+
+    def _reparent(self, node_ids: Sequence[str], parent_id: str | None, props: dict[str, Any]) -> None:
+        """Move *node_ids* into *parent_id* keeping their place on the canvas.
+
+        Updates the nodes in place without syncing; the caller syncs ``nodes``.
+        """
+        origin = self.absolute_position(parent_id) if parent_id is not None else {"x": 0.0, "y": 0.0}
+        absolute = {node_id: self.absolute_position(node_id) for node_id in node_ids}
+        patch = {"parentId": parent_id, **props}
+        with self._suppressed_prop_sync():
+            for node_id in node_ids:
+                node = self._get_node(node_id)
+                position = {"x": absolute[node_id]["x"] - origin["x"], "y": absolute[node_id]["y"] - origin["y"]}
+                if isinstance(node, Node):
+                    node.position = position
+                    for key, value in patch.items():
+                        setattr(node, key, value)
+                else:
+                    node["position"] = position
+                    for key, value in patch.items():
+                        if value is None:
+                            node.pop(key, None)
+                        else:
+                            node[key] = value
+
+    def _check_reparent(self, node_ids: Sequence[str], parent_id: str | None) -> None:
+        for node_id in node_ids:
+            if self._get_node(node_id) is None:
+                raise ValueError(f"No node with id {node_id!r}.")
+        if parent_id is None:
+            return
+        if self._get_node(parent_id) is None:
+            raise ValueError(f"No node with id {parent_id!r}.")
+        if parent_id in node_ids or parent_id in self._descendants(node_ids):
+            raise ValueError(f"Cannot nest node {parent_id!r} in itself.")
+
+    def set_parent(
+        self,
+        node_ids: str | Sequence[str],
+        parent_id: str | None,
+        *,
+        extent: str | list[list[float]] | None = None,
+        expand_parent: bool | None = None,
+    ) -> None:
+        """Nest nodes in another node, or take them out of their parent.
+
+        The nodes keep their place on the canvas: their positions are
+        converted to be relative to the new parent.
+
+        Parameters
+        ----------
+        node_ids : str or sequence of str
+            Ids of the nodes to move.
+        parent_id : str or None
+            Id of the new parent, or ``None`` to put the nodes at the top
+            level.
+        extent : str or list, optional
+            New ``extent`` of the nodes, e.g. ``"parent"``. Cleared when
+            ``None``.
+        expand_parent : bool, optional
+            New ``expandParent`` of the nodes. Cleared when ``None``.
+
+        Raises
+        ------
+        ValueError
+            If a node does not exist or would be nested in itself.
+        """
+        ids = [node_ids] if isinstance(node_ids, str) else list(dict.fromkeys(node_ids))
+        self._check_reparent(ids, parent_id)
+        self._reparent(ids, parent_id, {"extent": extent, "expandParent": expand_parent})
+        self.param.trigger("nodes")
+
+    def group_nodes(
+        self,
+        node_ids: Sequence[str] | None = None,
+        *,
+        group_id: str | None = None,
+        label: str | None = None,
+        padding: float = 20,
+        data: dict[str, Any] | None = None,
+        style: dict[str, Any] | None = None,
+        extent: str | list[list[float]] | None = None,
+        expand_parent: bool | None = True,
+    ) -> str:
+        """Put nodes into a new ``"group"`` node.
+
+        The group is placed around the nodes, which keep their place on the
+        canvas and from then on move with the group. A group can be
+        collapsed into a single compact node, see :meth:`collapse_group`.
+
+        Parameters
+        ----------
+        node_ids : sequence of str, optional
+            Ids of the nodes to group. Defaults to the selected nodes. They
+            must all have the same parent, which becomes the parent of the
+            group, so groups can be nested.
+        group_id : str, optional
+            Id of the new group. Generated when omitted.
+        label : str, optional
+            Label shown in the group's header.
+        padding : float, default 20
+            Space between the nodes and the group's border.
+        data : dict, optional
+            Data of the group node, e.g. ``collapsed``, ``inputs``,
+            ``outputs`` and ``handle_map`` (see :meth:`collapse_group`).
+        style : dict, optional
+            Style of the group node. Setting both ``width`` and ``height``
+            gives the group a fixed size; otherwise it grows to fit its
+            children.
+        extent : str or list, optional
+            ``extent`` given to the grouped nodes, e.g. ``"parent"`` to keep
+            them inside a fixed-size group (see ``style``). React Flow
+            ignores ``"parent"`` while ``expand_parent`` is set.
+        expand_parent : bool, optional, default True
+            ``expandParent`` given to the grouped nodes, so dragging one
+            past the border grows the group.
+
+        Returns
+        -------
+        str
+            The id of the new group.
+
+        Raises
+        ------
+        ValueError
+            If there are no nodes to group, a node does not exist, the nodes
+            have different parents or the group id is taken.
+        """
+        ids = list(dict.fromkeys(self.selection.get("nodes", []) if node_ids is None else node_ids))
+        if not ids:
+            raise ValueError("No nodes to group.")
+        self._check_reparent(ids, None)
+        parents = {self._node_parent(self._get_node(node_id)) for node_id in ids}
+        if len(parents) > 1:
+            raise ValueError("Only nodes with the same parent can be grouped.")
+        (parent,) = parents
+        if group_id is None:
+            group_id = f"group-{uuid4().hex[:8]}"
+        positions = [self._node_position(self._get_node(node_id)) for node_id in ids]
+        group: dict[str, Any] = {
+            "id": group_id,
+            "type": "group",
+            "label": label,
+            "position": {
+                "x": min(p["x"] for p in positions) - padding,
+                "y": min(p["y"] for p in positions) - padding - GROUP_HEADER_HEIGHT,
+            },
+            "data": dict(data or {}),
+        }
+        if parent is not None:
+            group["parentId"] = parent
+        if style is not None:
+            group["style"] = style
+        node_ids_in_graph = {self._node_id(node) for node in self.nodes}
+        _, payload = self._prepare_node(group, node_ids_in_graph)
+        self._check_parents([payload], node_ids_in_graph)
+        # The group goes before its first child, React Flow draws (and
+        # needs) parents before their children.
+        first = min(i for i, node in enumerate(self.nodes) if self._node_id(node) in ids)
+        nodes = list(self.nodes)
+        nodes.insert(first, payload)
+        with param.discard_events(self):
+            self.nodes = nodes
+        self._rebuild_node_index()
+        self._reparent(ids, group_id, {"extent": extent, "expandParent": expand_parent})
+        self.param.trigger("nodes")
+        self._emit("node_added", {"type": "node_added", "node": payload})
+        self._emit("nodes_grouped", {"type": "nodes_grouped", "group_id": group_id, "node_ids": ids})
+        return group_id
+
+    def ungroup(self, group_id: str) -> list[str]:
+        """Dissolve a group, keeping its children where they are.
+
+        The children of the group are moved to the group's own parent, keep
+        their place on the canvas and lose the ``extent`` and
+        ``expandParent`` that tied them to the group. The group node and
+        edges connected to it are removed.
+
+        Parameters
+        ----------
+        group_id : str
+            Id of the group to dissolve.
+
+        Returns
+        -------
+        list of str
+            The ids of the former children.
+
+        Raises
+        ------
+        ValueError
+            If there is no node with that id.
+        """
+        group = self._get_node(group_id)
+        if group is None:
+            raise ValueError(f"No node with id {group_id!r}.")
+        children = [self._node_id(node) for node in self.nodes if self._node_parent(node) == group_id]
+        if children:
+            self._reparent(children, self._node_parent(group), {"extent": None, "expandParent": None})
+        # The children no longer refer to the group, so they stay, and the
+        # nodes sync that removes the group carries their new positions.
+        self.remove_node(group_id)
+        self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": group_id, "node_ids": children})
+        return children
+
+    def collapse_group(self, group_id: str, collapsed: bool = True) -> None:
+        """Collapse a group into one compact node, or expand it again.
+
+        Collapsing only changes what is drawn: the group's descendants are
+        hidden and edges between them and the rest of the graph are drawn to
+        the collapsed group instead. ``nodes`` and ``edges`` keep the real
+        graph. The state is kept in the group's ``data["collapsed"]``.
+
+        A collapsed group shows one input and one output handle, or the
+        handles listed in ``data["inputs"]`` and ``data["outputs"]`` (in the
+        format of :class:`NodeType` ``inputs``/``outputs``). An edge into a
+        hidden node is drawn to the group handle that ``data["handle_map"]``
+        maps it to, a list of ``{"node": ..., "handle": ..., "group_handle":
+        ...}`` entries (omit ``handle`` to map every handle of the node),
+        and to the group's first handle on that side otherwise. An entry
+        applies to the side its group handle is declared on; set
+        ``"direction"`` to ``"input"`` or ``"output"`` to choose explicitly,
+        e.g. when a node has an input and an output with the same id.
+        Connection validators and policies check each edge such a
+        connection creates. Nodes hidden by a collapse are deselected.
+
+        In a flow with ``editable=False`` the header chevron collapses a
+        group for that viewer only and does not change ``data``. Connecting
+        to a mapped group handle in the browser creates an edge to each
+        node it maps to.
+
+        Parameters
+        ----------
+        group_id : str
+            Id of the group node.
+        collapsed : bool, default True
+            Whether to collapse (``True``) or expand (``False``) the group.
+
+        Raises
+        ------
+        ValueError
+            If there is no node with that id.
+        """
+        node = self._get_node(group_id)
+        if node is None:
+            raise ValueError(f"No node with id {group_id!r}.")
+        if bool(self._node_data(node).get("collapsed", False)) == collapsed:
+            return
+        self.patch_node_data(group_id, {"collapsed": collapsed})
+        self._emit("group_toggled", {"type": "group_toggled", "node_id": group_id, "collapsed": collapsed})
+
+    def expand_group(self, group_id: str) -> None:
+        """Expand a collapsed group, see :meth:`collapse_group`."""
+        self.collapse_group(group_id, False)
 
     def fit_view(
         self,
@@ -4327,6 +4770,13 @@ class ReactFlow(ReactComponent):
             - ``"edge_props_changed"``: Top-level edge properties (``label``,
               ``style``, ``type``, ...) were modified
             - ``"selection_changed"``: Selection changed
+            - ``"nodes_grouped"``: :meth:`group_nodes` put nodes into a new
+              group. Payload has ``group_id`` and ``node_ids``.
+            - ``"nodes_ungrouped"``: :meth:`ungroup` dissolved a group.
+              Payload has ``group_id`` and ``node_ids`` (its former children).
+            - ``"group_toggled"``: A group was collapsed or expanded, from
+              its header or :meth:`collapse_group`. Payload has ``node_id``
+              and ``collapsed``.
             - ``"sync"``: Full graph sync from frontend
             - ``"drop"``: Data of one of the ``drop_types`` was dropped onto
               the canvas. Payload has the matched ``drop_type``, the dropped

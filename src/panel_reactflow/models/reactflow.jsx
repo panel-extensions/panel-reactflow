@@ -9,7 +9,16 @@ const BUILTIN_NODE_TYPES = {
   panel: { label: "Panel" },
   default: { label: "Default" },
   minimal: { label: "Minimal", minimal: true },
+  group: { label: "Group" },
 };
+
+// Room a group frame leaves around its children; Python's group_nodes()
+// places groups with the same padding and GROUP_HEADER_HEIGHT.
+const GROUP_PADDING = 20;
+const GROUP_HEADER_HEIGHT = 32;
+const GROUP_MIN_WIDTH = 160;
+const GROUP_MIN_HEIGHT = 80;
+const GROUP_HANDLE_SPACING = 18;
 
 const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale nodrag nopan nowheel";
 
@@ -25,6 +34,150 @@ const HOVER_CLOSE_GRACE_MS = 150;
 const CONNECTION_VALIDATION_TIMEOUT_MS = 3000;
 const popupHoverState = { inside: false, closeTimers: new Set() };
 const ConnectionValidationContext = React.createContext(null);
+const GroupActionsContext = React.createContext(null);
+
+function isCollapsedGroup(node) {
+  return node?.type === "group" && Boolean(node.data?.collapsed);
+}
+
+// A group's handles are declared per node, since they stand in for the
+// handles of the nodes it contains.
+function handleSpec(node, nodeTypeSpecs) {
+  if (node.type === "group") {
+    return { inputs: node.data?.inputs, outputs: node.data?.outputs };
+  }
+  return nodeTypeSpecs[node.type];
+}
+
+/**
+ * React Flow needs a parent before its children in the node list. Returns
+ * the list itself when it is already in order.
+ */
+function orderParentsFirst(nodes) {
+  if (!nodes.some((node) => node?.parentId != null)) return nodes;
+  const byId = new Map();
+  nodes.forEach((node) => {
+    if (node && typeof node === "object" && !byId.has(node.id)) byId.set(node.id, node);
+  });
+  const placed = new Set();
+  const ordered = [];
+  const place = (node) => {
+    if (placed.has(node)) return;
+    placed.add(node);
+    const parent = node.parentId != null ? byId.get(node.parentId) : null;
+    if (parent) place(parent);
+    ordered.push(node);
+  };
+  nodes.forEach((node) => (node && typeof node === "object" ? place(node) : ordered.push(node)));
+  return ordered.every((node, index) => node === nodes[index]) ? nodes : ordered;
+}
+
+/**
+ * Map every node inside a collapsed group to the outermost collapsed group
+ * containing it, i.e. the node drawn in its place. Null when no group is
+ * collapsed.
+ */
+function collapsedView(nodes) {
+  const byId = new Map();
+  let anyCollapsed = false;
+  nodes.forEach((node) => {
+    if (!node || typeof node !== "object") return;
+    byId.set(node.id, node);
+    anyCollapsed ||= isCollapsedGroup(node);
+  });
+  if (!anyCollapsed) return null;
+  const reps = new Map();
+  const resolve = (id) => {
+    if (reps.has(id)) return reps.get(id);
+    reps.set(id, null);
+    const parentId = byId.get(id)?.parentId;
+    let rep = null;
+    if (parentId != null && byId.has(parentId)) {
+      rep = resolve(parentId) ?? (isCollapsedGroup(byId.get(parentId)) ? parentId : null);
+    }
+    reps.set(id, rep);
+    return rep;
+  };
+  byId.forEach((_node, id) => resolve(id));
+  const hidden = new Map([...reps].filter(([, rep]) => rep !== null));
+  const groups = new Map();
+  hidden.forEach((rep) => {
+    if (!groups.has(rep)) groups.set(rep, groupPorts(byId.get(rep)));
+  });
+  return { hidden, groups, key: JSON.stringify([[...hidden], [...groups]]) };
+}
+
+// The parts of a group's data that decide how connections are mapped.
+function groupPorts(node) {
+  const ids = (handles) => (handles || []).map((handle) => (typeof handle === "string" ? handle : handle.id));
+  return { handleMap: node?.data?.handle_map || [], inputs: ids(node?.data?.inputs), outputs: ids(node?.data?.outputs) };
+}
+
+// An entry's side is its ``direction``, or else the side its group handle is
+// declared on; an entry with neither applies to both sides.
+function matchesDirection(entry, direction, ports) {
+  let side = entry.direction;
+  if (side == null && ports) {
+    if (ports.inputs.includes(entry.group_handle)) side = "input";
+    else if (ports.outputs.includes(entry.group_handle)) side = "output";
+  }
+  return side == null || side === direction;
+}
+
+function mappedGroupHandle(ports, nodeId, handleId, direction) {
+  const candidates = ports.handleMap.filter((e) => e.node === nodeId && matchesDirection(e, direction, ports));
+  const entry = candidates.find((e) => "handle" in e && (e.handle ?? null) === (handleId ?? null)) ||
+    candidates.find((e) => !("handle" in e));
+  // Unmapped edges attach to the group's first handle on that side.
+  return entry?.group_handle ?? null;
+}
+
+/**
+ * Draw edges into nodes hidden by a collapsed group to the group instead.
+ * Only the rendered edges change, ids are kept so selections and deletions
+ * still refer to the real edges.
+ */
+function routeEdges(edges, view) {
+  if (!view) return edges;
+  const { hidden, groups } = view;
+  return edges.map((edge) => {
+    const sourceRep = hidden.get(edge.source);
+    const targetRep = hidden.get(edge.target);
+    if (!sourceRep && !targetRep) return edge;
+    const source = sourceRep || edge.source;
+    const target = targetRep || edge.target;
+    if (source === target) return edge.hidden ? edge : { ...edge, hidden: true };
+    return {
+      ...edge,
+      source,
+      target,
+      sourceHandle: sourceRep ? mappedGroupHandle(groups.get(sourceRep), edge.source, edge.sourceHandle, "output") : edge.sourceHandle,
+      targetHandle: targetRep ? mappedGroupHandle(groups.get(targetRep), edge.target, edge.targetHandle, "input") : edge.targetHandle,
+      className: [edge.className, "rf-edge--rerouted"].filter(Boolean).join(" "),
+    };
+  });
+}
+
+function withoutSize(style) {
+  if (!style || (style.width === undefined && style.height === undefined)) return style;
+  const { width, height, ...rest } = style;
+  return rest;
+}
+
+function viewNodes(nodes, view) {
+  if (!view) return nodes;
+  return nodes.map((node) => {
+    if (!node || typeof node !== "object") return node;
+    // Hidden nodes are deselected so a delete key press cannot remove them unseen.
+    if (view.hidden.has(node.id)) return node.hidden && !node.selected ? node : { ...node, hidden: true, selected: false };
+    if (isCollapsedGroup(node)) {
+      // A collapsed group shrinks to its header, whatever size the frame had.
+      const { width, height, ...rest } = node;
+      return { ...rest, style: withoutSize(node.style) };
+    }
+    return node;
+  });
+}
 
 function connectionKey(nodeId, handleId, handleType) {
   return JSON.stringify([nodeId, handleId ?? null, handleType]);
@@ -97,8 +250,8 @@ function localConnectionReason(connection, nodes, edges, nodeTypeSpecs, policy, 
   const source = index.byId.get(connection.source);
   const target = index.byId.get(connection.target);
   if (!source || !target) return "Node not found";
-  const sourceHandle = getHandle(nodeTypeSpecs[source.type], "source", connection.sourceHandle);
-  const targetHandle = getHandle(nodeTypeSpecs[target.type], "target", connection.targetHandle);
+  const sourceHandle = getHandle(handleSpec(source, nodeTypeSpecs), "source", connection.sourceHandle);
+  const targetHandle = getHandle(handleSpec(target, nodeTypeSpecs), "target", connection.targetHandle);
   if (policy.direction && (!sourceHandle || !targetHandle)) return "Connect an output to an input";
   if (policy.cycles) {
     if (source.id === target.id) return "Connection would create a cycle";
@@ -587,6 +740,67 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
 }
 
 
+function GroupNode({ id, data, isConnectable }) {
+  const validation = React.useContext(ConnectionValidationContext);
+  const actions = React.useContext(GroupActionsContext);
+  const collapsed = Boolean(data?.collapsed);
+  const label = data?._label ?? "";
+  // A group whose style sets both width and height has a fixed size, which
+  // children with extent "parent" are kept inside; any other group grows to
+  // fit its children. Serialized so the group only re-renders when that
+  // outcome changes.
+  const extent = useStore(useCallback((state) => {
+    const style = state.nodeLookup.get(id)?.internals.userNode.style;
+    if (style?.width != null && style?.height != null) return "fixed";
+    let right = 0;
+    let bottom = 0;
+    state.parentLookup?.get(id)?.forEach((child) => {
+      if (child.hidden) return;
+      right = Math.max(right, child.position.x + (child.measured?.width ?? 0));
+      bottom = Math.max(bottom, child.position.y + (child.measured?.height ?? 0));
+    });
+    return `${right},${bottom}`;
+  }, [id]));
+  const [right, bottom] = extent === "fixed" ? [0, 0] : extent.split(",").map(Number);
+  // A collapsed group grows with its handle count so the handles stay apart.
+  const handleRows = Math.max(data?.inputs?.length ?? 1, data?.outputs?.length ?? 1);
+  const frameStyle = collapsed ? { minHeight: (handleRows + 1) * GROUP_HANDLE_SPACING } : extent === "fixed" ? undefined : {
+    minWidth: Math.max(GROUP_MIN_WIDTH, right + GROUP_PADDING),
+    minHeight: Math.max(GROUP_MIN_HEIGHT, bottom + GROUP_PADDING),
+  };
+  const toggle = (event) => {
+    event.stopPropagation();
+    actions?.toggleGroup(id, !collapsed);
+  };
+  const handleOpts = (direction) => ({
+    nodeId: id,
+    validation: collapsed ? validation : null,
+    // Expanded groups keep their handles, invisible, so edges to the group
+    // itself still have somewhere to attach.
+    connectable: collapsed ? (isConnectable === false ? false : undefined) : false,
+  });
+  return (
+    <div className={`rf-group ${collapsed ? "rf-group--collapsed" : "rf-group--expanded"}`} style={frameStyle}>
+      <div className="rf-group-header">
+        <button
+          type="button"
+          className="rf-group-toggle nodrag"
+          aria-label={collapsed ? "Expand group" : "Collapse group"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand group" : "Collapse group"}
+          onClick={toggle}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d={collapsed ? "M4 2 L8 6 L4 10" : "M2 4 L6 8 L10 4"} fill="none" stroke="currentColor" strokeWidth="1.6" />
+          </svg>
+        </button>
+        <span className="rf-group-label">{label}</span>
+      </div>
+      {renderHandles("input", data?.inputs, handleOpts("input"))}
+      {renderHandles("output", data?.outputs, handleOpts("output"))}
+    </div>
+  );
+}
 
 const SELF_LOOP_OFFSET = 40;
 const SELF_LOOP_REACH = 30;
@@ -811,6 +1025,12 @@ function areEqual(a, b) {
   }
 }
 
+// Selections compared as sets, since Python may list the ids in graph order.
+function sameSelection(a, b) {
+  const key = (selection) => JSON.stringify([[...(selection?.nodes || [])].sort(), [...(selection?.edges || [])].sort()]);
+  return key(a) === key(b);
+}
+
 function signature(value) {
   try {
     return JSON.stringify(value);
@@ -856,7 +1076,7 @@ function useCloseOnOutsideClick(position, ref, closeMsgType, model) {
  * declared on the Python side.
  */
 function nodeClassName(type, className, model) {
-  const base = (type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
+  const base = (type === "panel" || type === "group" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
   return [base, className].filter(Boolean).join(" ");
 }
 
@@ -928,6 +1148,14 @@ function sanitizeGraph(nodes, edges, nodeTypes, edgeTypes) {
     }
     nodeIds.add(node.id);
     safeNodes.push(safeNode);
+  });
+
+  safeNodes.forEach((node, index) => {
+    if (node.parentId != null && (!nodeIds.has(node.parentId) || node.parentId === node.id)) {
+      repair("missing_parent", node.id, `Parent node "${node.parentId}" not found, rendered at the top level`);
+      const { parentId, extent, ...rest } = node;
+      safeNodes[index] = rest;
+    }
   });
 
   const safeEdges = [];
@@ -1137,11 +1365,38 @@ function FlowInner({
   const validationTimerRef = useRef(null);
   const requestIdRef = useRef(0);
 
+  // A collapsed group's handle stands for the handles mapped to it in its
+  // handle_map, so a connection to it connects each of those instead.
+  const innerEnds = useCallback((nodeId, handleId, direction) => {
+    const node = graphIndex(shownNodesRef.current, edgesRef.current).byId.get(nodeId);
+    if (!isCollapsedGroup(node)) return [[nodeId, handleId]];
+    const ports = groupPorts(node);
+    const ends = ports.handleMap
+      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null) && matchesDirection(entry, direction, ports))
+      .map((entry) => [entry.node, entry.handle ?? null]);
+    return ends.length ? ends : [[nodeId, handleId]];
+  }, []);
+
+  // The edges a connection creates, one per pair of mapped inner ends.
+  const innerConnections = useCallback((connection) => {
+    const result = [];
+    innerEnds(connection.source, connection.sourceHandle, "output").forEach(([source, sourceHandle]) => {
+      innerEnds(connection.target, connection.targetHandle, "input").forEach(([target, targetHandle]) => {
+        result.push({ ...connection, source, sourceHandle, target, targetHandle });
+      });
+    });
+    return result;
+  }, [innerEnds]);
+
   const candidateReason = useCallback((connection) => {
-    const local = localConnectionReason(
-      connection, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation, dragRef.current?.handleType,
-    );
-    if (local) return local;
+    // Policies apply to every edge the connection would create, so one
+    // invalid inner edge refuses the whole fan-out.
+    for (const inner of innerConnections(connection)) {
+      const local = localConnectionReason(
+        inner, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation, dragRef.current?.handleType,
+      );
+      if (local) return local;
+    }
     if (!hasConnectionValidators) return null;
     const current = dragRef.current;
     if (!current) return "Connection validation unavailable";
@@ -1153,7 +1408,7 @@ function FlowInner({
       : connectionKey(connection.source, connection.sourceHandle, "source");
     if (!result.reasons.has(end)) return "Connection not validated";
     return result.reasons.get(end) === "" ? "Connection rejected" : result.reasons.get(end);
-  }, [connectionValidation, hasConnectionValidators, nodeTypeSpecs]);
+  }, [connectionValidation, hasConnectionValidators, innerConnections, nodeTypeSpecs]);
 
   const reasonForHandle = useCallback((nodeId, handleId, handleType) => {
     if (!drag || drag.handleType === handleType) return null;
@@ -1299,8 +1554,8 @@ function FlowInner({
       }
       if (msg.type === "patch_node_props") {
         const patch = msg.patch || {};
-        setNodes((current) =>
-          current.map((node) => {
+        setNodes((current) => {
+          const patched = current.map((node) => {
             if (node.id !== msg.node_id) {
               return node;
             }
@@ -1318,8 +1573,9 @@ function FlowInner({
               next.className = nodeClassName(next.type, declared, model);
             }
             return next;
-          }),
-        );
+          });
+          return "parentId" in patch ? orderParentsFirst(patched) : patched;
+        });
         return;
       }
       if (msg.type === "patch_edge_props") {
@@ -1386,6 +1642,10 @@ function FlowInner({
     if (hydrationFrameRef.current !== null) {
       cancelAnimationFrame(hydrationFrameRef.current);
     }
+    // A selection the page reported that Python had not confirmed when these
+    // nodes arrived is newer than their selected flags. Read now, since the
+    // confirmation may land before the next frame.
+    const selectionUnconfirmed = pendingSelectionsRef.current.length > 0;
     hydrationFrameRef.current = requestAnimationFrame(() => {
       const lastPySelected = lastPySelectedRef.current;
       const nextPySelected = new Map();
@@ -1402,7 +1662,7 @@ function FlowInner({
           // Selection is owned by the browser unless Python changed it since
           // the last push; positions of nodes being dragged, or whose move
           // has not been sent yet, stay where the pointer put them.
-          const pythonSelected = Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
+          const pythonSelected = !selectionUnconfirmed && Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
           const keepPosition = prev.dragging || pendingMoves.has(n.id);
           // The views list hands out new elements whenever it changes; a
           // node keeping the same view, or whose view is not in sync yet,
@@ -1491,26 +1751,101 @@ function FlowInner({
     [flushPatches, sendPatch],
   );
 
+  // A collapsed group's handle stands for the handles mapped to it in its
+  // handle_map, so a connection to it connects each of those instead.
   const onConnect = useCallback(
     (connection) => {
       if (!editable || !enableConnect || candidateReason(connection)) {
         return;
       }
-      const baseId = connection.id || `${connection.source}->${connection.target}`;
-      let edgeId = baseId;
-      let suffix = 1;
-      while (edgesRef.current.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
-      const newEdge = { ...connection, id: edgeId };
-      const updated = addEdge(newEdge, edgesRef.current);
-      if (updated === edgesRef.current) return;
+      let updated = edgesRef.current;
+      const added = [];
+      innerConnections(connection).forEach((inner) => {
+        const baseId = connection.id || `${inner.source}->${inner.target}`;
+        let edgeId = baseId;
+        let suffix = 1;
+        while (updated.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
+        const newEdge = { ...inner, id: edgeId };
+        const next = addEdge(newEdge, updated);
+        if (next === updated) return;
+        updated = next;
+        added.push(newEdge);
+      });
+      if (!added.length) return;
       setEdges(updated);
-      sendNow({ type: "edge_added", edge: newEdge });
+      added.forEach((edge) => sendNow({ type: "edge_added", edge }));
     },
-    [candidateReason, editable, enableConnect, sendNow, setEdges],
+    [candidateReason, editable, enableConnect, innerConnections, sendNow, setEdges],
   );
 
+  // In a read-only flow collapsing only changes this view; Python's
+  // data["collapsed"] is left alone, and a collapse set from Python wins.
+  const [localCollapse, setLocalCollapse] = useState(() => new Map());
+  const toggleGroup = useCallback((nodeId, collapsed) => {
+    if (!editable) {
+      setLocalCollapse((current) => new Map(current).set(nodeId, collapsed));
+      return;
+    }
+    setNodes((current) => current.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, collapsed } } : node
+    )));
+    sendNow({ type: "group_toggled", node_id: nodeId, collapsed });
+  }, [editable, sendNow, setNodes]);
+  const groupActions = useMemo(() => ({ toggleGroup }), [toggleGroup]);
+  useEffect(() => {
+    if (editable && localCollapse.size) setLocalCollapse(new Map());
+  }, [editable]);
+  const pyCollapsedRef = useRef(new Map());
+  useEffect(() => {
+    const previous = pyCollapsedRef.current;
+    const next = new Map();
+    const changed = new Set();
+    nodes.forEach((node) => {
+      if (node?.type !== "group") return;
+      const value = Boolean(node.data?.collapsed);
+      next.set(node.id, value);
+      if (previous.has(node.id) && previous.get(node.id) !== value) changed.add(node.id);
+    });
+    pyCollapsedRef.current = next;
+    if (changed.size) {
+      setLocalCollapse((current) => ([...changed].some((id) => current.has(id))
+        ? new Map([...current].filter(([id]) => !changed.has(id)))
+        : current));
+    }
+  }, [nodes]);
+
+  const effectiveNodes = useMemo(() => (localCollapse.size
+    ? nodes.map((node) => (localCollapse.has(node?.id)
+      ? { ...node, data: { ...node.data, collapsed: localCollapse.get(node.id) } }
+      : node))
+    : nodes), [nodes, localCollapse]);
+  const collapsed = useMemo(() => collapsedView(effectiveNodes), [effectiveNodes]);
+  const shownNodes = useMemo(() => viewNodes(effectiveNodes, collapsed), [effectiveNodes, collapsed]);
+  const shownNodesRef = useRef(shownNodes);
+  shownNodesRef.current = shownNodes;
+  // A node hidden by a collapse is deselected for good, so expanding the
+  // group does not bring back a stale selection.
+  useEffect(() => {
+    if (!collapsed) return;
+    setNodes((current) => (current.some((node) => node.selected && collapsed.hidden.has(node.id))
+      ? current.map((node) => (node.selected && collapsed.hidden.has(node.id) ? { ...node, selected: false } : node))
+      : current));
+  }, [collapsed, setNodes]);
+  const collapsedKey = collapsed?.key ?? null;
+  // Only re-routed when the edges or the collapsed groups change, not on
+  // every drag step.
+  const shownEdges = useMemo(() => routeEdges(edges, collapsed), [edges, collapsedKey]);
+
   const handleNodesChange = useCallback(
-    (changes) => {
+    (rawChanges) => {
+      // Children of a group stay below its header, out of reach of the chevron.
+      const byId = graphIndex(nodesRef.current, edgesRef.current).byId;
+      const changes = rawChanges.map((change) => {
+        if (change.type !== "position" || !change.position) return change;
+        const parentId = byId.get(change.id)?.parentId;
+        if (parentId == null || byId.get(parentId)?.type !== "group" || change.position.y >= GROUP_HEADER_HEIGHT) return change;
+        return { ...change, position: { ...change.position, y: GROUP_HEADER_HEIGHT } };
+      });
       onNodesChange(changes);
       const moved = changes.filter((change) => change.type === "position" && change.dragging !== true);
       if (!editable || !moved.length) {
@@ -1539,9 +1874,11 @@ function FlowInner({
   // baseline.
   const lastSentSelectionRef = useRef(currentSelection || { nodes: [], edges: [] });
   const pendingSelectionsRef = useRef([]);
+  const currentSelectionRef = useRef(currentSelection);
+  currentSelectionRef.current = currentSelection;
   useEffect(() => {
     const pending = pendingSelectionsRef.current;
-    const echoed = pending.findIndex((sent) => areEqual(sent, currentSelection));
+    const echoed = pending.findIndex((sent) => sameSelection(sent, currentSelection));
     if (echoed >= 0) {
       pendingSelectionsRef.current = pending.slice(echoed + 1);
       return;
@@ -1567,8 +1904,18 @@ function FlowInner({
         return;
       }
       lastSentSelectionRef.current = selection;
-      // Python does not echo a selection it already had, so keep the list short.
-      pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
+      // Python stores this selection on its nodes, so the next full nodes
+      // sync carrying it must not read as Python selecting them.
+      const selectedIds = new Set(selection.nodes);
+      const lastPySelected = new Map(lastPySelectedRef.current);
+      lastPySelected.forEach((_selected, id) => lastPySelected.set(id, selectedIds.has(id)));
+      selectedIds.forEach((id) => lastPySelected.set(id, true));
+      lastPySelectedRef.current = lastPySelected;
+      // Python does not echo a selection it already has, so only a
+      // different one waits for confirmation.
+      if (pendingSelectionsRef.current.length || !sameSelection(selection, currentSelectionRef.current)) {
+        pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
+      }
       // Python updates ``selection`` from this message, syncing it here as
       // well would make it process every selection change twice.
       schedulePatch({
@@ -1771,9 +2118,10 @@ function FlowInner({
   );
   return (
     <ConnectionValidationContext.Provider value={validationContext}>
+    <GroupActionsContext.Provider value={groupActions}>
     <ReactFlow
-      nodes={nodes}
-      edges={edges}
+      nodes={shownNodes}
+      edges={shownEdges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
@@ -1793,6 +2141,7 @@ function FlowInner({
       {showMinimap ? <MiniMap /> : null}
       <Background />
     </ReactFlow>
+    </GroupActionsContext.Provider>
     {drag && hasConnectionValidators && (!validationResults || validationResults.error) ? (
       <div className="rf-validation-status" role="status" aria-live="polite">
         {validationResults?.error || "Checking connections..."}
@@ -2009,7 +2358,7 @@ export function render({ model, view }) {
 
 
   const hydratedNodes = useMemo(() => {
-    return (pyNodes || []).map((node, idx) => {
+    return orderParentsFirst((pyNodes || []).map((node, idx) => {
       // Malformed entries are passed through untouched so the error boundary
       // and safe mode can deal with them instead of this render crashing the
       // whole component outside the boundary.
@@ -2042,7 +2391,7 @@ export function render({ model, view }) {
           _label: node.label,
         },
       };
-    });
+    }));
   }, [pyNodes, nodeEditorsById, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
@@ -2071,9 +2420,11 @@ export function render({ model, view }) {
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
       const key = JSON.stringify([spec, editorMode, valuePopupTrigger, hoverDelay]);
       const cached = cache.get(typeName);
-      const component = cached?.key === key
-        ? cached.component
-        : makeNodeComponent(typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay);
+      const component = typeName === "group"
+        ? GroupNode
+        : cached?.key === key
+          ? cached.component
+          : makeNodeComponent(typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay);
       next.set(typeName, { key, component });
       mapping[typeName] = component;
     });
