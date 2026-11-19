@@ -3383,7 +3383,9 @@ class ReactFlow(ReactComponent):
         ``parentId``) are removed with it, unless ``group_delete`` is
         ``"ungroup"``: then they move to the removed node's parent, keep
         their place on the canvas and their edges, and a ``nodes_ungrouped``
-        event is emitted for the removed node before its ``node_deleted``.
+        event is emitted for the removed node right before its
+        ``node_deleted``. Nested nodes removed along with their parent are
+        reported first, so the events can be undone in reverse order.
 
         Ids may be passed as separate arguments or as a single sequence. All
         of them are removed in one update, i.e. ``nodes`` and ``edges`` are
@@ -3422,8 +3424,13 @@ class ReactFlow(ReactComponent):
         ids = list(dict.fromkeys(_flatten_ids(node_ids)))
         if not ids:
             return
+        released: dict[str, list[str]] = {}
         if self.group_delete == "ungroup":
-            self._release_children(ids)
+            # Nested nodes are reported before their parents, and a parent's
+            # nodes_ungrouped right before its node_deleted, so undoing the
+            # events in reverse order restores parents before their contents.
+            ids.sort(key=self._depth, reverse=True)
+            released = self._release_children(ids)
         else:
             # Children go with their parent, as when deleting in the browser.
             ids += [node_id for node_id in self._descendants(ids) if node_id not in ids]
@@ -3449,6 +3456,8 @@ class ReactFlow(ReactComponent):
         # payloads emitted when removing the nodes sequentially.
         reported_edges: set[str | None] = set()
         for node_id in ids:
+            if node_id in released:
+                self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": node_id, "node_ids": released[node_id]})
             deleted_edges = []
             for edge in removed_edges:
                 edge_id = self._edge_id(edge)
@@ -4268,11 +4277,10 @@ class ReactFlow(ReactComponent):
         self._emit("nodes_grouped", {"type": "nodes_grouped", "group_id": group_id, "node_ids": ids})
         return group_id
 
-    def _release_children(self, removed_ids: Sequence[str]) -> None:
+    def _release_children(self, removed_ids: Sequence[str]) -> dict[str, list[str]]:
         """Move the children of nodes about to be removed to their nearest kept ancestor.
 
-        Emits ``nodes_ungrouped`` per removed parent, so that undoing the
-        events in reverse order first restores the parent, then its children.
+        Returns the moved children by the removed parent they were in.
         """
         removed = set(removed_ids)
         moves: dict[str | None, list[str]] = {}
@@ -4291,8 +4299,18 @@ class ReactFlow(ReactComponent):
             released.setdefault(parent, []).append(node_id)
         for target, children in moves.items():
             self._reparent(children, target, {"extent": None, "expandParent": None})
-        for group_id, children in released.items():
-            self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": group_id, "node_ids": children})
+        return released
+
+    def _depth(self, node_id: str) -> int:
+        depth, seen = 0, {node_id}
+        node = self._get_node(node_id)
+        parent = self._node_parent(node) if node is not None else None
+        while parent is not None and parent not in seen:
+            seen.add(parent)
+            depth += 1
+            node = self._get_node(parent)
+            parent = self._node_parent(node) if node is not None else None
+        return depth
 
     def ungroup(self, group_id: str) -> list[str]:
         """Dissolve a group, keeping its children where they are.

@@ -156,9 +156,15 @@ were selected along with the group are still deleted.
 flow = ReactFlow(nodes=nodes, edges=edges, group_delete="ungroup")
 ```
 
-The events are `nodes_ungrouped` followed by the group's `node_deleted`, so
-undoing them in reverse order restores the group before moving its children
-back into it.
+Members deleted along with the group are reported first, each with a
+`node_deleted`, then the group's `nodes_ungrouped` and its `node_deleted`.
+Undoing the events in reverse order therefore re-adds the group, moves its
+remaining children back into it with `set_parent()`, and then re-adds the
+deleted members, whose `parentId` refers to the restored group. Edges
+deleted with a node are listed in its `node_deleted` payload's
+`deleted_edges`, except in the browser for an edge attached to the group
+itself: that one is reported as a separate `edge_deleted` event before
+`nodes_ungrouped`.
 
 ## Events
 

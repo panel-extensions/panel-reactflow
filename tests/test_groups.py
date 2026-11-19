@@ -357,7 +357,17 @@ def test_remove_group_with_ungroup_policy_keeps_children_and_edges():
 def test_remove_group_and_member_with_ungroup_policy():
     flow = _flow(group_delete="ungroup")
     flow.group_nodes(["a", "b"], group_id="g")
+    flow._handle_msg({"type": "selection_changed", "nodes": ["g", "a"], "edges": []})
+    events = []
+    flow.on("*", events.append)
     flow.remove_node("g", "a")
+    types = [(e["type"], e.get("node_id") or e.get("group_id")) for e in events]
+    assert types == [
+        ("selection_changed", None),
+        ("node_deleted", "a"),
+        ("nodes_ungrouped", "g"),
+        ("node_deleted", "g"),
+    ]
     assert _ids(flow) == ["b", "c"]
     assert [edge["id"] for edge in flow.edges] == []
     assert flow._get_node("b")["position"] == {"x": 300, "y": 220}
@@ -390,3 +400,26 @@ def test_browser_node_deleted_follows_group_delete():
     flow._handle_msg({"type": "node_deleted", "node_id": "g", "node_ids": ["g"], "deleted_edges": []})
     assert _ids(flow) == ["a", "b", "c"]
     assert [edge["id"] for edge in flow.edges] == ["c-a", "a-b"]
+
+
+def test_ungroup_policy_events_undo_in_reverse_order():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g")
+    flow.add_edge({"id": "c-g", "source": "c", "target": "g"})
+    before_nodes = {flow._node_id(node): dict(node) for node in flow.nodes}
+    before_edges = {edge["id"]: dict(edge) for edge in flow.edges}
+    events = []
+    flow.on("*", events.append)
+    flow.remove_node("g", "a")
+
+    for event in reversed(events):
+        if event["type"] == "node_deleted":
+            flow.add_node(before_nodes[event["node_id"]])
+            flow.add_edges([before_edges[edge_id] for edge_id in event["deleted_edges"]])
+        elif event["type"] == "nodes_ungrouped":
+            flow.set_parent(event["node_ids"], event["group_id"])
+    after_nodes = {flow._node_id(node): node for node in flow.nodes}
+    for node_id, node in before_nodes.items():
+        assert after_nodes[node_id].get("parentId") == node.get("parentId")
+        assert after_nodes[node_id]["position"] == node["position"]
+    assert {edge["id"] for edge in flow.edges} == set(before_edges)
