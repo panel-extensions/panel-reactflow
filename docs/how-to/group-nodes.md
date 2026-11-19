@@ -144,6 +144,28 @@ policies (cycles, duplicates, capacity, types, direction) run on each edge
 the connection would create, and the group handle is only a valid target if
 all of them pass. If one fails, no edge is created.
 
+## Deleting a group
+
+By default deleting a group, with the delete key or `remove_node()`, also
+deletes the nodes in it and their edges. With `group_delete="ungroup"` only
+the group is deleted: its children move to the group's parent, keep their
+place on the canvas and keep their edges, as with `ungroup()`. Members that
+were selected along with the group are still deleted.
+
+```python
+flow = ReactFlow(nodes=nodes, edges=edges, group_delete="ungroup")
+```
+
+Members deleted along with the group are reported first, each with a
+`node_deleted`, then the group's `nodes_ungrouped` and its `node_deleted`.
+Undoing the events in reverse order therefore re-adds the group, moves its
+remaining children back into it with `set_parent()`, and then re-adds the
+deleted members, whose `parentId` refers to the restored group. Edges
+deleted with a node are listed in its `node_deleted` payload's
+`deleted_edges`, except in the browser for an edge attached to the group
+itself: that one is reported as a separate `edge_deleted` event before
+`nodes_ungrouped`.
+
 ## Events
 
 | Event | Payload |

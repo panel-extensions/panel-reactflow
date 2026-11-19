@@ -1905,6 +1905,16 @@ class ReactFlow(ReactComponent):
         doc="Whether port and edge inspection events are triggered on click, hover, or not automatically.",
     )
 
+    group_delete = param.Selector(
+        default="cascade",
+        objects=["cascade", "ungroup"],
+        doc="""
+        What deleting a node that contains other nodes does, in the browser
+        and in remove_node(). 'cascade' deletes the nodes nested in it as
+        well; 'ungroup' deletes only that node and moves its children to its
+        parent, keeping their place on the canvas and their edges.""",
+    )
+
     popup_hover_delay = param.Integer(
         default=500,
         bounds=(0, None),
@@ -3370,7 +3380,12 @@ class ReactFlow(ReactComponent):
         Removes the specified nodes and automatically removes any edges that
         are connected to them (either as source or target). This ensures the
         graph remains consistent. Nodes nested in a removed node (through
-        ``parentId``) are removed with it.
+        ``parentId``) are removed with it, unless ``group_delete`` is
+        ``"ungroup"``: then they move to the removed node's parent, keep
+        their place on the canvas and their edges, and a ``nodes_ungrouped``
+        event is emitted for the removed node right before its
+        ``node_deleted``. Nested nodes removed along with their parent are
+        reported first, so the events can be undone in reverse order.
 
         Ids may be passed as separate arguments or as a single sequence. All
         of them are removed in one update, i.e. ``nodes`` and ``edges`` are
@@ -3409,8 +3424,16 @@ class ReactFlow(ReactComponent):
         ids = list(dict.fromkeys(_flatten_ids(node_ids)))
         if not ids:
             return
-        # Children go with their parent, as when deleting in the browser.
-        ids += [node_id for node_id in self._descendants(ids) if node_id not in ids]
+        released: dict[str, list[str]] = {}
+        if self.group_delete == "ungroup":
+            # Nested nodes are reported before their parents, and a parent's
+            # nodes_ungrouped right before its node_deleted, so undoing the
+            # events in reverse order restores parents before their contents.
+            ids.sort(key=self._depth, reverse=True)
+            released = self._release_children(ids)
+        else:
+            # Children go with their parent, as when deleting in the browser.
+            ids += [node_id for node_id in self._descendants(ids) if node_id not in ids]
         id_set = set(ids)
         removed_nodes = {}
         remaining_nodes = []
@@ -3433,6 +3456,8 @@ class ReactFlow(ReactComponent):
         # payloads emitted when removing the nodes sequentially.
         reported_edges: set[str | None] = set()
         for node_id in ids:
+            if node_id in released:
+                self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": node_id, "node_ids": released[node_id]})
             deleted_edges = []
             for edge in removed_edges:
                 edge_id = self._edge_id(edge)
@@ -4252,13 +4277,49 @@ class ReactFlow(ReactComponent):
         self._emit("nodes_grouped", {"type": "nodes_grouped", "group_id": group_id, "node_ids": ids})
         return group_id
 
+    def _release_children(self, removed_ids: Sequence[str]) -> dict[str, list[str]]:
+        """Move the children of nodes about to be removed to their nearest kept ancestor.
+
+        Returns the moved children by the removed parent they were in.
+        """
+        removed = set(removed_ids)
+        moves: dict[str | None, list[str]] = {}
+        released: dict[str, list[str]] = {}
+        for node in self.nodes:
+            node_id, parent = self._node_id(node), self._node_parent(node)
+            if node_id in removed or parent not in removed:
+                continue
+            target = parent
+            seen: set[str] = set()
+            while target in removed and target not in seen:
+                seen.add(target)
+                target_node = self._get_node(target)
+                target = self._node_parent(target_node) if target_node is not None else None
+            moves.setdefault(None if target in removed else target, []).append(node_id)
+            released.setdefault(parent, []).append(node_id)
+        for target, children in moves.items():
+            self._reparent(children, target, {"extent": None, "expandParent": None})
+        return released
+
+    def _depth(self, node_id: str) -> int:
+        depth, seen = 0, {node_id}
+        node = self._get_node(node_id)
+        parent = self._node_parent(node) if node is not None else None
+        while parent is not None and parent not in seen:
+            seen.add(parent)
+            depth += 1
+            node = self._get_node(parent)
+            parent = self._node_parent(node) if node is not None else None
+        return depth
+
     def ungroup(self, group_id: str) -> list[str]:
         """Dissolve a group, keeping its children where they are.
 
         The children of the group are moved to the group's own parent, keep
         their place on the canvas and lose the ``extent`` and
         ``expandParent`` that tied them to the group. The group node and
-        edges connected to it are removed.
+        edges connected to it are removed. ``nodes_ungrouped`` is emitted
+        before the group's ``node_deleted``.
 
         Parameters
         ----------
@@ -4279,12 +4340,11 @@ class ReactFlow(ReactComponent):
         if group is None:
             raise ValueError(f"No node with id {group_id!r}.")
         children = [self._node_id(node) for node in self.nodes if self._node_parent(node) == group_id]
-        if children:
-            self._reparent(children, self._node_parent(group), {"extent": None, "expandParent": None})
+        self._reparent(children, self._node_parent(group), {"extent": None, "expandParent": None})
+        self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": group_id, "node_ids": children})
         # The children no longer refer to the group, so they stay, and the
         # nodes sync that removes the group carries their new positions.
         self.remove_node(group_id)
-        self._emit("nodes_ungrouped", {"type": "nodes_ungrouped", "group_id": group_id, "node_ids": children})
         return children
 
     def collapse_group(self, group_id: str, collapsed: bool = True) -> None:

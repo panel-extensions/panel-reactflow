@@ -578,3 +578,85 @@ def test_python_collapse_overrides_read_only_toggle(page):
     expect(_node(page, "a")).to_be_hidden()
     flow.expand_group("g")
     expect(_node(page, "a")).to_be_visible()
+
+
+def _press_delete_on(page, node_id, *also):
+    _node(page, node_id).locator(".rf-group-label, .rf-node-label").first.click()
+    for other in also:
+        _node(page, other).locator(".rf-node-label").click(modifiers=["Shift"])
+    page.keyboard.press("Delete")
+
+
+@pytest.mark.parametrize("collapsed", [False, True])
+def test_delete_key_on_group_ungroups_with_ungroup_policy(page, collapsed):
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline", data={"collapsed": collapsed})
+    events = []
+    flow.on("*", lambda event: events.append(event["type"]))
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+    before = {child: dict(flow.absolute_position(child)) for child in ("a", "b")}
+
+    _press_delete_on(page, "g")
+    wait_until(lambda: flow._get_node("g") is None, timeout=5000)
+    page.wait_for_timeout(500)
+
+    assert [n["id"] for n in flow.nodes] == ["src", "a", "b", "dst"]
+    assert [e["id"] for e in flow.edges] == ["src-a", "a-b", "b-dst"]
+    for child in ("a", "b"):
+        assert flow.absolute_position(child) == before[child]
+        assert "parentId" not in flow._get_node(child)
+    assert [e for e in events if e in ("nodes_ungrouped", "node_deleted", "edge_deleted")] == ["nodes_ungrouped", "node_deleted"]
+    expect(_node(page, "a")).to_be_visible()
+    expect(_edge(page, "a-b")).to_be_visible()
+    expect(page.locator(".react-flow__node")).to_have_count(4)
+
+
+def test_delete_group_and_selected_member_with_ungroup_policy(page):
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline")
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+    b_box = _node(page, "b").bounding_box()
+
+    _press_delete_on(page, "g", "a")
+    wait_until(lambda: flow._get_node("g") is None, timeout=5000)
+    page.wait_for_timeout(500)
+
+    assert [n["id"] for n in flow.nodes] == ["src", "b", "dst"]
+    assert [e["id"] for e in flow.edges] == ["b-dst"]
+    after = _wait_settled(page, _node(page, "b"))
+    assert abs(after["x"] - b_box["x"]) < 2 and abs(after["y"] - b_box["y"]) < 2
+
+
+def test_delete_key_on_group_cascades_by_default(page):
+    flow = _flow()
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline")
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+
+    _press_delete_on(page, "g")
+    wait_until(lambda: flow._get_node("g") is None, timeout=5000)
+    assert [n["id"] for n in flow.nodes] == ["src", "dst"]
+    assert flow.edges == []
+
+
+def test_select_new_group_right_after_grouping(page):
+    # Inside an event callback the nodes sync is held until the callback
+    # returns, so the selection patch reaches the page before the new group.
+    flow = _flow()
+    created = []
+
+    def group_and_select(event):
+        group_id = flow.group_nodes(["a", "b"])
+        flow.patch_node_props(group_id, {"selected": True})
+        created.append(group_id)
+
+    flow.on("node_clicked", group_and_select)
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "src"))
+
+    _node(page, "src").locator(".rf-node-label").click()
+    wait_until(lambda: bool(created), timeout=5000)
+    expect(_node(page, created[0])).to_have_class(re.compile(r"\bselected\b"))
+    wait_until(lambda: created[0] in flow.selection["nodes"], timeout=5000)

@@ -188,8 +188,8 @@ def test_ungroup_restores_positions():
     for child in ("a", "b"):
         assert not {"parentId", "extent", "expandParent"} & set(flow._get_node(child))
     assert [edge["id"] for edge in flow.edges] == ["c-a", "a-b"]
-    assert [e["type"] for e in events] == ["node_deleted", "nodes_ungrouped"]
-    assert events[-1] == {"type": "nodes_ungrouped", "group_id": "g", "node_ids": ["a", "b"]}
+    assert [e["type"] for e in events] == ["nodes_ungrouped", "node_deleted"]
+    assert events[0] == {"type": "nodes_ungrouped", "group_id": "g", "node_ids": ["a", "b"]}
 
 
 def test_ungroup_nested_moves_children_to_outer_group():
@@ -335,3 +335,91 @@ def test_validation_candidates_when_dragging_from_collapsed_group():
     flow.add_connection_validator(lambda connection: seen.append((connection["source"], connection["sourceHandle"])))
     flow._connection_candidates("g", "out", "source")
     assert set(seen) == {("b", None)}
+
+
+def test_remove_group_with_ungroup_policy_keeps_children_and_edges():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g", extent="parent")
+    flow.add_edge({"id": "c-g", "source": "c", "target": "g"})
+    events = []
+    flow.on("*", events.append)
+    flow.remove_node("g")
+    assert _ids(flow) == ["a", "b", "c"]
+    assert [edge["id"] for edge in flow.edges] == ["c-a", "a-b"]
+    assert flow._get_node("a")["position"] == {"x": 100, "y": 100}
+    assert not {"parentId", "extent", "expandParent"} & set(flow._get_node("a"))
+    assert events == [
+        {"type": "nodes_ungrouped", "group_id": "g", "node_ids": ["a", "b"]},
+        {"type": "node_deleted", "node_id": "g", "deleted_edges": ["c-g"]},
+    ]
+
+
+def test_remove_group_and_member_with_ungroup_policy():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g")
+    flow._handle_msg({"type": "selection_changed", "nodes": ["g", "a"], "edges": []})
+    events = []
+    flow.on("*", events.append)
+    flow.remove_node("g", "a")
+    types = [(e["type"], e.get("node_id") or e.get("group_id")) for e in events]
+    assert types == [
+        ("selection_changed", None),
+        ("node_deleted", "a"),
+        ("nodes_ungrouped", "g"),
+        ("node_deleted", "g"),
+    ]
+    assert _ids(flow) == ["b", "c"]
+    assert [edge["id"] for edge in flow.edges] == []
+    assert flow._get_node("b")["position"] == {"x": 300, "y": 220}
+
+
+def test_remove_nested_groups_with_ungroup_policy():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="inner")
+    flow.group_nodes(["inner", "c"], group_id="outer")
+    ungrouped = []
+    flow.on("nodes_ungrouped", ungrouped.append)
+    flow.remove_node("inner")
+    assert flow._get_node("a")["parentId"] == "outer"
+    assert flow.absolute_position("a") == {"x": 100, "y": 100}
+    flow.remove_node("outer")
+    assert _ids(flow) == ["a", "b", "c"]
+    assert flow.absolute_position("b") == {"x": 300, "y": 220}
+    assert [e["group_id"] for e in ungrouped] == ["inner", "outer"]
+    # Removing a group and its parent at once moves the children to the top.
+    flow.group_nodes(["a"], group_id="g1")
+    flow.group_nodes(["g1"], group_id="g0")
+    flow.remove_node("g0", "g1")
+    assert "parentId" not in flow._get_node("a")
+    assert flow.absolute_position("a") == {"x": 100, "y": 100}
+
+
+def test_browser_node_deleted_follows_group_delete():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g")
+    flow._handle_msg({"type": "node_deleted", "node_id": "g", "node_ids": ["g"], "deleted_edges": []})
+    assert _ids(flow) == ["a", "b", "c"]
+    assert [edge["id"] for edge in flow.edges] == ["c-a", "a-b"]
+
+
+def test_ungroup_policy_events_undo_in_reverse_order():
+    flow = _flow(group_delete="ungroup")
+    flow.group_nodes(["a", "b"], group_id="g")
+    flow.add_edge({"id": "c-g", "source": "c", "target": "g"})
+    before_nodes = {flow._node_id(node): dict(node) for node in flow.nodes}
+    before_edges = {edge["id"]: dict(edge) for edge in flow.edges}
+    events = []
+    flow.on("*", events.append)
+    flow.remove_node("g", "a")
+
+    for event in reversed(events):
+        if event["type"] == "node_deleted":
+            flow.add_node(before_nodes[event["node_id"]])
+            flow.add_edges([before_edges[edge_id] for edge_id in event["deleted_edges"]])
+        elif event["type"] == "nodes_ungrouped":
+            flow.set_parent(event["node_ids"], event["group_id"])
+    after_nodes = {flow._node_id(node): node for node in flow.nodes}
+    for node_id, node in before_nodes.items():
+        assert after_nodes[node_id].get("parentId") == node.get("parentId")
+        assert after_nodes[node_id]["position"] == node["position"]
+    assert {edge["id"] for edge in flow.edges} == set(before_edges)
