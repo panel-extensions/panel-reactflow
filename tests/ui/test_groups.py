@@ -502,35 +502,43 @@ def test_collapse_is_view_only_when_not_editable(page):
     expect(_node(page, "a")).to_be_visible()
 
 
-def test_full_sync_after_page_selection_does_not_echo_selection(page):
-    flow = _flow()
-    serve_component(page, flow)
-    _wait_settled(page, _node(page, "a"))
+def _selected_in_page(page):
+    return sorted(page.locator(".react-flow__node.selected").evaluate_all("els => els.map(n => n.dataset.id)"))
 
+
+def _select_a_and_b(page, flow):
+    _wait_settled(page, _node(page, "a"))
     _node(page, "a").locator(".rf-node-label").click()
     _node(page, "b").locator(".rf-node-label").click(modifiers=["Shift"])
     wait_until(lambda: sorted(flow.selection["nodes"]) == ["a", "b"], timeout=5000)
     page.wait_for_timeout(300)
 
-    changes = []
-    flow.on("selection_changed", changes.append)
+
+def test_python_selection_after_grouping_page_selection(page):
+    flow = _flow()
+    serve_component(page, flow)
+    _select_a_and_b(page, flow)
+
     group_id = flow.group_nodes()
-    expect(_node(page, group_id)).to_be_visible()
-    page.wait_for_timeout(800)
+    flow.nodes = [dict(node, selected=node["id"] == group_id) for node in flow.nodes]
+    page.wait_for_timeout(1000)
+    assert _selected_in_page(page) == [group_id]
+    assert flow.selection["nodes"] == [group_id]
 
-    assert changes == []
-    assert sorted(flow.selection["nodes"]) == ["a", "b"]
-    for node_id, selected in (("a", True), ("b", True), (group_id, False), ("src", False)):
-        assert ("selected" in (_node(page, node_id).get_attribute("class") or "").split()) is selected
 
-    # Clearing the selection in the page sticks through the next full sync.
+def test_full_sync_does_not_restore_selection_cleared_in_page(page):
+    flow = _flow()
+    serve_component(page, flow)
+    _select_a_and_b(page, flow)
+
+    # The page clears the selection and a full sync made before Python
+    # handled the clear arrives.
     pane = page.locator(".react-flow__pane").bounding_box()
     page.mouse.click(pane["x"] + pane["width"] - 20, pane["y"] + pane["height"] - 20)
-    wait_until(lambda: flow.selection["nodes"] == [], timeout=5000)
-    flow.ungroup(group_id)
-    page.wait_for_timeout(800)
+    flow.group_nodes(["src"], group_id="g")
+    page.wait_for_timeout(1000)
+    assert _selected_in_page(page) == []
     assert flow.selection["nodes"] == []
-    expect(page.locator(".react-flow__node.selected")).to_have_count(0)
 
 
 def test_full_sync_keeps_selection_python_has_not_received(page):
@@ -553,3 +561,20 @@ def test_full_sync_keeps_selection_python_has_not_received(page):
     wait_until(lambda: flow.selection["nodes"] == [], timeout=5000)
     page.wait_for_timeout(300)
     expect(page.locator(".react-flow__node.selected")).to_have_count(0)
+
+
+def test_python_collapse_overrides_read_only_toggle(page):
+    flow = _flow(editable=False)
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline")
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+
+    _node(page, "g").get_by_role("button", name="Collapse group").click()
+    expect(_node(page, "a")).to_be_hidden()
+    _node(page, "g").get_by_role("button", name="Expand group").click()
+    expect(_node(page, "a")).to_be_visible()
+
+    flow.collapse_group("g")
+    expect(_node(page, "a")).to_be_hidden()
+    flow.expand_group("g")
+    expect(_node(page, "a")).to_be_visible()

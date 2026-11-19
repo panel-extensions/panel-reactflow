@@ -694,6 +694,7 @@ def test_connection_validation_demo(page):
 def test_selection_syncs_between_ui_and_python(page):
     flow = _make_flow()
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     _node_locator(page, "Start").click(force=True)
     wait_until(lambda: "n1" in flow.selection["nodes"], timeout=8000)
@@ -724,6 +725,7 @@ def test_selection_works_when_not_editable(page):
     flow = _make_flow()
     flow.editable = False
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     _node_locator(page, "Start").click(force=True)
     wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
@@ -839,6 +841,7 @@ def test_selection_disabled_when_not_selectable(page):
 def test_disabling_selectable_clears_selection(page):
     flow = _make_flow()
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     _node_locator(page, "Start").click(force=True)
     wait_until(lambda: flow.selection["nodes"] == ["n1"], timeout=8000)
@@ -862,6 +865,7 @@ def test_selection_changed_emitted_in_debounce_mode(page):
     events = []
     flow.on("selection_changed", events.append)
     serve_component(page, flow)
+    _wait_for_viewport(page)
 
     _node_locator(page, "Start").click(force=True)
     wait_until(lambda: len(events) == 1, timeout=8000)

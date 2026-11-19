@@ -1025,6 +1025,12 @@ function areEqual(a, b) {
   }
 }
 
+// Selections compared as sets, since Python may list the ids in graph order.
+function sameSelection(a, b) {
+  const key = (selection) => JSON.stringify([[...(selection?.nodes || [])].sort(), [...(selection?.edges || [])].sort()]);
+  return key(a) === key(b);
+}
+
 function signature(value) {
   try {
     return JSON.stringify(value);
@@ -1636,13 +1642,16 @@ function FlowInner({
     if (hydrationFrameRef.current !== null) {
       cancelAnimationFrame(hydrationFrameRef.current);
     }
+    // A selection the page reported that Python had not confirmed when these
+    // nodes arrived is newer than their selected flags. Read now, since the
+    // confirmation may land before the next frame.
+    const selectionUnconfirmed = pendingSelectionsRef.current.length > 0;
     hydrationFrameRef.current = requestAnimationFrame(() => {
       const lastPySelected = lastPySelectedRef.current;
       const nextPySelected = new Map();
       const pendingMoves = new Set(
         patchQueueRef.current.filter((payload) => payload.type === "node_moved").map((payload) => payload.node_id),
       );
-      const selectionQueued = patchQueueRef.current.some((payload) => payload.type === "selection_changed");
       setNodes((curr) => {
         const currById = new Map(curr.map((n) => [n?.id, n]));
         const merged = hydratedNodes.map((n) => {
@@ -1653,9 +1662,7 @@ function FlowInner({
           // Selection is owned by the browser unless Python changed it since
           // the last push; positions of nodes being dragged, or whose move
           // has not been sent yet, stay where the pointer put them.
-          // While a page selection waits in the debounce queue Python's
-          // flags are older than the page's, so they are not a change.
-          const pythonSelected = !selectionQueued && Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
+          const pythonSelected = !selectionUnconfirmed && Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
           const keepPosition = prev.dragging || pendingMoves.has(n.id);
           // The views list hands out new elements whenever it changes; a
           // node keeping the same view, or whose view is not in sync yet,
@@ -1788,6 +1795,24 @@ function FlowInner({
   useEffect(() => {
     if (editable && localCollapse.size) setLocalCollapse(new Map());
   }, [editable]);
+  const pyCollapsedRef = useRef(new Map());
+  useEffect(() => {
+    const previous = pyCollapsedRef.current;
+    const next = new Map();
+    const changed = new Set();
+    nodes.forEach((node) => {
+      if (node?.type !== "group") return;
+      const value = Boolean(node.data?.collapsed);
+      next.set(node.id, value);
+      if (previous.has(node.id) && previous.get(node.id) !== value) changed.add(node.id);
+    });
+    pyCollapsedRef.current = next;
+    if (changed.size) {
+      setLocalCollapse((current) => ([...changed].some((id) => current.has(id))
+        ? new Map([...current].filter(([id]) => !changed.has(id)))
+        : current));
+    }
+  }, [nodes]);
 
   const effectiveNodes = useMemo(() => (localCollapse.size
     ? nodes.map((node) => (localCollapse.has(node?.id)
@@ -1849,9 +1874,11 @@ function FlowInner({
   // baseline.
   const lastSentSelectionRef = useRef(currentSelection || { nodes: [], edges: [] });
   const pendingSelectionsRef = useRef([]);
+  const currentSelectionRef = useRef(currentSelection);
+  currentSelectionRef.current = currentSelection;
   useEffect(() => {
     const pending = pendingSelectionsRef.current;
-    const echoed = pending.findIndex((sent) => areEqual(sent, currentSelection));
+    const echoed = pending.findIndex((sent) => sameSelection(sent, currentSelection));
     if (echoed >= 0) {
       pendingSelectionsRef.current = pending.slice(echoed + 1);
       return;
@@ -1884,8 +1911,11 @@ function FlowInner({
       lastPySelected.forEach((_selected, id) => lastPySelected.set(id, selectedIds.has(id)));
       selectedIds.forEach((id) => lastPySelected.set(id, true));
       lastPySelectedRef.current = lastPySelected;
-      // Python does not echo a selection it already had, so keep the list short.
-      pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
+      // Python does not echo a selection it already has, so only a
+      // different one waits for confirmation.
+      if (pendingSelectionsRef.current.length || !sameSelection(selection, currentSelectionRef.current)) {
+        pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
+      }
       // Python updates ``selection`` from this message, syncing it here as
       // well would make it process every selection change twice.
       schedulePatch({
