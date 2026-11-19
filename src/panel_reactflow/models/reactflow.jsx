@@ -9,7 +9,15 @@ const BUILTIN_NODE_TYPES = {
   panel: { label: "Panel" },
   default: { label: "Default" },
   minimal: { label: "Minimal", minimal: true },
+  group: { label: "Group" },
 };
+
+// Room a group frame leaves around its children; Python's group_nodes()
+// places groups with the same padding and GROUP_HEADER_HEIGHT.
+const GROUP_PADDING = 20;
+const GROUP_MIN_WIDTH = 160;
+const GROUP_MIN_HEIGHT = 80;
+const GROUP_HANDLE_SPACING = 18;
 
 const viewWrapperClassName = "rf-node-view-wrapper rf-node-view-wrapper--bokeh-scale nodrag nopan nowheel";
 
@@ -25,6 +33,132 @@ const HOVER_CLOSE_GRACE_MS = 150;
 const CONNECTION_VALIDATION_TIMEOUT_MS = 3000;
 const popupHoverState = { inside: false, closeTimers: new Set() };
 const ConnectionValidationContext = React.createContext(null);
+const GroupActionsContext = React.createContext(null);
+
+function isCollapsedGroup(node) {
+  return node?.type === "group" && Boolean(node.data?.collapsed);
+}
+
+// A group's handles are declared per node, since they stand in for the
+// handles of the nodes it contains.
+function handleSpec(node, nodeTypeSpecs) {
+  if (node.type === "group") {
+    return { inputs: node.data?.inputs, outputs: node.data?.outputs };
+  }
+  return nodeTypeSpecs[node.type];
+}
+
+/**
+ * React Flow needs a parent before its children in the node list. Returns
+ * the list itself when it is already in order.
+ */
+function orderParentsFirst(nodes) {
+  if (!nodes.some((node) => node?.parentId != null)) return nodes;
+  const byId = new Map();
+  nodes.forEach((node) => {
+    if (node && typeof node === "object" && !byId.has(node.id)) byId.set(node.id, node);
+  });
+  const placed = new Set();
+  const ordered = [];
+  const place = (node) => {
+    if (placed.has(node)) return;
+    placed.add(node);
+    const parent = node.parentId != null ? byId.get(node.parentId) : null;
+    if (parent) place(parent);
+    ordered.push(node);
+  };
+  nodes.forEach((node) => (node && typeof node === "object" ? place(node) : ordered.push(node)));
+  return ordered.every((node, index) => node === nodes[index]) ? nodes : ordered;
+}
+
+/**
+ * Map every node inside a collapsed group to the outermost collapsed group
+ * containing it, i.e. the node drawn in its place. Null when no group is
+ * collapsed.
+ */
+function collapsedView(nodes) {
+  const byId = new Map();
+  let anyCollapsed = false;
+  nodes.forEach((node) => {
+    if (!node || typeof node !== "object") return;
+    byId.set(node.id, node);
+    anyCollapsed ||= isCollapsedGroup(node);
+  });
+  if (!anyCollapsed) return null;
+  const reps = new Map();
+  const resolve = (id) => {
+    if (reps.has(id)) return reps.get(id);
+    reps.set(id, null);
+    const parentId = byId.get(id)?.parentId;
+    let rep = null;
+    if (parentId != null && byId.has(parentId)) {
+      rep = resolve(parentId) ?? (isCollapsedGroup(byId.get(parentId)) ? parentId : null);
+    }
+    reps.set(id, rep);
+    return rep;
+  };
+  byId.forEach((_node, id) => resolve(id));
+  const hidden = new Map([...reps].filter(([, rep]) => rep !== null));
+  const groups = new Map();
+  hidden.forEach((rep) => {
+    if (!groups.has(rep)) groups.set(rep, byId.get(rep).data?.handle_map || []);
+  });
+  return { hidden, groups, key: JSON.stringify([[...hidden], [...groups]]) };
+}
+
+function mappedGroupHandle(handleMap, nodeId, handleId) {
+  const entry = handleMap.find((e) => e.node === nodeId && "handle" in e && (e.handle ?? null) === (handleId ?? null)) ||
+    handleMap.find((e) => e.node === nodeId && !("handle" in e));
+  // Unmapped edges attach to the group's first handle on that side.
+  return entry?.group_handle ?? null;
+}
+
+/**
+ * Draw edges into nodes hidden by a collapsed group to the group instead.
+ * Only the rendered edges change, ids are kept so selections and deletions
+ * still refer to the real edges.
+ */
+function routeEdges(edges, view) {
+  if (!view) return edges;
+  const { hidden, groups } = view;
+  return edges.map((edge) => {
+    const sourceRep = hidden.get(edge.source);
+    const targetRep = hidden.get(edge.target);
+    if (!sourceRep && !targetRep) return edge;
+    const source = sourceRep || edge.source;
+    const target = targetRep || edge.target;
+    if (source === target) return edge.hidden ? edge : { ...edge, hidden: true };
+    return {
+      ...edge,
+      source,
+      target,
+      sourceHandle: sourceRep ? mappedGroupHandle(groups.get(sourceRep), edge.source, edge.sourceHandle) : edge.sourceHandle,
+      targetHandle: targetRep ? mappedGroupHandle(groups.get(targetRep), edge.target, edge.targetHandle) : edge.targetHandle,
+      className: [edge.className, "rf-edge--rerouted"].filter(Boolean).join(" "),
+    };
+  });
+}
+
+function withoutSize(style) {
+  if (!style || (style.width === undefined && style.height === undefined)) return style;
+  const { width, height, ...rest } = style;
+  return rest;
+}
+
+function viewNodes(nodes, view) {
+  if (!view) return nodes;
+  return nodes.map((node) => {
+    if (!node || typeof node !== "object") return node;
+    // Hidden nodes are deselected so a delete key press cannot remove them unseen.
+    if (view.hidden.has(node.id)) return node.hidden && !node.selected ? node : { ...node, hidden: true, selected: false };
+    if (isCollapsedGroup(node)) {
+      // A collapsed group shrinks to its header, whatever size the frame had.
+      const { width, height, ...rest } = node;
+      return { ...rest, style: withoutSize(node.style) };
+    }
+    return node;
+  });
+}
 
 function connectionKey(nodeId, handleId, handleType) {
   return JSON.stringify([nodeId, handleId ?? null, handleType]);
@@ -97,8 +231,8 @@ function localConnectionReason(connection, nodes, edges, nodeTypeSpecs, policy, 
   const source = index.byId.get(connection.source);
   const target = index.byId.get(connection.target);
   if (!source || !target) return "Node not found";
-  const sourceHandle = getHandle(nodeTypeSpecs[source.type], "source", connection.sourceHandle);
-  const targetHandle = getHandle(nodeTypeSpecs[target.type], "target", connection.targetHandle);
+  const sourceHandle = getHandle(handleSpec(source, nodeTypeSpecs), "source", connection.sourceHandle);
+  const targetHandle = getHandle(handleSpec(target, nodeTypeSpecs), "target", connection.targetHandle);
   if (policy.direction && (!sourceHandle || !targetHandle)) return "Connect an output to an input";
   if (policy.cycles) {
     if (source.id === target.id) return "Connection would create a cycle";
@@ -587,6 +721,62 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
 }
 
 
+function GroupNode({ id, data, isConnectable }) {
+  const validation = React.useContext(ConnectionValidationContext);
+  const actions = React.useContext(GroupActionsContext);
+  const collapsed = Boolean(data?.collapsed);
+  const label = data?._label ?? "";
+  // Serialized so the group only re-renders when its children's extent changes.
+  const extent = useStore(useCallback((state) => {
+    let right = 0;
+    let bottom = 0;
+    state.parentLookup?.get(id)?.forEach((child) => {
+      if (child.hidden) return;
+      right = Math.max(right, child.position.x + (child.measured?.width ?? 0));
+      bottom = Math.max(bottom, child.position.y + (child.measured?.height ?? 0));
+    });
+    return `${right},${bottom}`;
+  }, [id]));
+  const [right, bottom] = extent.split(",").map(Number);
+  // A collapsed group grows with its handle count so the handles stay apart.
+  const handleRows = Math.max(data?.inputs?.length ?? 1, data?.outputs?.length ?? 1);
+  const frameStyle = collapsed ? { minHeight: (handleRows + 1) * GROUP_HANDLE_SPACING } : {
+    minWidth: Math.max(GROUP_MIN_WIDTH, right + GROUP_PADDING),
+    minHeight: Math.max(GROUP_MIN_HEIGHT, bottom + GROUP_PADDING),
+  };
+  const toggle = (event) => {
+    event.stopPropagation();
+    actions?.toggleGroup(id, !collapsed);
+  };
+  const handleOpts = (direction) => ({
+    nodeId: id,
+    validation: collapsed ? validation : null,
+    // Expanded groups keep their handles, invisible, so edges to the group
+    // itself still have somewhere to attach.
+    connectable: collapsed ? (isConnectable === false ? false : undefined) : false,
+  });
+  return (
+    <div className={`rf-group ${collapsed ? "rf-group--collapsed" : "rf-group--expanded"}`} style={frameStyle}>
+      <div className="rf-group-header">
+        <button
+          type="button"
+          className="rf-group-toggle nodrag"
+          aria-label={collapsed ? "Expand group" : "Collapse group"}
+          aria-expanded={!collapsed}
+          title={collapsed ? "Expand group" : "Collapse group"}
+          onClick={toggle}
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+            <path d={collapsed ? "M4 2 L8 6 L4 10" : "M2 4 L6 8 L10 4"} fill="none" stroke="currentColor" strokeWidth="1.6" />
+          </svg>
+        </button>
+        <span className="rf-group-label">{label}</span>
+      </div>
+      {renderHandles("input", data?.inputs, handleOpts("input"))}
+      {renderHandles("output", data?.outputs, handleOpts("output"))}
+    </div>
+  );
+}
 
 const SELF_LOOP_OFFSET = 40;
 const SELF_LOOP_REACH = 30;
@@ -856,7 +1046,7 @@ function useCloseOnOutsideClick(position, ref, closeMsgType, model) {
  * declared on the Python side.
  */
 function nodeClassName(type, className, model) {
-  const base = (type === "panel" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
+  const base = (type === "panel" || type === "group" || model.stylesheets.length > 7) ? "" : "react-flow__node-default";
   return [base, className].filter(Boolean).join(" ");
 }
 
@@ -928,6 +1118,14 @@ function sanitizeGraph(nodes, edges, nodeTypes, edgeTypes) {
     }
     nodeIds.add(node.id);
     safeNodes.push(safeNode);
+  });
+
+  safeNodes.forEach((node, index) => {
+    if (node.parentId != null && (!nodeIds.has(node.parentId) || node.parentId === node.id)) {
+      repair("missing_parent", node.id, `Parent node "${node.parentId}" not found, rendered at the top level`);
+      const { parentId, extent, ...rest } = node;
+      safeNodes[index] = rest;
+    }
   });
 
   const safeEdges = [];
@@ -1299,8 +1497,8 @@ function FlowInner({
       }
       if (msg.type === "patch_node_props") {
         const patch = msg.patch || {};
-        setNodes((current) =>
-          current.map((node) => {
+        setNodes((current) => {
+          const patched = current.map((node) => {
             if (node.id !== msg.node_id) {
               return node;
             }
@@ -1318,8 +1516,9 @@ function FlowInner({
               next.className = nodeClassName(next.type, declared, model);
             }
             return next;
-          }),
-        );
+          });
+          return "parentId" in patch ? orderParentsFirst(patched) : patched;
+        });
         return;
       }
       if (msg.type === "patch_edge_props") {
@@ -1491,23 +1690,59 @@ function FlowInner({
     [flushPatches, sendPatch],
   );
 
+  // A collapsed group's handle stands for the handles mapped to it in its
+  // handle_map, so a connection to it connects each of those instead.
+  const innerEnds = useCallback((nodeId, handleId) => {
+    const node = nodesRef.current.find((n) => n.id === nodeId);
+    if (!isCollapsedGroup(node)) return [[nodeId, handleId]];
+    const ends = (node.data.handle_map || [])
+      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null))
+      .map((entry) => [entry.node, entry.handle ?? null]);
+    return ends.length ? ends : [[nodeId, handleId]];
+  }, []);
+
   const onConnect = useCallback(
     (connection) => {
       if (!editable || !enableConnect || candidateReason(connection)) {
         return;
       }
-      const baseId = connection.id || `${connection.source}->${connection.target}`;
-      let edgeId = baseId;
-      let suffix = 1;
-      while (edgesRef.current.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
-      const newEdge = { ...connection, id: edgeId };
-      const updated = addEdge(newEdge, edgesRef.current);
-      if (updated === edgesRef.current) return;
+      let updated = edgesRef.current;
+      const added = [];
+      innerEnds(connection.source, connection.sourceHandle).forEach(([source, sourceHandle]) => {
+        innerEnds(connection.target, connection.targetHandle).forEach(([target, targetHandle]) => {
+          const inner = { ...connection, source, sourceHandle, target, targetHandle };
+          const baseId = connection.id || `${source}->${target}`;
+          let edgeId = baseId;
+          let suffix = 1;
+          while (updated.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
+          const newEdge = { ...inner, id: edgeId };
+          const next = addEdge(newEdge, updated);
+          if (next === updated) return;
+          updated = next;
+          added.push(newEdge);
+        });
+      });
+      if (!added.length) return;
       setEdges(updated);
-      sendNow({ type: "edge_added", edge: newEdge });
+      added.forEach((edge) => sendNow({ type: "edge_added", edge }));
     },
-    [candidateReason, editable, enableConnect, sendNow, setEdges],
+    [candidateReason, editable, enableConnect, innerEnds, sendNow, setEdges],
   );
+
+  const toggleGroup = useCallback((nodeId, collapsed) => {
+    setNodes((current) => current.map((node) => (
+      node.id === nodeId ? { ...node, data: { ...node.data, collapsed } } : node
+    )));
+    sendNow({ type: "group_toggled", node_id: nodeId, collapsed });
+  }, [sendNow, setNodes]);
+  const groupActions = useMemo(() => ({ toggleGroup }), [toggleGroup]);
+
+  const collapsed = useMemo(() => collapsedView(nodes), [nodes]);
+  const shownNodes = useMemo(() => viewNodes(nodes, collapsed), [nodes, collapsed]);
+  const collapsedKey = collapsed?.key ?? null;
+  // Only re-routed when the edges or the collapsed groups change, not on
+  // every drag step.
+  const shownEdges = useMemo(() => routeEdges(edges, collapsed), [edges, collapsedKey]);
 
   const handleNodesChange = useCallback(
     (changes) => {
@@ -1771,9 +2006,10 @@ function FlowInner({
   );
   return (
     <ConnectionValidationContext.Provider value={validationContext}>
+    <GroupActionsContext.Provider value={groupActions}>
     <ReactFlow
-      nodes={nodes}
-      edges={edges}
+      nodes={shownNodes}
+      edges={shownEdges}
       nodeTypes={nodeTypes}
       edgeTypes={edgeTypes}
       defaultEdgeOptions={defaultEdgeOptions}
@@ -1793,6 +2029,7 @@ function FlowInner({
       {showMinimap ? <MiniMap /> : null}
       <Background />
     </ReactFlow>
+    </GroupActionsContext.Provider>
     {drag && hasConnectionValidators && (!validationResults || validationResults.error) ? (
       <div className="rf-validation-status" role="status" aria-live="polite">
         {validationResults?.error || "Checking connections..."}
@@ -2009,7 +2246,7 @@ export function render({ model, view }) {
 
 
   const hydratedNodes = useMemo(() => {
-    return (pyNodes || []).map((node, idx) => {
+    return orderParentsFirst((pyNodes || []).map((node, idx) => {
       // Malformed entries are passed through untouched so the error boundary
       // and safe mode can deal with them instead of this render crashing the
       // whole component outside the boundary.
@@ -2042,7 +2279,7 @@ export function render({ model, view }) {
           _label: node.label,
         },
       };
-    });
+    }));
   }, [pyNodes, nodeEditorsById, views, editable, editorMode, allNodeTypes]);
 
   const hydratedEdges = useMemo(() => {
@@ -2071,9 +2308,11 @@ export function render({ model, view }) {
     Object.entries({ ...BUILTIN_NODE_TYPES, ...(pyNodeTypes || {}) }).forEach(([typeName, spec]) => {
       const key = JSON.stringify([spec, editorMode, valuePopupTrigger, hoverDelay]);
       const cached = cache.get(typeName);
-      const component = cached?.key === key
-        ? cached.component
-        : makeNodeComponent(typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay);
+      const component = typeName === "group"
+        ? GroupNode
+        : cached?.key === key
+          ? cached.component
+          : makeNodeComponent(typeName, spec, editorMode, model, valuePopupTrigger, hoverDelay);
       next.set(typeName, { key, component });
       mapping[typeName] = component;
     });
