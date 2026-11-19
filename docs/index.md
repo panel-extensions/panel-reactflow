@@ -65,8 +65,10 @@ flow.servable()
 - [Validate Connections](how-to/validate-connections.md) — check types, capacity, cycles, and application rules
 - [Define Editors](how-to/define-editors.md) — node *and* edge editors
 - [Embed Views in Nodes](how-to/embed-views-in-nodes.md)
+- [Group Nodes](how-to/group-nodes.md) — nest nodes in collapsible groups
 - [Style Nodes & Edges](how-to/style-nodes-edges.md)
 - [React to Events](how-to/react-to-events.md)
+- [Recover from Rendering Errors](how-to/recover-from-errors.md)
 
 ## Examples
 

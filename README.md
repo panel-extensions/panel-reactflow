@@ -15,6 +15,7 @@ A Panel wrapper for the React Flow JS library.
 - Python-first, JSON-serializable graph state
 - Panel viewables inside nodes via node ``view`` entries
 - Interactive editing (drag/select/connect/delete) with sync back to Python
+- Collapsible group nodes and connection validation
 - Optional schema definitions for node/edge properties
 - Event callbacks via `ReactFlow.on(...)` for app-level handling (callback signature: `callback(payload, flow)`)
 
