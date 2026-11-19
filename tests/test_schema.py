@@ -322,7 +322,7 @@ def test_schema_editor_writes_dates_as_iso_strings():
     editor._form._widgets["d"].value = dt.date(2025, 3, 4)
     assert flow.nodes[0]["data"]["d"] == "2025-03-04"
     json.dumps(flow.nodes[0]["data"])
-    assert msgs[-1] == {"type": "patch_node_data", "node_id": "a", "patch": {"d": "2025-03-04"}}
+    assert msgs[-1] == {"type": "patch_node_data", "node_id": "a", "patch": {"d": "2025-03-04"}, "revision": flow._node_update_count}
 
 
 def test_schema_editor_rejected_patch_reverts_widget(caplog):
@@ -384,7 +384,7 @@ def test_json_editor_deleting_a_key_removes_it(editor_cls):
     json_widget = editor._editor if editor_cls is JsonEditor else editor._json_editor
     json_widget.value = {"keep": 1, "new": 3}
     assert flow.nodes[0]["data"] == {"keep": 1, "new": 3}
-    assert msgs[-1] == {"type": "patch_node_data", "node_id": "n", "patch": {"new": 3}, "remove": ["drop"]}
+    assert msgs[-1] == {"type": "patch_node_data", "node_id": "n", "patch": {"new": 3}, "remove": ["drop"], "revision": flow._node_update_count}
     assert events[-1]["remove"] == ["drop"]
 
 

@@ -1496,7 +1496,8 @@ function FlowInner({
     setValidationResults(null);
   }, []);
 
-  const pendingNodePatchesRef = useRef(new Map());
+  // Node patches with the node revision Python was at when it sent them.
+  const nodePatchLogRef = useRef([]);
   const patchNode = useCallback((node, msg) => {
     if (msg.type === "patch_node_data") {
       const data = withoutKeys(node.data, msg.remove);
@@ -1551,16 +1552,12 @@ function FlowInner({
         return;
       }
       if (msg.type === "patch_node_data" || msg.type === "patch_node_props") {
+        // A nodes sync built before this patch may still be on its way (or
+        // waiting for the next frame); it is re-applied on top of it.
+        if (msg.revision != null) {
+          nodePatchLogRef.current = [...nodePatchLogRef.current, msg].slice(-500);
+        }
         setNodes((current) => {
-          if (!current.some((node) => node.id === msg.node_id)) {
-            // The node is still on its way in a nodes sync; apply the patch
-            // when it arrives instead of dropping it.
-            const pending = pendingNodePatchesRef.current;
-            pending.set(msg.node_id, [...(pending.get(msg.node_id) || []), msg].slice(-50));
-            // Patches for nodes that never arrive are dropped, oldest first.
-            if (pending.size > 100) pending.delete(pending.keys().next().value);
-            return current;
-          }
           const patched = current.map((node) => (node.id === msg.node_id ? patchNode(node, msg) : node));
           return msg.type === "patch_node_props" && "parentId" in (msg.patch || {}) ? orderParentsFirst(patched) : patched;
         });
@@ -1648,6 +1645,7 @@ function FlowInner({
     // nodes arrived is newer than their selected flags. Read now, since the
     // confirmation may land before the next frame.
     const selectionUnconfirmed = pendingSelectionsRef.current.length > 0;
+    const revision = nodeUpdateCount ?? 0;
     hydrationFrameRef.current = requestAnimationFrame(() => {
       const lastPySelected = lastPySelectedRef.current;
       const nextPySelected = new Map();
@@ -1681,17 +1679,17 @@ function FlowInner({
           return areEqual(prev, next) ? prev : next;
         });
         lastPySelectedRef.current = nextPySelected;
-        const pendingPatches = pendingNodePatchesRef.current;
+        // Patches sent after these nodes were serialized are newer than
+        // them; patches sent before are already part of them.
+        nodePatchLogRef.current = nodePatchLogRef.current.filter((msg) => msg.revision >= revision);
         let result = merged;
-        const arrived = pendingPatches.size ? merged.filter((node) => pendingPatches.has(node?.id)).map((node) => node.id) : [];
-        if (arrived.length) {
-          const reparented = arrived.some((id) => pendingPatches.get(id).some((msg) => "parentId" in (msg.patch || {})));
-          const ids = new Set(arrived);
-          result = merged.map((node) => (ids.has(node?.id)
-            ? pendingPatches.get(node.id).reduce((patched, msg) => patchNode(patched, msg), node)
+        if (nodePatchLogRef.current.length) {
+          const byNode = new Map();
+          nodePatchLogRef.current.forEach((msg) => byNode.set(msg.node_id, [...(byNode.get(msg.node_id) || []), msg]));
+          result = merged.map((node) => (byNode.has(node?.id)
+            ? byNode.get(node.id).reduce((patched, msg) => patchNode(patched, msg), node)
             : node));
-          arrived.forEach((id) => pendingPatches.delete(id));
-          if (reparented) result = orderParentsFirst(result);
+          if (nodePatchLogRef.current.some((msg) => "parentId" in (msg.patch || {}))) result = orderParentsFirst(result);
         }
         if (result.length === curr.length && result.every((node, index) => node === curr[index])) {
           return curr;
