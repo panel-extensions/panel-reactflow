@@ -1342,6 +1342,7 @@ function FlowInner({
   hoverDelay,
   dropTypes,
   maxDropSize,
+  groupDelete,
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
@@ -1354,7 +1355,7 @@ function FlowInner({
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
   editableRef.current = editable;
-  const { setViewport: setRfViewport, screenToFlowPosition, fitView } = useReactFlow();
+  const { setViewport: setRfViewport, screenToFlowPosition, fitView, getInternalNode } = useReactFlow();
   const [hydratedRevision, setHydratedRevision] = useState(null);
   const pendingFitRef = useRef(null);
   const [fitRequest, setFitRequest] = useState(0);
@@ -1495,6 +1496,30 @@ function FlowInner({
     setValidationResults(null);
   }, []);
 
+  const pendingNodePatchesRef = useRef(new Map());
+  const patchNode = useCallback((node, msg) => {
+    if (msg.type === "patch_node_data") {
+      const data = withoutKeys(node.data, msg.remove);
+      Object.assign(data, msg.patch || {});
+      return { ...node, data };
+    }
+    const patch = msg.patch || {};
+    const next = applyPropPatch(node, patch);
+    if (!editableRef.current) {
+      Object.assign(next, READ_ONLY_NODE_FLAGS);
+    }
+    if ("label" in patch) {
+      // The node components render `data._label`, not the top-level label.
+      next.data = { ...(next.data || {}), _label: patch.label };
+    }
+    if ("className" in patch || "type" in patch) {
+      const declared = "className" in patch ? patch.className : node._className;
+      next._className = declared ?? null;
+      next.className = nodeClassName(next.type, declared, model);
+    }
+    return next;
+  }, [model]);
+
   useEffect(() => {
     const handler = (msg) => {
       if (!msg || typeof msg !== "object") {
@@ -1525,17 +1550,20 @@ function FlowInner({
         setFitRequest((count) => count + 1);
         return;
       }
-      if (msg.type === "patch_node_data") {
-        setNodes((current) =>
-          current.map((node) => {
-            if (node.id !== msg.node_id) {
-              return node;
-            }
-            const data = withoutKeys(node.data, msg.remove);
-            Object.assign(data, msg.patch || {});
-            return { ...node, data };
-          }),
-        );
+      if (msg.type === "patch_node_data" || msg.type === "patch_node_props") {
+        setNodes((current) => {
+          if (!current.some((node) => node.id === msg.node_id)) {
+            // The node is still on its way in a nodes sync; apply the patch
+            // when it arrives instead of dropping it.
+            const pending = pendingNodePatchesRef.current;
+            pending.set(msg.node_id, [...(pending.get(msg.node_id) || []), msg].slice(-50));
+            // Patches for nodes that never arrive are dropped, oldest first.
+            if (pending.size > 100) pending.delete(pending.keys().next().value);
+            return current;
+          }
+          const patched = current.map((node) => (node.id === msg.node_id ? patchNode(node, msg) : node));
+          return msg.type === "patch_node_props" && "parentId" in (msg.patch || {}) ? orderParentsFirst(patched) : patched;
+        });
         return;
       }
       if (msg.type === "patch_edge_data") {
@@ -1552,32 +1580,6 @@ function FlowInner({
         );
         return;
       }
-      if (msg.type === "patch_node_props") {
-        const patch = msg.patch || {};
-        setNodes((current) => {
-          const patched = current.map((node) => {
-            if (node.id !== msg.node_id) {
-              return node;
-            }
-            const next = applyPropPatch(node, patch);
-            if (!editableRef.current) {
-              Object.assign(next, READ_ONLY_NODE_FLAGS);
-            }
-            if ("label" in patch) {
-              // The node components render `data._label`, not the top-level label.
-              next.data = { ...(next.data || {}), _label: patch.label };
-            }
-            if ("className" in patch || "type" in patch) {
-              const declared = "className" in patch ? patch.className : node._className;
-              next._className = declared ?? null;
-              next.className = nodeClassName(next.type, declared, model);
-            }
-            return next;
-          });
-          return "parentId" in patch ? orderParentsFirst(patched) : patched;
-        });
-        return;
-      }
       if (msg.type === "patch_edge_props") {
         setEdges((current) =>
           current.map((edge) => (edge.id === msg.edge_id ? applyPropPatch(edge, msg.patch) : edge)),
@@ -1588,7 +1590,7 @@ function FlowInner({
     return () => {
       model.off("msg:custom", handler);
     };
-  }, [model, setEdges, setNodes]);
+  }, [model, patchNode, setEdges, setNodes]);
 
   useEffect(() => () => {
     if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
@@ -1679,10 +1681,22 @@ function FlowInner({
           return areEqual(prev, next) ? prev : next;
         });
         lastPySelectedRef.current = nextPySelected;
-        if (merged.length === curr.length && merged.every((node, index) => node === curr[index])) {
+        const pendingPatches = pendingNodePatchesRef.current;
+        let result = merged;
+        const arrived = pendingPatches.size ? merged.filter((node) => pendingPatches.has(node?.id)).map((node) => node.id) : [];
+        if (arrived.length) {
+          const reparented = arrived.some((id) => pendingPatches.get(id).some((msg) => "parentId" in (msg.patch || {})));
+          const ids = new Set(arrived);
+          result = merged.map((node) => (ids.has(node?.id)
+            ? pendingPatches.get(node.id).reduce((patched, msg) => patchNode(patched, msg), node)
+            : node));
+          arrived.forEach((id) => pendingPatches.delete(id));
+          if (reparented) result = orderParentsFirst(result);
+        }
+        if (result.length === curr.length && result.every((node, index) => node === curr[index])) {
           return curr;
         }
-        return merged;
+        return result;
       });
       lastHydrated.current.nodeRevision = nodeUpdateCount;
       lastHydrated.current.nodesSig = nodesSig;
@@ -1927,6 +1941,53 @@ function FlowInner({
     [schedulePatch, selectable],
   );
 
+  // React Flow deletes the nodes nested in a deleted node. With
+  // group_delete="ungroup" only the nodes the user selected are deleted (and
+  // their edges); the children of a deleted node move to its nearest kept
+  // ancestor, staying where they are on the canvas.
+  const onBeforeDelete = useCallback(async ({ nodes: toDelete, edges: edgesToDelete }) => {
+    if (groupDelete !== "ungroup") return true;
+    const deleting = new Set(toDelete.map((node) => node.id));
+    const byId = graphIndex(nodesRef.current, edgesRef.current).byId;
+    const realEdges = new Map(edgesRef.current.map((edge) => [edge.id, edge]));
+    const explicit = new Set(toDelete
+      .filter((node) => node.selected || !deleting.has(byId.get(node.id)?.parentId))
+      .map((node) => node.id));
+    const keptAncestor = (id) => {
+      let current = byId.get(id)?.parentId;
+      const seen = new Set();
+      while (current != null && explicit.has(current) && !seen.has(current)) {
+        seen.add(current);
+        current = byId.get(current)?.parentId;
+      }
+      return current != null && byId.has(current) && !explicit.has(current) ? current : null;
+    };
+    const moves = new Map();
+    nodesRef.current.forEach((node) => {
+      if (explicit.has(node.id) || !explicit.has(node.parentId)) return;
+      const parentId = keptAncestor(node.id);
+      const absolute = getInternalNode(node.id)?.internals.positionAbsolute ?? node.position;
+      const origin = parentId != null ? getInternalNode(parentId)?.internals.positionAbsolute ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+      moves.set(node.id, { parentId, position: { x: absolute.x - origin.x, y: absolute.y - origin.y } });
+    });
+    if (moves.size) {
+      setNodes((current) => orderParentsFirst(current.map((node) => {
+        const move = moves.get(node.id);
+        if (!move) return node;
+        const { parentId, extent, expandParent, ...rest } = node;
+        return move.parentId != null ? { ...rest, parentId: move.parentId, position: move.position } : { ...rest, position: move.position };
+      })));
+    }
+    return {
+      nodes: toDelete.filter((node) => explicit.has(node.id)),
+      // Ends are read from the real edges, not the ones drawn to a collapsed group.
+      edges: edgesToDelete.filter((edge) => {
+        const real = realEdges.get(edge.id) ?? edge;
+        return edge.selected || explicit.has(real.source) || explicit.has(real.target);
+      }),
+    };
+  }, [getInternalNode, groupDelete, setNodes]);
+
   const onNodesDelete = useCallback(
     (deletedNodes) => {
       const deletedIds = deletedNodes.map((node) => node.id);
@@ -2067,6 +2128,7 @@ function FlowInner({
     onNodesChange: handleNodesChange,
     onEdgesChange,
     onSelectionChange,
+    onBeforeDelete,
     onNodesDelete,
     onEdgesDelete,
     onConnect,
@@ -2169,6 +2231,7 @@ export function render({ model, view }) {
   const [valuePopupTrigger] = model.useState("popup_trigger");
   const [dropTypes] = model.useState("drop_types");
   const [maxDropSize] = model.useState("max_drop_size");
+  const [groupDelete] = model.useState("group_delete");
   const [hoverDelay] = model.useState("popup_hover_delay");
   const [errorRecovery] = model.useState("error_recovery");
   const [enableConnect] = model.useState("enable_connect");
@@ -2521,6 +2584,7 @@ export function render({ model, view }) {
       hoverDelay={hoverDelay}
       dropTypes={dropTypes}
       maxDropSize={maxDropSize}
+      groupDelete={groupDelete}
     />
   );
 
