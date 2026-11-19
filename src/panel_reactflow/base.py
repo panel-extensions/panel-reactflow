@@ -3270,26 +3270,69 @@ class ReactFlow(ReactComponent):
             reply["error"] = "Connection validation failed."
         self._send_msg(reply)
 
+    @staticmethod
+    def _group_entry_side(entry: dict[str, Any], data: dict[str, Any]) -> str | None:
+        """Return the side a handle_map entry applies to, None for both."""
+        if entry.get("direction") is not None:
+            return entry["direction"]
+        for side, key in (("input", "inputs"), ("output", "outputs")):
+            if entry.get("group_handle") in ReactFlow._handle_ids(data.get(key) or []):
+                return side
+        return None
+
+    def _inner_ends(self, node: dict[str, Any] | Node, handle_id: str | None, direction: str) -> list[tuple[str, str | None]]:
+        """Return the (node, handle) pairs a connection to this handle creates edges to.
+
+        A handle of a collapsed group stands for the inner handles its
+        ``handle_map`` maps to it; any other handle stands for itself.
+        """
+        node_id = self._node_id(node)
+        data = self._node_data(node)
+        if self._node_type(node) != "group" or not data.get("collapsed"):
+            return [(node_id, handle_id)]
+        ends = [
+            (entry.get("node"), entry.get("handle"))
+            for entry in data.get("handle_map") or []
+            if entry.get("group_handle") == handle_id and self._group_entry_side(entry, data) in (None, direction)
+        ]
+        return ends or [(node_id, handle_id)]
+
     def _connection_candidates(self, node_id: str, handle_id: str | None, handle_type: str) -> list[dict[str, Any]]:
         opposite_type = "target" if handle_type == "source" else "source"
         port_key = "inputs" if opposite_type == "target" else "outputs"
         prefix = "input" if opposite_type == "target" else "output"
+        dragged = self._get_node(node_id)
+        dragged_ends = self._inner_ends(dragged, handle_id, "output" if handle_type == "source" else "input") if dragged is not None else [(node_id, handle_id)]
         results = []
         for node in self.nodes:
             connectable = node.connectable if isinstance(node, Node) else node.get("connectable", True)
             if connectable is False:
                 continue
             candidate_id = self._node_id(node)
-            node_type = self.node_types.get(self._node_type(node), {})
+            if self._node_type(node) == "group":
+                # A group declares its handles per node, in its data.
+                node_type = self._node_data(node)
+            else:
+                node_type = self.node_types.get(self._node_type(node), {})
             # Handles the browser never lets a connection end on need no answer.
             if node_type.get(f"{prefix}Connectable") is False or node_type.get(f"{prefix}ConnectableEnd") is False:
                 continue
             for candidate_handle in self._handle_ids(node_type.get(port_key)):
-                if handle_type == "source":
-                    payload = {"source": node_id, "target": candidate_id, "sourceHandle": handle_id, "targetHandle": candidate_handle}
-                else:
-                    payload = {"source": candidate_id, "target": node_id, "sourceHandle": candidate_handle, "targetHandle": handle_id}
-                reason = self._connection_reason(payload)
+                # A connection that fans out through a collapsed group is
+                # valid only if every edge it creates is.
+                reason = None
+                for candidate_end in self._inner_ends(node, candidate_handle, prefix):
+                    for dragged_end in dragged_ends:
+                        if handle_type == "source":
+                            (source, source_handle), (target, target_handle) = dragged_end, candidate_end
+                        else:
+                            (source, source_handle), (target, target_handle) = candidate_end, dragged_end
+                        payload = {"source": source, "target": target, "sourceHandle": source_handle, "targetHandle": target_handle}
+                        reason = self._connection_reason(payload)
+                        if reason is not None:
+                            break
+                    if reason is not None:
+                        break
                 results.append({"node_id": candidate_id, "handle_id": candidate_handle, "handle_type": opposite_type, "reason": reason})
         return results
 
@@ -4145,12 +4188,13 @@ class ReactFlow(ReactComponent):
             Data of the group node, e.g. ``collapsed``, ``inputs``,
             ``outputs`` and ``handle_map`` (see :meth:`collapse_group`).
         style : dict, optional
-            Style of the group node, e.g. a fixed ``width`` and ``height``.
-            By default the group fits its children.
+            Style of the group node. Setting both ``width`` and ``height``
+            gives the group a fixed size; otherwise it grows to fit its
+            children.
         extent : str or list, optional
             ``extent`` given to the grouped nodes, e.g. ``"parent"`` to keep
-            them inside the group. React Flow ignores ``"parent"`` while
-            ``expand_parent`` is set.
+            them inside a fixed-size group (see ``style``). React Flow
+            ignores ``"parent"`` while ``expand_parent`` is set.
         expand_parent : bool, optional, default True
             ``expandParent`` given to the grouped nodes, so dragging one
             past the border grows the group.
@@ -4258,9 +4302,14 @@ class ReactFlow(ReactComponent):
         maps it to, a list of ``{"node": ..., "handle": ..., "group_handle":
         ...}`` entries (omit ``handle`` to map every handle of the node),
         and to the group's first handle on that side otherwise. An entry
-        may set ``"direction"`` to ``"input"`` or ``"output"`` to apply to
-        that side only, e.g. when a node has an input and an output with the
-        same id. Connecting
+        applies to the side its group handle is declared on; set
+        ``"direction"`` to ``"input"`` or ``"output"`` to choose explicitly,
+        e.g. when a node has an input and an output with the same id.
+        Connection validators and policies check each edge such a
+        connection creates. Nodes hidden by a collapse are deselected.
+
+        In a flow with ``editable=False`` the header chevron collapses a
+        group for that viewer only and does not change ``data``. Connecting
         to a mapped group handle in the browser creates an edge to each
         node it maps to.
 

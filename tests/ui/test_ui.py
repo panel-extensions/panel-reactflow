@@ -527,6 +527,7 @@ def test_disabled_handle_end_is_not_highlighted_as_valid(page):
         height=350,
     )
     serve_component(page, flow)
+    _wait_for_viewport(page)
     source = _node_locator(page, "Source").locator(".react-flow__handle-right")
     sink = _node_locator(page, "Sink").locator(".react-flow__handle-left")
 

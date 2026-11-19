@@ -56,6 +56,22 @@ them its children and returns the group's id. The nodes keep their place on
 the canvas; their positions are converted to be relative to the group.
 `ungroup()` does the reverse and removes the group.
 
+A group grows to fit its children, so dragging a child past the border
+grows the group (children get `expandParent=True`). A group whose `style`
+sets both `width` and `height` has a fixed size instead; give its children
+`extent="parent"` and `expandParent=None` to keep them inside it:
+
+```python
+flow.group_nodes(
+    ["clean", "join"],
+    style={"width": 480, "height": 320},
+    extent="parent",
+    expand_parent=None,
+)
+```
+
+Children are kept below the group's 32 px header when dragged.
+
 `set_parent(node_ids, parent_id)` moves nodes into another node (or to the
 top level with `None`) the same way, and `absolute_position(node_id)` returns
 a node's position on the canvas, adding up the positions of its parents.
@@ -82,12 +98,16 @@ it.
 The chevron in a group's header collapses it, as does
 `flow.collapse_group(group_id)`; `flow.expand_group(group_id)` reverses it.
 Both emit a `group_toggled` event. The state is kept in the group's
-`data["collapsed"]`, so it is saved with the graph.
+`data["collapsed"]`, so it is saved with the graph. In a flow with
+`editable=False` the chevron collapses the group for that viewer only: no
+event fires, `data["collapsed"]` is left alone and a collapse set from
+Python takes precedence.
 
 Collapsing only changes what is drawn. The group's descendants are hidden,
 edges between them are hidden too, and edges between a hidden node and the
 rest of the graph are drawn to the collapsed group instead. `flow.nodes` and
-`flow.edges` keep the real graph.
+`flow.edges` keep the real graph. Hidden nodes are deselected, so they stay
+unselected when the group is expanded again.
 
 A collapsed group shows one input and one output handle unless its data
 declares its own, in the same format as `NodeType` `inputs` and `outputs`.
@@ -110,13 +130,19 @@ flow.group_nodes(
 ```
 
 Each entry maps a handle of a node inside the group (omit `handle` to map
-all of the node's handles) to a group handle. An entry can add
-`"direction": "input"` or `"direction": "output"` to apply to that side
-only, for a node with an input and an output of the same id; without it the
-entry applies to both. Edges that are not mapped
+all of the node's handles) to a group handle. An entry applies to the side
+its group handle is declared on (`inputs` or `outputs`); `"direction":
+"input"` or `"direction": "output"` sets the side explicitly, e.g. for a node
+with an input and an output of the same id. Edges that are not mapped
 attach to the group's first handle on that side. Dragging a connection to a
 mapped handle of a collapsed group creates an edge to each inner handle
 mapped to it.
+
+Connection validation sees those inner edges, not the group: validators
+registered with `add_connection_validator()` and the `connection_validation`
+policies (cycles, duplicates, capacity, types, direction) run on each edge
+the connection would create, and the group handle is only a valid target if
+all of them pass. If one fails, no edge is created.
 
 ## Events
 

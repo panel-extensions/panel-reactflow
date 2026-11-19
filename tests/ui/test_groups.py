@@ -1,9 +1,12 @@
 """UI tests for group (parent) nodes."""
 
+import re
+
 import pytest
 from panel.tests.util import serve_component, wait_until
 
 from panel_reactflow import NodeSpec, ReactFlow
+from panel_reactflow.base import GROUP_HEADER_HEIGHT
 
 pytest.importorskip("playwright")
 
@@ -301,6 +304,11 @@ def test_delete_key_skips_nodes_hidden_by_collapse(page):
     page.wait_for_timeout(300)
     assert [node["id"] for node in flow.nodes] == ["src", "g", "a", "b", "dst"]
 
+    _node(page, "g").get_by_role("button", name="Expand group").click()
+    expect(_node(page, "a")).to_be_visible()
+    expect(_node(page, "a")).not_to_have_class(re.compile(r"\bselected\b"))
+    assert flow.selection["nodes"] == []
+
 
 def test_handle_map_direction_separates_same_named_handles(page):
     from panel_reactflow import NodeType
@@ -353,3 +361,195 @@ def test_handle_map_direction_separates_same_named_handles(page):
     wait_until(lambda: any(e["source"] == "extra" for e in flow.edges), timeout=5000)
     added = [e for e in flow.edges if e["source"] == "extra"]
     assert [(e["target"], e["targetHandle"]) for e in added] == [("mid", "x")]
+
+
+def _connect(page, source, target):
+    page.mouse.move(*_center(source))
+    page.mouse.down()
+    page.mouse.move(*_center(target), steps=10)
+    page.mouse.up()
+
+
+def _collapsed_flow(**kwargs):
+    flow = _flow(**kwargs)
+    flow.add_node({"id": "extra", "position": {"x": 0, "y": 300}, "label": "Extra", "data": {}})
+    flow.group_nodes(
+        ["a", "b"],
+        group_id="g",
+        data={"collapsed": True, "inputs": [{"id": "in"}], "outputs": [{"id": "out"}], "handle_map": [{"node": "a", "group_handle": "in"}]},
+    )
+    return flow
+
+
+@pytest.mark.parametrize("allowed", [True, False])
+def test_python_validator_checks_collapsed_group_inner_ends(page, allowed):
+    flow = _collapsed_flow()
+    seen = []
+
+    def validator(connection):
+        seen.append((connection["source"], connection["target"]))
+        if connection["target"] == "a" and not allowed:
+            return "a is full"
+        return None
+
+    flow.add_connection_validator(validator)
+    serve_component(page, flow)
+    expect(_node(page, "a")).to_be_hidden()
+
+    source = _wait_settled(page, _node(page, "extra").locator(".react-flow__handle.source"))
+    target_handle = _node(page, "g").locator('.react-flow__handle[data-handleid="in"]')
+    page.mouse.move(*_center(source))
+    page.mouse.down()
+    page.mouse.move(*_center(target_handle.bounding_box()), steps=10)
+    expect(target_handle).to_have_class(re.compile("rf-handle-valid" if allowed else "rf-handle-invalid"))
+    page.mouse.up()
+
+    assert ("extra", "a") in seen and ("extra", "g") not in seen
+    if allowed:
+        wait_until(lambda: any(e["source"] == "extra" for e in flow.edges), timeout=5000)
+        assert [e["target"] for e in flow.edges if e["source"] == "extra"] == ["a"]
+    else:
+        page.wait_for_timeout(500)
+        assert not any(e["source"] == "extra" for e in flow.edges)
+
+
+def test_cycle_policy_applies_to_inner_edges(page):
+    flow = _collapsed_flow(connection_validation={"cycles": True})
+    serve_component(page, flow)
+    expect(_node(page, "a")).to_be_hidden()
+
+    # dst -> g.in maps to dst -> a, which closes a -> b -> dst -> a.
+    source = _wait_settled(page, _node(page, "dst").locator(".react-flow__handle.source"))
+    target_handle = _node(page, "g").locator('.react-flow__handle[data-handleid="in"]')
+    page.mouse.move(*_center(source))
+    page.mouse.down()
+    page.mouse.move(*_center(target_handle.bounding_box()), steps=10)
+    expect(target_handle).to_have_class(re.compile("rf-handle-invalid"))
+    page.mouse.up()
+    page.wait_for_timeout(500)
+    assert [e["id"] for e in flow.edges] == ["src-a", "a-b", "b-dst"]
+
+
+def test_mapping_without_direction_uses_group_handle_side(page):
+    flow = _flow()
+    # b is only mapped to an output, so the edge into a from outside keeps
+    # going to the group's input instead of being dropped.
+    flow.group_nodes(
+        ["a", "b"],
+        group_id="g",
+        data={"collapsed": True, "inputs": [{"id": "in"}], "outputs": [{"id": "out"}], "handle_map": [{"node": "a", "group_handle": "out"}]},
+    )
+    serve_component(page, flow)
+    expect(_node(page, "a")).to_be_hidden()
+    group = _wait_settled(page, _node(page, "g"))
+    expect(_edge(page, "src-a")).to_be_visible()
+    assert abs(_edge_end(page, "src-a")["x"] - group["x"]) < 12
+
+
+def test_extent_parent_keeps_child_inside_fixed_size_group(page):
+    flow = _flow()
+    flow.group_nodes(["a"], group_id="g", style={"width": 320, "height": 200}, extent="parent", expand_parent=None)
+    moves = []
+    flow.on("node_moved", moves.append)
+    serve_component(page, flow)
+    frame = _wait_settled(page, _node(page, "g"))
+
+    x, y = _center(_node(page, "a").locator(".rf-node-label").bounding_box())
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x + 600, y + 400, steps=10)
+    page.mouse.up()
+    wait_until(lambda: any(m["node_id"] == "a" for m in moves), timeout=5000)
+
+    # Dragging to the edge of the canvas pans it, so compare sizes.
+    after = _wait_settled(page, _node(page, "g"))
+    assert (after["width"], after["height"]) == (frame["width"], frame["height"])
+    assert _contains(after, _node(page, "a").bounding_box())
+
+
+def test_children_stay_below_group_header(page):
+    flow = _flow()
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline")
+    moves = []
+    flow.on("node_moved", moves.append)
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+
+    x, y = _center(_node(page, "b").locator(".rf-node-label").bounding_box())
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.mouse.move(x, y - 150, steps=10)
+    page.mouse.up()
+    wait_until(lambda: any(m["node_id"] == "b" for m in moves), timeout=5000)
+    assert flow._get_node("b")["position"]["y"] >= GROUP_HEADER_HEIGHT
+    expect(_node(page, "g").get_by_role("button", name="Collapse group")).to_be_visible()
+
+
+def test_collapse_is_view_only_when_not_editable(page):
+    flow = _flow(editable=False)
+    flow.group_nodes(["a", "b"], group_id="g", label="Pipeline")
+    toggles = []
+    flow.on("group_toggled", toggles.append)
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "g"))
+
+    _node(page, "g").get_by_role("button", name="Collapse group").click()
+    expect(_node(page, "a")).to_be_hidden()
+    page.wait_for_timeout(500)
+    assert toggles == []
+    assert "collapsed" not in flow._get_node("g")["data"]
+    _node(page, "g").get_by_role("button", name="Expand group").click()
+    expect(_node(page, "a")).to_be_visible()
+
+
+def test_full_sync_after_page_selection_does_not_echo_selection(page):
+    flow = _flow()
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "a"))
+
+    _node(page, "a").locator(".rf-node-label").click()
+    _node(page, "b").locator(".rf-node-label").click(modifiers=["Shift"])
+    wait_until(lambda: sorted(flow.selection["nodes"]) == ["a", "b"], timeout=5000)
+    page.wait_for_timeout(300)
+
+    changes = []
+    flow.on("selection_changed", changes.append)
+    group_id = flow.group_nodes()
+    expect(_node(page, group_id)).to_be_visible()
+    page.wait_for_timeout(800)
+
+    assert changes == []
+    assert sorted(flow.selection["nodes"]) == ["a", "b"]
+    for node_id, selected in (("a", True), ("b", True), (group_id, False), ("src", False)):
+        assert ("selected" in (_node(page, node_id).get_attribute("class") or "").split()) is selected
+
+    # Clearing the selection in the page sticks through the next full sync.
+    pane = page.locator(".react-flow__pane").bounding_box()
+    page.mouse.click(pane["x"] + pane["width"] - 20, pane["y"] + pane["height"] - 20)
+    wait_until(lambda: flow.selection["nodes"] == [], timeout=5000)
+    flow.ungroup(group_id)
+    page.wait_for_timeout(800)
+    assert flow.selection["nodes"] == []
+    expect(page.locator(".react-flow__node.selected")).to_have_count(0)
+
+
+def test_full_sync_keeps_selection_python_has_not_received(page):
+    flow = _flow(sync_mode="debounce", debounce_ms=1500)
+    serve_component(page, flow)
+    _wait_settled(page, _node(page, "a"))
+
+    _node(page, "a").locator(".rf-node-label").click()
+    _node(page, "b").locator(".rf-node-label").click(modifiers=["Shift"])
+    wait_until(lambda: sorted(flow.selection["nodes"]) == ["a", "b"], timeout=5000)
+
+    # The page clears the selection, then a full sync still carrying the
+    # old flags arrives before the debounced report reaches Python.
+    pane = page.locator(".react-flow__pane").bounding_box()
+    page.mouse.click(pane["x"] + pane["width"] - 20, pane["y"] + pane["height"] - 20)
+    flow.group_nodes(["src"], group_id="g")
+    expect(_node(page, "g")).to_be_visible()
+    page.wait_for_timeout(300)
+    expect(page.locator(".react-flow__node.selected")).to_have_count(0)
+    wait_until(lambda: flow.selection["nodes"] == [], timeout=5000)
+    page.wait_for_timeout(300)
+    expect(page.locator(".react-flow__node.selected")).to_have_count(0)

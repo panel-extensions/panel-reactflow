@@ -285,3 +285,53 @@ def test_sync_applies_parent_fields_to_instances():
     flow._handle_msg({"type": "sync", "nodes": [{"id": "g", "type": "group"}, {"id": "t", "parentId": "g", "hidden": True}]})
     task = flow.nodes[1]
     assert (task.parentId, task.hidden) == ("g", True)
+
+
+def _collapsed(handle_map):
+    flow = _flow()
+    flow.add_node({"id": "x", "position": {"x": 0, "y": 400}, "data": {}})
+    flow.group_nodes(
+        ["a", "b"],
+        group_id="g",
+        data={"collapsed": True, "inputs": [{"id": "in"}], "outputs": ["out"], "handle_map": handle_map},
+    )
+    return flow
+
+
+def test_inner_ends_infer_side_from_group_handles():
+    flow = _collapsed([{"node": "a", "group_handle": "in"}, {"node": "b", "handle": None, "group_handle": "out"}])
+    group = flow._get_node("g")
+    assert flow._inner_ends(group, "in", "input") == [("a", None)]
+    assert flow._inner_ends(group, "in", "output") == [("g", "in")]
+    assert flow._inner_ends(group, "out", "output") == [("b", None)]
+    assert flow._inner_ends(flow._get_node("x"), None, "input") == [("x", None)]
+    flow.expand_group("g")
+    assert flow._inner_ends(flow._get_node("g"), "in", "input") == [("g", "in")]
+
+
+def test_inner_ends_explicit_direction_wins():
+    flow = _collapsed([{"node": "a", "group_handle": "in", "direction": "output"}])
+    assert flow._inner_ends(flow._get_node("g"), "in", "input") == [("g", "in")]
+
+
+def test_validation_candidates_for_collapsed_group_use_inner_ends():
+    flow = _collapsed([{"node": "a", "group_handle": "in"}, {"node": "b", "group_handle": "in"}])
+    seen = []
+
+    def validator(connection):
+        seen.append((connection["source"], connection["target"]))
+        return "b is full" if connection["target"] == "b" else None
+
+    flow.add_connection_validator(validator)
+    results = flow._connection_candidates("x", None, "source")
+    (group_result,) = [r for r in results if r["node_id"] == "g"]
+    assert group_result == {"node_id": "g", "handle_id": "in", "handle_type": "target", "reason": "b is full"}
+    assert ("x", "a") in seen and ("x", "b") in seen and ("x", "g") not in seen
+
+
+def test_validation_candidates_when_dragging_from_collapsed_group():
+    flow = _collapsed([{"node": "b", "group_handle": "out"}])
+    seen = []
+    flow.add_connection_validator(lambda connection: seen.append((connection["source"], connection["sourceHandle"])))
+    flow._connection_candidates("g", "out", "source")
+    assert set(seen) == {("b", None)}

@@ -15,6 +15,7 @@ const BUILTIN_NODE_TYPES = {
 // Room a group frame leaves around its children; Python's group_nodes()
 // places groups with the same padding and GROUP_HEADER_HEIGHT.
 const GROUP_PADDING = 20;
+const GROUP_HEADER_HEIGHT = 32;
 const GROUP_MIN_WIDTH = 160;
 const GROUP_MIN_HEIGHT = 80;
 const GROUP_HANDLE_SPACING = 18;
@@ -101,18 +102,30 @@ function collapsedView(nodes) {
   const hidden = new Map([...reps].filter(([, rep]) => rep !== null));
   const groups = new Map();
   hidden.forEach((rep) => {
-    if (!groups.has(rep)) groups.set(rep, byId.get(rep).data?.handle_map || []);
+    if (!groups.has(rep)) groups.set(rep, groupPorts(byId.get(rep)));
   });
   return { hidden, groups, key: JSON.stringify([[...hidden], [...groups]]) };
 }
 
-// An entry without a direction applies to inputs and outputs alike.
-function matchesDirection(entry, direction) {
-  return entry.direction == null || entry.direction === direction;
+// The parts of a group's data that decide how connections are mapped.
+function groupPorts(node) {
+  const ids = (handles) => (handles || []).map((handle) => (typeof handle === "string" ? handle : handle.id));
+  return { handleMap: node?.data?.handle_map || [], inputs: ids(node?.data?.inputs), outputs: ids(node?.data?.outputs) };
 }
 
-function mappedGroupHandle(handleMap, nodeId, handleId, direction) {
-  const candidates = handleMap.filter((e) => e.node === nodeId && matchesDirection(e, direction));
+// An entry's side is its ``direction``, or else the side its group handle is
+// declared on; an entry with neither applies to both sides.
+function matchesDirection(entry, direction, ports) {
+  let side = entry.direction;
+  if (side == null && ports) {
+    if (ports.inputs.includes(entry.group_handle)) side = "input";
+    else if (ports.outputs.includes(entry.group_handle)) side = "output";
+  }
+  return side == null || side === direction;
+}
+
+function mappedGroupHandle(ports, nodeId, handleId, direction) {
+  const candidates = ports.handleMap.filter((e) => e.node === nodeId && matchesDirection(e, direction, ports));
   const entry = candidates.find((e) => "handle" in e && (e.handle ?? null) === (handleId ?? null)) ||
     candidates.find((e) => !("handle" in e));
   // Unmapped edges attach to the group's first handle on that side.
@@ -732,8 +745,13 @@ function GroupNode({ id, data, isConnectable }) {
   const actions = React.useContext(GroupActionsContext);
   const collapsed = Boolean(data?.collapsed);
   const label = data?._label ?? "";
-  // Serialized so the group only re-renders when its children's extent changes.
+  // A group whose style sets both width and height has a fixed size, which
+  // children with extent "parent" are kept inside; any other group grows to
+  // fit its children. Serialized so the group only re-renders when that
+  // outcome changes.
   const extent = useStore(useCallback((state) => {
+    const style = state.nodeLookup.get(id)?.internals.userNode.style;
+    if (style?.width != null && style?.height != null) return "fixed";
     let right = 0;
     let bottom = 0;
     state.parentLookup?.get(id)?.forEach((child) => {
@@ -743,10 +761,10 @@ function GroupNode({ id, data, isConnectable }) {
     });
     return `${right},${bottom}`;
   }, [id]));
-  const [right, bottom] = extent.split(",").map(Number);
+  const [right, bottom] = extent === "fixed" ? [0, 0] : extent.split(",").map(Number);
   // A collapsed group grows with its handle count so the handles stay apart.
   const handleRows = Math.max(data?.inputs?.length ?? 1, data?.outputs?.length ?? 1);
-  const frameStyle = collapsed ? { minHeight: (handleRows + 1) * GROUP_HANDLE_SPACING } : {
+  const frameStyle = collapsed ? { minHeight: (handleRows + 1) * GROUP_HANDLE_SPACING } : extent === "fixed" ? undefined : {
     minWidth: Math.max(GROUP_MIN_WIDTH, right + GROUP_PADDING),
     minHeight: Math.max(GROUP_MIN_HEIGHT, bottom + GROUP_PADDING),
   };
@@ -1341,11 +1359,38 @@ function FlowInner({
   const validationTimerRef = useRef(null);
   const requestIdRef = useRef(0);
 
+  // A collapsed group's handle stands for the handles mapped to it in its
+  // handle_map, so a connection to it connects each of those instead.
+  const innerEnds = useCallback((nodeId, handleId, direction) => {
+    const node = graphIndex(shownNodesRef.current, edgesRef.current).byId.get(nodeId);
+    if (!isCollapsedGroup(node)) return [[nodeId, handleId]];
+    const ports = groupPorts(node);
+    const ends = ports.handleMap
+      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null) && matchesDirection(entry, direction, ports))
+      .map((entry) => [entry.node, entry.handle ?? null]);
+    return ends.length ? ends : [[nodeId, handleId]];
+  }, []);
+
+  // The edges a connection creates, one per pair of mapped inner ends.
+  const innerConnections = useCallback((connection) => {
+    const result = [];
+    innerEnds(connection.source, connection.sourceHandle, "output").forEach(([source, sourceHandle]) => {
+      innerEnds(connection.target, connection.targetHandle, "input").forEach(([target, targetHandle]) => {
+        result.push({ ...connection, source, sourceHandle, target, targetHandle });
+      });
+    });
+    return result;
+  }, [innerEnds]);
+
   const candidateReason = useCallback((connection) => {
-    const local = localConnectionReason(
-      connection, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation, dragRef.current?.handleType,
-    );
-    if (local) return local;
+    // Policies apply to every edge the connection would create, so one
+    // invalid inner edge refuses the whole fan-out.
+    for (const inner of innerConnections(connection)) {
+      const local = localConnectionReason(
+        inner, nodesRef.current, edgesRef.current, nodeTypeSpecs, connectionValidation, dragRef.current?.handleType,
+      );
+      if (local) return local;
+    }
     if (!hasConnectionValidators) return null;
     const current = dragRef.current;
     if (!current) return "Connection validation unavailable";
@@ -1357,7 +1402,7 @@ function FlowInner({
       : connectionKey(connection.source, connection.sourceHandle, "source");
     if (!result.reasons.has(end)) return "Connection not validated";
     return result.reasons.get(end) === "" ? "Connection rejected" : result.reasons.get(end);
-  }, [connectionValidation, hasConnectionValidators, nodeTypeSpecs]);
+  }, [connectionValidation, hasConnectionValidators, innerConnections, nodeTypeSpecs]);
 
   const reasonForHandle = useCallback((nodeId, handleId, handleType) => {
     if (!drag || drag.handleType === handleType) return null;
@@ -1597,6 +1642,7 @@ function FlowInner({
       const pendingMoves = new Set(
         patchQueueRef.current.filter((payload) => payload.type === "node_moved").map((payload) => payload.node_id),
       );
+      const selectionQueued = patchQueueRef.current.some((payload) => payload.type === "selection_changed");
       setNodes((curr) => {
         const currById = new Map(curr.map((n) => [n?.id, n]));
         const merged = hydratedNodes.map((n) => {
@@ -1607,7 +1653,9 @@ function FlowInner({
           // Selection is owned by the browser unless Python changed it since
           // the last push; positions of nodes being dragged, or whose move
           // has not been sent yet, stay where the pointer put them.
-          const pythonSelected = Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
+          // While a page selection waits in the debounce queue Python's
+          // flags are older than the page's, so they are not a change.
+          const pythonSelected = !selectionQueued && Boolean(n.selected) !== Boolean(lastPySelected.get(n.id));
           const keepPosition = prev.dragging || pendingMoves.has(n.id);
           // The views list hands out new elements whenever it changes; a
           // node keeping the same view, or whose view is not in sync yet,
@@ -1698,15 +1746,6 @@ function FlowInner({
 
   // A collapsed group's handle stands for the handles mapped to it in its
   // handle_map, so a connection to it connects each of those instead.
-  const innerEnds = useCallback((nodeId, handleId, direction) => {
-    const node = nodesRef.current.find((n) => n.id === nodeId);
-    if (!isCollapsedGroup(node)) return [[nodeId, handleId]];
-    const ends = (node.data.handle_map || [])
-      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null) && matchesDirection(entry, direction))
-      .map((entry) => [entry.node, entry.handle ?? null]);
-    return ends.length ? ends : [[nodeId, handleId]];
-  }, []);
-
   const onConnect = useCallback(
     (connection) => {
       if (!editable || !enableConnect || candidateReason(connection)) {
@@ -1714,44 +1753,74 @@ function FlowInner({
       }
       let updated = edgesRef.current;
       const added = [];
-      innerEnds(connection.source, connection.sourceHandle, "output").forEach(([source, sourceHandle]) => {
-        innerEnds(connection.target, connection.targetHandle, "input").forEach(([target, targetHandle]) => {
-          const inner = { ...connection, source, sourceHandle, target, targetHandle };
-          const baseId = connection.id || `${source}->${target}`;
-          let edgeId = baseId;
-          let suffix = 1;
-          while (updated.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
-          const newEdge = { ...inner, id: edgeId };
-          const next = addEdge(newEdge, updated);
-          if (next === updated) return;
-          updated = next;
-          added.push(newEdge);
-        });
+      innerConnections(connection).forEach((inner) => {
+        const baseId = connection.id || `${inner.source}->${inner.target}`;
+        let edgeId = baseId;
+        let suffix = 1;
+        while (updated.some((edge) => edge.id === edgeId)) edgeId = `${baseId}:${suffix++}`;
+        const newEdge = { ...inner, id: edgeId };
+        const next = addEdge(newEdge, updated);
+        if (next === updated) return;
+        updated = next;
+        added.push(newEdge);
       });
       if (!added.length) return;
       setEdges(updated);
       added.forEach((edge) => sendNow({ type: "edge_added", edge }));
     },
-    [candidateReason, editable, enableConnect, innerEnds, sendNow, setEdges],
+    [candidateReason, editable, enableConnect, innerConnections, sendNow, setEdges],
   );
 
+  // In a read-only flow collapsing only changes this view; Python's
+  // data["collapsed"] is left alone, and a collapse set from Python wins.
+  const [localCollapse, setLocalCollapse] = useState(() => new Map());
   const toggleGroup = useCallback((nodeId, collapsed) => {
+    if (!editable) {
+      setLocalCollapse((current) => new Map(current).set(nodeId, collapsed));
+      return;
+    }
     setNodes((current) => current.map((node) => (
       node.id === nodeId ? { ...node, data: { ...node.data, collapsed } } : node
     )));
     sendNow({ type: "group_toggled", node_id: nodeId, collapsed });
-  }, [sendNow, setNodes]);
+  }, [editable, sendNow, setNodes]);
   const groupActions = useMemo(() => ({ toggleGroup }), [toggleGroup]);
+  useEffect(() => {
+    if (editable && localCollapse.size) setLocalCollapse(new Map());
+  }, [editable]);
 
-  const collapsed = useMemo(() => collapsedView(nodes), [nodes]);
-  const shownNodes = useMemo(() => viewNodes(nodes, collapsed), [nodes, collapsed]);
+  const effectiveNodes = useMemo(() => (localCollapse.size
+    ? nodes.map((node) => (localCollapse.has(node?.id)
+      ? { ...node, data: { ...node.data, collapsed: localCollapse.get(node.id) } }
+      : node))
+    : nodes), [nodes, localCollapse]);
+  const collapsed = useMemo(() => collapsedView(effectiveNodes), [effectiveNodes]);
+  const shownNodes = useMemo(() => viewNodes(effectiveNodes, collapsed), [effectiveNodes, collapsed]);
+  const shownNodesRef = useRef(shownNodes);
+  shownNodesRef.current = shownNodes;
+  // A node hidden by a collapse is deselected for good, so expanding the
+  // group does not bring back a stale selection.
+  useEffect(() => {
+    if (!collapsed) return;
+    setNodes((current) => (current.some((node) => node.selected && collapsed.hidden.has(node.id))
+      ? current.map((node) => (node.selected && collapsed.hidden.has(node.id) ? { ...node, selected: false } : node))
+      : current));
+  }, [collapsed, setNodes]);
   const collapsedKey = collapsed?.key ?? null;
   // Only re-routed when the edges or the collapsed groups change, not on
   // every drag step.
   const shownEdges = useMemo(() => routeEdges(edges, collapsed), [edges, collapsedKey]);
 
   const handleNodesChange = useCallback(
-    (changes) => {
+    (rawChanges) => {
+      // Children of a group stay below its header, out of reach of the chevron.
+      const byId = graphIndex(nodesRef.current, edgesRef.current).byId;
+      const changes = rawChanges.map((change) => {
+        if (change.type !== "position" || !change.position) return change;
+        const parentId = byId.get(change.id)?.parentId;
+        if (parentId == null || byId.get(parentId)?.type !== "group" || change.position.y >= GROUP_HEADER_HEIGHT) return change;
+        return { ...change, position: { ...change.position, y: GROUP_HEADER_HEIGHT } };
+      });
       onNodesChange(changes);
       const moved = changes.filter((change) => change.type === "position" && change.dragging !== true);
       if (!editable || !moved.length) {
@@ -1808,6 +1877,13 @@ function FlowInner({
         return;
       }
       lastSentSelectionRef.current = selection;
+      // Python stores this selection on its nodes, so the next full nodes
+      // sync carrying it must not read as Python selecting them.
+      const selectedIds = new Set(selection.nodes);
+      const lastPySelected = new Map(lastPySelectedRef.current);
+      lastPySelected.forEach((_selected, id) => lastPySelected.set(id, selectedIds.has(id)));
+      selectedIds.forEach((id) => lastPySelected.set(id, true));
+      lastPySelectedRef.current = lastPySelected;
       // Python does not echo a selection it already had, so keep the list short.
       pendingSelectionsRef.current = [...pendingSelectionsRef.current, selection].slice(-10);
       // Python updates ``selection`` from this message, syncing it here as
