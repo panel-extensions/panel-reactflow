@@ -585,6 +585,49 @@ def test_python_connection_validation_filters_targets(page):
     assert flow.edges[0]["source"] == "source" and flow.edges[0]["target"] == "right"
 
 
+def test_dropping_onto_a_refusing_handle_reports_why(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="source", type="producer", label="Source", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="wrong", type="consumer", label="Wrong", position={"x": 260, "y": 0}).to_dict(),
+        ],
+        node_types={
+            "producer": NodeType(type="producer", outputs=["out"]),
+            "consumer": NodeType(type="consumer", inputs=["in"]),
+        },
+        width=650,
+        height=350,
+    )
+    flow.add_connection_validator(lambda payload: "Blocked by Python" if payload["target"] == "wrong" else None)
+    refused = []
+    flow.on("connection_refused", refused.append)
+    serve_component(page, flow)
+    source = _node_locator(page, "Source").locator(".react-flow__handle-right")
+    wrong = _node_locator(page, "Wrong").locator(".react-flow__handle-left")
+
+    box = source.bounding_box()
+    destination = wrong.bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + box["width"] / 2 + 25, box["y"] + box["height"] / 2)
+    expect(wrong).to_have_class(re.compile("rf-handle-invalid"))
+    page.mouse.move(destination["x"] + destination["width"] / 2, destination["y"] + destination["height"] / 2)
+    page.mouse.up()
+
+    wait_until(lambda: len(refused) == 1, timeout=8000)
+    event = refused[0]
+    assert (event["source"], event["sourceHandle"], event["target"], event["targetHandle"]) == ("source", "out", "wrong", "in")
+    assert event["reason"] == "Blocked by Python"
+    assert flow.edges == []
+
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box["x"] + 120, box["y"] + 200)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    assert len(refused) == 1, "a drop onto the pane is not a refused connection"
+
+
 def test_edge_rejected_by_python_after_drag_is_removed_from_browser(page):
     flow = ReactFlow(
         nodes=[
