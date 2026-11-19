@@ -2,6 +2,7 @@
 
 import re
 
+import panel as pn
 import pytest
 from panel.tests.util import serve_component, wait_until
 
@@ -660,3 +661,33 @@ def test_select_new_group_right_after_grouping(page):
     wait_until(lambda: bool(created), timeout=5000)
     expect(_node(page, created[0])).to_have_class(re.compile(r"\bselected\b"))
     wait_until(lambda: created[0] in flow.selection["nodes"], timeout=5000)
+
+
+@pytest.mark.parametrize("deselect_first", [False, True])
+def test_selection_patches_in_callback_survive_stale_nodes_sync(page, deselect_first):
+    # The nodes sync from group_nodes() is serialized while a and b are still
+    # selected and reaches the page after the patches that follow it.
+    flow = _flow()
+
+    def group(event):
+        if flow._get_node("g") is not None:
+            return
+        if deselect_first:
+            for node_id in ("a", "b"):
+                flow.patch_node_props(node_id, {"selected": False})
+        flow.group_nodes(["a", "b"], group_id="g", label="G")
+        flow.patch_node_props("g", {"selected": True})
+        if not deselect_first:
+            for node_id in ("a", "b"):
+                flow.patch_node_props(node_id, {"selected": False})
+
+    button = pn.widgets.Button(label="Group")
+    button.on_click(group)
+    serve_component(page, pn.Column(button, flow))
+    _select_a_and_b(page, flow)
+
+    page.get_by_role("button", name="Group").click()
+    wait_until(lambda: flow._get_node("g") is not None, timeout=5000)
+    page.wait_for_timeout(1500)
+    assert _selected_in_page(page) == ["g"]
+    assert flow.selection["nodes"] == ["g"]

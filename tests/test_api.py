@@ -727,8 +727,8 @@ def test_subclass_and_base_params_patch_separately() -> None:
     node.threshold = 0.9
     node.label = "Threshold node"
 
-    assert msgs[0] == {"type": "patch_node_data", "node_id": "n1", "patch": {"threshold": 0.9}}
-    assert msgs[1] == {"type": "patch_node_props", "node_id": "n1", "patch": {"label": "Threshold node"}}
+    assert msgs[0] == {"type": "patch_node_data", "node_id": "n1", "patch": {"threshold": 0.9}, "revision": flow._node_update_count}
+    assert msgs[1] == {"type": "patch_node_props", "node_id": "n1", "patch": {"label": "Threshold node"}, "revision": flow._node_update_count}
     assert node.data == {"threshold": 0.9}
 
 

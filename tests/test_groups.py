@@ -53,7 +53,7 @@ def test_node_instance_parent_assignment_is_patched():
     msgs = []
     flow._send_msg = msgs.append
     flow.nodes[1].parentId = "g"
-    assert msgs == [{"type": "patch_node_props", "node_id": "n", "patch": {"parentId": "g"}}]
+    assert msgs == [{"type": "patch_node_props", "node_id": "n", "patch": {"parentId": "g"}, "revision": flow._node_update_count}]
 
 
 def test_patch_node_props_accepts_parent_fields():
@@ -233,7 +233,7 @@ def test_collapse_group_patches_data_and_emits():
     flow.on("group_toggled", toggles.append)
     flow.collapse_group("g")
     assert flow._get_node("g")["data"]["collapsed"] is True
-    assert {"type": "patch_node_data", "node_id": "g", "patch": {"collapsed": True}} in msgs
+    assert {"type": "patch_node_data", "node_id": "g", "patch": {"collapsed": True}, "revision": flow._node_update_count} in msgs
     flow.collapse_group("g")
     flow.expand_group("g")
     assert flow._get_node("g")["data"]["collapsed"] is False

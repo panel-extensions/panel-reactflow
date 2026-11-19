@@ -3802,7 +3802,7 @@ class ReactFlow(ReactComponent):
             instance_cls=Node,
             remove=remove or (),
         )
-        msg = {"type": "patch_node_data", "node_id": node_id, "patch": patch}
+        msg = {"type": "patch_node_data", "node_id": node_id, "patch": patch, "revision": self._node_update_count}
         event = {"type": "node_data_changed", "node_id": node_id, "patch": patch}
         if remove:
             msg["remove"] = event["remove"] = list(remove)
@@ -3975,7 +3975,7 @@ class ReactFlow(ReactComponent):
             self._apply_prop_patch(node, patch)
             if "type" in patch:
                 self._on_retyped("node")
-        self._send_msg({"type": "patch_node_props", "node_id": node_id, "patch": patch})
+        self._send_msg({"type": "patch_node_props", "node_id": node_id, "patch": patch, "revision": self._node_update_count})
         self._emit("node_props_changed", {"type": "node_props_changed", "node_id": node_id, "patch": patch})
 
     def patch_edge_props(self, edge_id: str, patch: dict[str, Any]) -> None:
