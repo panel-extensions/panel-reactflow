@@ -26,6 +26,7 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `node_context_menu`  | A node is right-clicked. | `node_id`, `position` |
 | `node_data_changed`  | Node data is patched (via API, editor patch, or parameter-driven sync). | `node_id`, `patch` |
 | `edge_added`         | An edge is created (UI connect or API). | `edge` |
+| `connection_refused` | A connection dragged in the browser is dropped onto a handle that refuses it, so no edge is drawn. See [Validate Connections](validate-connections.md#explain-a-refused-drop). | `source`, `sourceHandle`, `target`, `targetHandle`, `reason` |
 | `edge_deleted`       | An edge is removed. | `edge_id` |
 | `edge_data_changed`  | Edge data is patched (via API, editor patch, or parameter-driven sync). | `edge_id`, `patch` |
 | `selection_changed`  | The active selection changes. | `nodes`, `edges` |

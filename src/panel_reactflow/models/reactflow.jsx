@@ -1487,14 +1487,27 @@ function FlowInner({
     }
   }, [acceptedDropType, maxDropSize, model, reportError, screenToFlowPosition]);
 
-  const onConnectEnd = useCallback(() => {
+  const onConnectEnd = useCallback((_event, state) => {
+    // A drop onto a handle that refuses the connection draws nothing, so
+    // report it, with the reason, for Python to explain. A drop before the
+    // Python validators replied has no reason yet and is not reported.
+    const from = state?.fromHandle;
+    const to = state?.toHandle;
+    const pending = hasConnectionValidators && dragRef.current
+      && resultsRef.current?.requestId !== dragRef.current.requestId;
+    if (state && !state.isValid && !pending && from && to && from.type !== to.type) {
+      const connection = from.type === "source"
+        ? { source: from.nodeId, sourceHandle: from.id ?? null, target: to.nodeId, targetHandle: to.id ?? null }
+        : { source: to.nodeId, sourceHandle: to.id ?? null, target: from.nodeId, targetHandle: from.id ?? null };
+      model.send_msg({ type: "connection_refused", ...connection, reason: candidateReason(connection) || "Connection rejected" });
+    }
     if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
     validationTimerRef.current = null;
     dragRef.current = null;
     resultsRef.current = null;
     setDrag(null);
     setValidationResults(null);
-  }, []);
+  }, [candidateReason, hasConnectionValidators, model]);
 
   // Node patches with the node revision Python was at when it sent them.
   const nodePatchLogRef = useRef([]);

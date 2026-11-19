@@ -1089,6 +1089,24 @@ def test_handle_msg_node_clicked_emits_once() -> None:
     assert events[0]["node_id"] == "n1"
 
 
+def test_handle_msg_connection_refused_emits_the_reason() -> None:
+    flow = ReactFlow()
+    events: list[dict] = []
+    flow.on("connection_refused", events.append)
+    msg = {
+        "type": "connection_refused",
+        "source": "a",
+        "sourceHandle": "out",
+        "target": "b",
+        "targetHandle": "in",
+        "reason": "Type mismatch",
+    }
+    flow._handle_msg(msg)
+    flow._handle_msg({"type": "connection_refused", "source": "a"})
+    assert events == [msg]
+    assert flow.edges == []
+
+
 def test_handle_msg_node_clicked_requires_node_id() -> None:
     flow = ReactFlow()
     events: list[dict] = []

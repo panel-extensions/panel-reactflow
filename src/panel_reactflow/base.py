@@ -3133,6 +3133,9 @@ class ReactFlow(ReactComponent):
                     return
                 if self.popup_trigger == "click":
                     self._emit("edge_clicked", msg)
+            case "connection_refused":
+                if msg.get("source") is not None and msg.get("target") is not None:
+                    self._emit("connection_refused", msg)
             case "handle_hovered":
                 if self.popup_trigger == "hover" and msg.get("node_id") is not None:
                     self._emit("handle_hovered", msg)
@@ -4825,6 +4828,11 @@ class ReactFlow(ReactComponent):
             - ``"node_props_changed"``: Top-level node properties (``label``,
               ``style``, ``type``, ...) were modified
             - ``"edge_added"``: Edge was added to the graph
+            - ``"connection_refused"``: A connection dragged in the browser
+              was dropped onto a handle that refuses it, so no edge was
+              drawn. Payload has ``source``, ``sourceHandle``, ``target``,
+              ``targetHandle`` and the ``reason`` the frontend policies or
+              connection validators gave.
             - ``"edge_deleted"``: Edge was removed from the graph
             - ``"edge_data_changed"``: Edge data was modified
             - ``"edge_props_changed"``: Top-level edge properties (``label``,
