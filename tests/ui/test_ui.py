@@ -341,6 +341,8 @@ def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
         width=650,
         height=350,
     )
+    refused = []
+    flow.on("connection_refused", refused.append)
     serve_component(page, flow)
     output_a = _node_locator(page, "A").locator(".react-flow__handle-right")
     input_a = _node_locator(page, "A").locator(".react-flow__handle-left")
@@ -354,6 +356,12 @@ def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     output_a.drag_to(input_a)
     expect(page.locator(".react-flow__edge")).to_have_count(1)
     assert len(flow.edges) == 1
+    wait_until(lambda: len(refused) == 3, timeout=8000)
+    assert [(e["source"], e["target"], e["reason"]) for e in refused] == [
+        ("a", "b", "Connection already exists"),
+        ("b", "a", "Connection would create a cycle"),
+        ("a", "a", "Connection would create a cycle"),
+    ]
 
 
 def _assert_loop_above_node(page, node_label, edge_id):

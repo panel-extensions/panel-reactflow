@@ -80,3 +80,16 @@ Register callbacks with `flow.add_connection_validator(callback)` and unregister
 When a user starts dragging from an output or input, Python checks every candidate handle on the opposite side. Validators run in registration order until one rejects a candidate. Browser policies and Python reasons are shown on handles while dragging; the browser prevents a rejected connection. Python results must arrive before the connection is dropped: pending requests and requests taking longer than three seconds block the connection. Exceptions also reject the candidate and are logged on the server. Keep validators fast.
 
 Validation is for interactive connections, not a constraint on `flow.edges` or `flow.add_edge()`. Python validators run when a drag starts and once more for the final connection when the browser reports the new edge, since the graph may have changed during the drag. An edge rejected at that point is never added to `flow.edges`, no `edge_added` event fires, and the browser removes the edge it had already drawn. The same happens when `flow.add_edge()` raises for an edge from the browser, e.g. because an endpoint no longer exists or its data fails schema validation with `validate_on_add=True`. Browser policies set with `connection_validation` are only checked in the browser.
+
+## Explain a refused drop
+
+While dragging, a refused handle only shows its reason as a tooltip, and dropping onto it draws nothing. To say why, listen for `connection_refused`, which fires when a connection is dropped onto a handle of the other kind that refuses it, with the connection and the reason a browser policy or a validator gave:
+
+```python
+def explain(event):
+    pn.state.notifications.warning(f"Not connected: {event['reason']}")
+
+flow.on("connection_refused", explain)
+```
+
+A drop onto the pane, onto a handle of the same kind, or before the Python validators have replied is not reported.
