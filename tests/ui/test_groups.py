@@ -300,3 +300,56 @@ def test_delete_key_skips_nodes_hidden_by_collapse(page):
     page.keyboard.press("Delete")
     page.wait_for_timeout(300)
     assert [node["id"] for node in flow.nodes] == ["src", "g", "a", "b", "dst"]
+
+
+def test_handle_map_direction_separates_same_named_handles(page):
+    from panel_reactflow import NodeType
+
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="src", position={"x": 0, "y": 0}, label="Source").to_dict(),
+            NodeSpec(id="extra", position={"x": 0, "y": 200}, label="Extra").to_dict(),
+            NodeSpec(id="mid", type="relay", position={"x": 300, "y": 80}, label="Relay").to_dict(),
+            NodeSpec(id="dst", position={"x": 640, "y": 80}, label="Sink").to_dict(),
+        ],
+        edges=[
+            {"id": "src-mid", "source": "src", "target": "mid", "targetHandle": "x"},
+            {"id": "mid-dst", "source": "mid", "sourceHandle": "x", "target": "dst"},
+        ],
+        node_types={"relay": NodeType(type="relay", inputs=["x"], outputs=["x"])},
+        width=1000,
+        height=600,
+    )
+    flow.group_nodes(
+        ["mid"],
+        group_id="g",
+        data={
+            "collapsed": True,
+            "inputs": [{"id": "in"}],
+            "outputs": [{"id": "pad"}, {"id": "out"}],
+            "handle_map": [
+                {"node": "mid", "handle": "x", "direction": "input", "group_handle": "in"},
+                {"node": "mid", "handle": "x", "direction": "output", "group_handle": "out"},
+            ],
+        },
+    )
+    serve_component(page, flow)
+    expect(_node(page, "mid")).to_be_hidden()
+
+    group = _node(page, "g")
+    in_handle = _wait_settled(page, group.locator('.react-flow__handle[data-handleid="in"]'))
+    out_handle = group.locator('.react-flow__handle[data-handleid="out"]').bounding_box()
+    end = _edge_end(page, "src-mid")
+    assert abs(end["y"] - (in_handle["y"] + in_handle["height"] / 2)) < 4
+    start = _edge_start(page, "mid-dst")
+    assert abs(start["y"] - (out_handle["y"] + out_handle["height"] / 2)) < 4
+
+    source = _wait_settled(page, _node(page, "extra").locator(".react-flow__handle.source"))
+    page.mouse.move(*_center(source))
+    page.mouse.down()
+    page.mouse.move(*_center(in_handle), steps=10)
+    page.mouse.up()
+
+    wait_until(lambda: any(e["source"] == "extra" for e in flow.edges), timeout=5000)
+    added = [e for e in flow.edges if e["source"] == "extra"]
+    assert [(e["target"], e["targetHandle"]) for e in added] == [("mid", "x")]

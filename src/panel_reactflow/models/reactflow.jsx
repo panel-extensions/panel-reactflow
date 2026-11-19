@@ -106,9 +106,15 @@ function collapsedView(nodes) {
   return { hidden, groups, key: JSON.stringify([[...hidden], [...groups]]) };
 }
 
-function mappedGroupHandle(handleMap, nodeId, handleId) {
-  const entry = handleMap.find((e) => e.node === nodeId && "handle" in e && (e.handle ?? null) === (handleId ?? null)) ||
-    handleMap.find((e) => e.node === nodeId && !("handle" in e));
+// An entry without a direction applies to inputs and outputs alike.
+function matchesDirection(entry, direction) {
+  return entry.direction == null || entry.direction === direction;
+}
+
+function mappedGroupHandle(handleMap, nodeId, handleId, direction) {
+  const candidates = handleMap.filter((e) => e.node === nodeId && matchesDirection(e, direction));
+  const entry = candidates.find((e) => "handle" in e && (e.handle ?? null) === (handleId ?? null)) ||
+    candidates.find((e) => !("handle" in e));
   // Unmapped edges attach to the group's first handle on that side.
   return entry?.group_handle ?? null;
 }
@@ -132,8 +138,8 @@ function routeEdges(edges, view) {
       ...edge,
       source,
       target,
-      sourceHandle: sourceRep ? mappedGroupHandle(groups.get(sourceRep), edge.source, edge.sourceHandle) : edge.sourceHandle,
-      targetHandle: targetRep ? mappedGroupHandle(groups.get(targetRep), edge.target, edge.targetHandle) : edge.targetHandle,
+      sourceHandle: sourceRep ? mappedGroupHandle(groups.get(sourceRep), edge.source, edge.sourceHandle, "output") : edge.sourceHandle,
+      targetHandle: targetRep ? mappedGroupHandle(groups.get(targetRep), edge.target, edge.targetHandle, "input") : edge.targetHandle,
       className: [edge.className, "rf-edge--rerouted"].filter(Boolean).join(" "),
     };
   });
@@ -1692,11 +1698,11 @@ function FlowInner({
 
   // A collapsed group's handle stands for the handles mapped to it in its
   // handle_map, so a connection to it connects each of those instead.
-  const innerEnds = useCallback((nodeId, handleId) => {
+  const innerEnds = useCallback((nodeId, handleId, direction) => {
     const node = nodesRef.current.find((n) => n.id === nodeId);
     if (!isCollapsedGroup(node)) return [[nodeId, handleId]];
     const ends = (node.data.handle_map || [])
-      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null))
+      .filter((entry) => (entry.group_handle ?? null) === (handleId ?? null) && matchesDirection(entry, direction))
       .map((entry) => [entry.node, entry.handle ?? null]);
     return ends.length ? ends : [[nodeId, handleId]];
   }, []);
@@ -1708,8 +1714,8 @@ function FlowInner({
       }
       let updated = edgesRef.current;
       const added = [];
-      innerEnds(connection.source, connection.sourceHandle).forEach(([source, sourceHandle]) => {
-        innerEnds(connection.target, connection.targetHandle).forEach(([target, targetHandle]) => {
+      innerEnds(connection.source, connection.sourceHandle, "output").forEach(([source, sourceHandle]) => {
+        innerEnds(connection.target, connection.targetHandle, "input").forEach(([target, targetHandle]) => {
           const inner = { ...connection, source, sourceHandle, target, targetHandle };
           const baseId = connection.id || `${source}->${target}`;
           let edgeId = baseId;

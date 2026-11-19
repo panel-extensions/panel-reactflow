@@ -110,7 +110,10 @@ flow.group_nodes(
 ```
 
 Each entry maps a handle of a node inside the group (omit `handle` to map
-all of the node's handles) to a group handle. Edges that are not mapped
+all of the node's handles) to a group handle. An entry can add
+`"direction": "input"` or `"direction": "output"` to apply to that side
+only, for a node with an input and an output of the same id; without it the
+entry applies to both. Edges that are not mapped
 attach to the group's first handle on that side. Dragging a connection to a
 mapped handle of a collapsed group creates an edge to each inner handle
 mapped to it.

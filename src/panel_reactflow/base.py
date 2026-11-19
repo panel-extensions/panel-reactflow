@@ -4257,7 +4257,10 @@ class ReactFlow(ReactComponent):
         hidden node is drawn to the group handle that ``data["handle_map"]``
         maps it to, a list of ``{"node": ..., "handle": ..., "group_handle":
         ...}`` entries (omit ``handle`` to map every handle of the node),
-        and to the group's first handle on that side otherwise. Connecting
+        and to the group's first handle on that side otherwise. An entry
+        may set ``"direction"`` to ``"input"`` or ``"output"`` to apply to
+        that side only, e.g. when a node has an input and an output with the
+        same id. Connecting
         to a mapped group handle in the browser creates an edge to each
         node it maps to.
 
