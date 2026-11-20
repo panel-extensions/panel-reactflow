@@ -563,6 +563,49 @@ async function applyFigureStyles(viewKey, isCancelled, onInject) {
   }
 }
 
+const pendingRemeasures = new WeakMap();
+
+// Many nodes change in one update, e.g. when a group collapses, so their
+// re-measures go out as one call per frame instead of one per node.
+function scheduleRemeasure(storeApi, updateNodeInternals, id) {
+  // useStoreApi hands each component its own wrapper; getState is the store's.
+  const key = storeApi.getState;
+  let pending = pendingRemeasures.get(key);
+  if (!pending) {
+    pending = { ids: new Set(), update: updateNodeInternals };
+    pendingRemeasures.set(key, pending);
+    requestAnimationFrame(() => {
+      pendingRemeasures.delete(key);
+      const ids = [...pending.ids];
+      pending.update(ids);
+      // Lets tests and profiles count the batches.
+      performance.mark("panel-reactflow:remeasure", { detail: ids });
+    });
+  }
+  pending.ids.add(id);
+}
+
+// A handle's top may read a CSS variable set in the node's style or class,
+// and a group's handles come from its data, while React Flow measures handles
+// only when the node resizes. A change to any of them re-measures the
+// handles, or the edges stay where they were.
+function useRemeasureHandles(id) {
+  const storeApi = useStoreApi();
+  const key = useStore((state) => {
+    const node = state.nodeLookup.get(id)?.internals.userNode;
+    return signature([node?.style ?? null, node?.className ?? null, node?.data?.inputs ?? null, node?.data?.outputs ?? null]);
+  });
+  const updateNodeInternals = useUpdateNodeInternals();
+  const measuredRef = useRef(key);
+  useEffect(() => {
+    if (measuredRef.current === key) {
+      return;
+    }
+    measuredRef.current = key;
+    scheduleRemeasure(storeApi, updateNodeInternals, id);
+  }, [id, key, storeApi, updateNodeInternals]);
+}
+
 function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrigger, hoverDelay) {
   return function NodeComponent({ id, data, isConnectable }) {
     const validation = React.useContext(ConnectionValidationContext);
@@ -637,22 +680,7 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
     const storeApi = useStoreApi();
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
-    // A handle's top may read a CSS variable set in the node's style or
-    // class, and React Flow measures handles only when the node resizes, so
-    // a change to either re-measures them or the edges stay where they were.
-    const styleKey = useStore((state) => {
-      const node = state.nodeLookup.get(id)?.internals.userNode;
-      return signature([node?.style ?? null, node?.className ?? null]);
-    });
-    const updateNodeInternals = useUpdateNodeInternals();
-    const measuredStyleRef = useRef(styleKey);
-    useEffect(() => {
-      if (measuredStyleRef.current === styleKey) {
-        return;
-      }
-      measuredStyleRef.current = styleKey;
-      updateNodeInternals(id);
-    }, [id, styleKey, updateNodeInternals]);
+    useRemeasureHandles(id);
     useEffect(() => {
       if (!hasEditor) {
         toggleToolbar(false);
@@ -761,6 +789,7 @@ function GroupNode({ id, data, isConnectable }) {
   const actions = React.useContext(GroupActionsContext);
   const collapsed = Boolean(data?.collapsed);
   const label = data?._label ?? "";
+  useRemeasureHandles(id);
   // A group whose style sets both width and height has a fixed size, which
   // children with extent "parent" are kept inside; any other group grows to
   // fit its children. Serialized so the group only re-renders when that

@@ -368,6 +368,72 @@ def test_edges_follow_handles_moved_by_a_style_change(page):
     wait_until(attached, page)
 
 
+def test_edges_follow_handles_moved_by_a_class_change(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", type="ports", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", type="ports", label="B", position={"x": 300, "y": 0}).to_dict(),
+        ],
+        edges=[EdgeSpec(id="e", source="a", target="b", sourceHandle="x", targetHandle="in").to_dict()],
+        node_types={
+            "ports": NodeType(
+                type="ports",
+                inputs=[{"id": "in", "top": "var(--port-top, 20px)"}],
+                outputs=[{"id": "x", "top": 30}],
+            )
+        },
+        stylesheets=[".react-flow__node.moved { --port-top: 60px; }"],
+        width=700,
+        height=500,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+    def attached():
+        return abs(_edge_end_y(page, "e") - _handle_centre_y(page, "B", "in")) < 1.5
+
+    wait_until(attached, page)
+    before = _handle_centre_y(page, "B", "in")
+
+    flow.patch_node_props("b", {"className": "moved"})
+
+    wait_until(lambda: _handle_centre_y(page, "B", "in") > before + 20, page)
+    wait_until(attached, page)
+
+
+def test_style_changes_to_many_nodes_remeasure_in_one_batch(page):
+    count = 12
+
+    def nodes(top):
+        return [
+            NodeSpec(id=f"n{i}", type="ports", label=f"N{i:02d}", position={"x": 300 * (i % 2), "y": 80 * (i // 2)}, style={"--port-top": top}).to_dict()
+            for i in range(count)
+        ]
+
+    flow = ReactFlow(
+        nodes=nodes("20px"),
+        edges=[EdgeSpec(id=f"e{i}", source=f"n{i}", target=f"n{i + 1}", targetHandle="in").to_dict() for i in range(0, count, 2)],
+        node_types={"ports": NodeType(type="ports", inputs=[{"id": "in", "top": "var(--port-top, 20px)"}], outputs=["out"])},
+        width=800,
+        height=700,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(count // 2)
+    page.evaluate("performance.clearMarks('panel-reactflow:remeasure')")
+
+    flow.nodes = nodes("40px")
+
+    def batches():
+        return page.evaluate("performance.getEntriesByName('panel-reactflow:remeasure').map((m) => m.detail)")
+
+    wait_until(lambda: sum(len(b) for b in batches()) >= count, page)
+    page.wait_for_timeout(300)
+    assert len(batches()) == 1
+    assert sorted(batches()[0]) == sorted(f"n{i}" for i in range(count))
+    for i in range(0, count, 2):
+        wait_until(lambda i=i: abs(_edge_end_y(page, f"e{i}") - _handle_centre_y(page, f"N{i + 1:02d}", "in")) < 1.5, page)
+
+
 def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     flow = ReactFlow(
         nodes=[
@@ -1566,7 +1632,7 @@ def _flow_document(flow):
 
 def _plain_flow(count=6):
     return ReactFlow(
-        nodes=[NodeSpec(id=f"n{i}", position={"x": 160 * i, "y": 0}, label=f"N{i}").to_dict() for i in range(count)],
+        nodes=[NodeSpec(id=f"n{i}", position={"x": 160 * i, "y": 0}, label=f"N{i:02d}").to_dict() for i in range(count)],
         edges=[EdgeSpec(id=f"e{i}", source=f"n{i}", target=f"n{i + 1}").to_dict() for i in range(count - 1)],
         enable_multiselect=True,
         width=1200,
