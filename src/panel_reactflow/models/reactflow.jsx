@@ -637,10 +637,13 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
     const storeApi = useStoreApi();
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
-    // A handle's top may read a CSS variable set in the node's style, and
-    // React Flow measures handles only when the node resizes, so a style
-    // change re-measures them or the edges stay at the old positions.
-    const styleKey = useStore((state) => signature(state.nodeLookup.get(id)?.internals.userNode.style ?? null));
+    // A handle's top may read a CSS variable set in the node's style or
+    // class, and React Flow measures handles only when the node resizes, so
+    // a change to either re-measures them or the edges stay where they were.
+    const styleKey = useStore((state) => {
+      const node = state.nodeLookup.get(id)?.internals.userNode;
+      return signature([node?.style ?? null, node?.className ?? null]);
+    });
     const updateNodeInternals = useUpdateNodeInternals();
     const measuredStyleRef = useRef(styleKey);
     useEffect(() => {
