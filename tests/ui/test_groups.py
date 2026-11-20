@@ -364,6 +364,38 @@ def test_handle_map_direction_separates_same_named_handles(page):
     assert [(e["target"], e["targetHandle"]) for e in added] == [("mid", "x")]
 
 
+def test_collapsed_group_handle_change_without_resize_moves_edges(page):
+    flow = _flow()
+    flow.group_nodes(
+        ["a", "b"],
+        group_id="g",
+        data={
+            "collapsed": True,
+            "inputs": [{"id": "in"}],
+            "outputs": [{"id": "first"}, {"id": "out"}],
+            "handle_map": [{"node": "a", "group_handle": "in"}, {"node": "b", "handle": None, "group_handle": "out"}],
+        },
+    )
+    serve_component(page, flow)
+    group = _node(page, "g")
+    size = _wait_settled(page, group)
+
+    def attached():
+        handle = group.locator('.react-flow__handle[data-handleid="in"]').bounding_box()
+        return abs(_edge_end(page, "src-a")["y"] - (handle["y"] + handle["height"] / 2)) < 1.5
+
+    wait_until(attached, page)
+    before = group.locator('.react-flow__handle[data-handleid="in"]').bounding_box()["y"]
+
+    # Two inputs fit the height the two outputs already give the group.
+    flow.patch_node_data("g", {"inputs": [{"id": "extra"}, {"id": "in"}]})
+
+    wait_until(lambda: group.locator('.react-flow__handle[data-handleid="in"]').bounding_box()["y"] > before + 3, page)
+    after = _wait_settled(page, group)
+    assert (after["width"], after["height"]) == (size["width"], size["height"])
+    wait_until(attached, page)
+
+
 def _connect(page, source, target):
     page.mouse.move(*_center(source))
     page.mouse.down()
