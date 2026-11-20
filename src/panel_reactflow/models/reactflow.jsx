@@ -1,5 +1,5 @@
 import React from "react";
-import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SimpleBezierEdge, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useInternalNode, useNodes, useNodesState, useReactFlow, useStore, useStoreApi, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
+import { Background, BezierEdge, Controls, Handle, MiniMap, NodeToolbar, Panel, Position, ReactFlow, ReactFlowProvider, SimpleBezierEdge, SmoothStepEdge, StraightEdge, StepEdge, addEdge, useEdgesState, useInternalNode, useNodes, useNodesState, useReactFlow, useStore, useStoreApi, useUpdateNodeInternals, BaseEdge, getBezierPath, getSmoothStepPath, getStraightPath } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { SmartBezierEdge, SmartStraightEdge, SmartStepEdge } from "@tisoap/react-flow-smart-edge";
 
@@ -637,6 +637,19 @@ function makeNodeComponent(typeName, typeSpec, editorMode, model, valuePopupTrig
     const storeApi = useStoreApi();
     const spec = typeSpec || {};
     const hasEditor = data?._hasEditor;
+    // A handle's top may read a CSS variable set in the node's style, and
+    // React Flow measures handles only when the node resizes, so a style
+    // change re-measures them or the edges stay at the old positions.
+    const styleKey = useStore((state) => signature(state.nodeLookup.get(id)?.internals.userNode.style ?? null));
+    const updateNodeInternals = useUpdateNodeInternals();
+    const measuredStyleRef = useRef(styleKey);
+    useEffect(() => {
+      if (measuredStyleRef.current === styleKey) {
+        return;
+      }
+      measuredStyleRef.current = styleKey;
+      updateNodeInternals(id);
+    }, [id, styleKey, updateNodeInternals]);
     useEffect(() => {
       if (!hasEditor) {
         toggleToolbar(false);

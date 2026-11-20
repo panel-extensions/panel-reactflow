@@ -376,7 +376,10 @@ Without `sourceHandle` and `targetHandle`, edges connect to the default (first) 
 Handles are spread evenly down each edge of a node. When a node's view lays
 out its ports at other heights, e.g. one row per port below a header, give a
 handle dict a `top` to place its centre: a number is in px from the node's
-top, a string is any CSS length such as `"25%"`.
+top, a string is any CSS length such as `"25%"`. A string may read a CSS
+variable, e.g. `"var(--port-top, 52px)"`, set per node in its `style`, so one
+node type can place the handles of each node differently; the edges follow
+when `patch_node_props()` changes the variable.
 
 ```python
 NodeType(

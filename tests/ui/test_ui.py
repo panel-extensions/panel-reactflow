@@ -330,6 +330,44 @@ def test_edges_follow_handles_placed_with_top_when_node_resizes(page):
     wait_until(attached, page)
 
 
+def test_edges_follow_handles_moved_by_a_style_change(page):
+    flow = ReactFlow(
+        nodes=[
+            NodeSpec(id="a", type="ports", label="A", position={"x": 0, "y": 0}).to_dict(),
+            NodeSpec(id="b", type="ports", label="B", position={"x": 300, "y": 0}, style={"--port-top": "20px"}).to_dict(),
+        ],
+        edges=[EdgeSpec(id="e", source="a", target="b", sourceHandle="x", targetHandle="in").to_dict()],
+        node_types={
+            "ports": NodeType(
+                type="ports",
+                inputs=[{"id": "in", "top": "var(--port-top, 20px)"}],
+                outputs=[{"id": "x", "top": 30}],
+            )
+        },
+        width=700,
+        height=500,
+    )
+    serve_component(page, flow)
+    expect(page.locator(".react-flow__edge")).to_have_count(1)
+
+    def attached():
+        return abs(_edge_end_y(page, "e") - _handle_centre_y(page, "B", "in")) < 1.5
+
+    wait_until(attached, page)
+    before = _handle_centre_y(page, "B", "in")
+
+    # The node keeps its size, so only the style change can trigger a re-measure.
+    flow.patch_node_props("b", {"style": {"--port-top": "60px"}})
+
+    wait_until(lambda: _handle_centre_y(page, "B", "in") > before + 20, page)
+    wait_until(attached, page)
+
+    flow.patch_node_props("b", {"style": {"--port-top": "20px"}})
+
+    wait_until(lambda: abs(_handle_centre_y(page, "B", "in") - before) < 1, page)
+    wait_until(attached, page)
+
+
 def test_frontend_connection_validation_blocks_duplicates_and_cycles(page):
     flow = ReactFlow(
         nodes=[
