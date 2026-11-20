@@ -578,8 +578,8 @@ function scheduleRemeasure(storeApi, updateNodeInternals, id) {
       pendingRemeasures.delete(key);
       const ids = [...pending.ids];
       pending.update(ids);
-      // Lets tests and profiles count the batches.
-      performance.mark("panel-reactflow:remeasure", { detail: ids });
+      // Tests opt in to recording batches; nothing accumulates otherwise.
+      window.__panelReactflowRemeasures?.push(ids);
     });
   }
   pending.ids.add(id);

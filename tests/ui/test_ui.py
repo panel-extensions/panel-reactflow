@@ -419,12 +419,12 @@ def test_style_changes_to_many_nodes_remeasure_in_one_batch(page):
     )
     serve_component(page, flow)
     expect(page.locator(".react-flow__edge")).to_have_count(count // 2)
-    page.evaluate("performance.clearMarks('panel-reactflow:remeasure')")
+    page.evaluate("window.__panelReactflowRemeasures = []")
 
     flow.nodes = nodes("40px")
 
     def batches():
-        return page.evaluate("performance.getEntriesByName('panel-reactflow:remeasure').map((m) => m.detail)")
+        return page.evaluate("window.__panelReactflowRemeasures")
 
     wait_until(lambda: sum(len(b) for b in batches()) >= count, page)
     page.wait_for_timeout(300)
@@ -1632,7 +1632,7 @@ def _flow_document(flow):
 
 def _plain_flow(count=6):
     return ReactFlow(
-        nodes=[NodeSpec(id=f"n{i}", position={"x": 160 * i, "y": 0}, label=f"N{i:02d}").to_dict() for i in range(count)],
+        nodes=[NodeSpec(id=f"n{i}", position={"x": 160 * i, "y": 0}, label=f"N{i}").to_dict() for i in range(count)],
         edges=[EdgeSpec(id=f"e{i}", source=f"n{i}", target=f"n{i + 1}").to_dict() for i in range(count - 1)],
         enable_multiselect=True,
         width=1200,
