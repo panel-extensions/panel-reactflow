@@ -1389,14 +1389,31 @@ function FlowInner({
   maxDropSize,
   groupDelete,
 }) {
-  const [nodes, setNodes, onNodesChange] = useNodesState(hydratedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(hydratedEdges);
+  // Python stores a browser selection on its nodes and edges without syncing
+  // them back, so the copies a newly mounted view receives carry stale
+  // selected flags. The ``selection`` parameter is current: start from it, so
+  // the view shows it and React Flow reports it back unchanged.
+  const [initialGraph] = useState(() => {
+    const selectedNodes = new Set(selectable ? currentSelection?.nodes || [] : []);
+    const selectedEdges = new Set(selectable ? currentSelection?.edges || [] : []);
+    const mark = (items, selected) => (items || []).map((item) => (
+      item && typeof item === "object" && Boolean(item.selected) !== selected.has(item.id)
+        ? { ...item, selected: selected.has(item.id) }
+        : item
+    ));
+    return { nodes: mark(hydratedNodes, selectedNodes), edges: mark(hydratedEdges, selectedEdges), edgesSig: signature(hydratedEdges) };
+  });
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialGraph.nodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialGraph.edges);
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const hydrationFrameRef = useRef(null);
   const edgeHydrationFrameRef = useRef(null);
-  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: null, editable: null, nodeEditors: null, viewKeys: null });
-  const lastPySelectedRef = useRef(new Map());
+  const lastHydrated = useRef({ nodeRevision: null, nodesSig: null, edgesSig: initialGraph.edgesSig, editable: null, nodeEditors: null, viewKeys: null });
+  // The flags the view started from are the baseline, not a Python change.
+  const lastPySelectedRef = useRef(new Map(
+    (hydratedNodes || []).filter((n) => n && typeof n === "object").map((n) => [n.id, Boolean(n.selected)]),
+  ));
   const lastViewportSig = useRef(null);
   const editableRef = useRef(editable);
   editableRef.current = editable;
@@ -1957,6 +1974,10 @@ function FlowInner({
     lastSentSelectionRef.current = currentSelection || { nodes: [], edges: [] };
   }, [currentSelection]);
 
+  // React Flow reports a selection once on mount, from before it received
+  // the nodes, so that report is empty even when the nodes start selected.
+  const mountReportRef = useRef(Boolean(selectable && (currentSelection?.nodes?.length || currentSelection?.edges?.length)));
+
   const onSelectionChange = useCallback(
     ({ nodes: selectedNodes, edges: selectedEdges }) => {
       if (!selectable) {
@@ -1966,11 +1987,16 @@ function FlowInner({
         nodes: selectedNodes.map((node) => node.id),
         edges: selectedEdges.map((edge) => edge.id),
       };
+      const mountReport = mountReportRef.current;
+      mountReportRef.current = false;
+      if (mountReport && !selection.nodes.length && !selection.edges.length) {
+        return;
+      }
       // Compare against what was last sent rather than the ``selection``
       // parameter: Python only echoes it back after a round trip (or the
       // debounce delay), so a quick select-then-clear would otherwise look
       // unchanged and never be sent.
-      if (areEqual(selection, lastSentSelectionRef.current)) {
+      if (sameSelection(selection, lastSentSelectionRef.current)) {
         return;
       }
       lastSentSelectionRef.current = selection;
