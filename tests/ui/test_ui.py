@@ -876,6 +876,48 @@ def test_quick_select_then_clear_reaches_python(page):
     assert flow.selection == {"nodes": [], "edges": []}
 
 
+def test_selection_kept_when_view_remounts(page):
+    # A dynamic tab renders a new view each time it is shown; that view must
+    # not report its initial (empty) selection back to Python.
+    flow = _make_flow()
+    tabs = pn.Tabs(("Flow", flow), ("Other", pn.pane.Markdown("Other tab")), dynamic=True)
+    serve_component(page, tabs)
+    _wait_for_viewport(page)
+
+    def remount():
+        page.locator(".bk-tab", has_text="Other").click()
+        expect(page.get_by_text("Other tab")).to_be_visible()
+        page.locator(".bk-tab", has_text="Flow").click()
+        _wait_for_viewport(page)
+
+    _node_locator(page, "Start").click(force=True)
+    wait_until(lambda: flow.selection == {"nodes": ["n1"], "edges": []}, timeout=8000)
+    events = []
+    flow.on("selection_changed", events.append)
+
+    remount()
+    expect(_node_locator(page, "Start")).to_have_class(re.compile(r"\bselected\b"))
+    page.wait_for_timeout(500)
+    assert flow.selection == {"nodes": ["n1"], "edges": []}
+    assert events == []
+
+    page.locator(".react-flow__edge-path").first.click(force=True)
+    wait_until(lambda: flow.selection == {"nodes": [], "edges": ["e1"]}, timeout=8000)
+    events.clear()
+
+    remount()
+    expect(page.locator(".react-flow__edge.selected")).to_have_count(1)
+    expect(_node_locator(page, "Start")).not_to_have_class(re.compile(r"\bselected\b"))
+    page.wait_for_timeout(500)
+    assert flow.selection == {"nodes": [], "edges": ["e1"]}
+    assert events == []
+
+    pane = _pane_locator(page).bounding_box()
+    page.mouse.click(pane["x"] + pane["width"] - 20, pane["y"] + pane["height"] - 20)
+    wait_until(lambda: flow.selection == {"nodes": [], "edges": []}, timeout=8000)
+    expect(page.locator(".react-flow__edge.selected")).to_have_count(0)
+
+
 def test_selection_works_when_not_editable(page):
     flow = _make_flow()
     flow.editable = False
