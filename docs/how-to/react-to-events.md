@@ -30,6 +30,9 @@ the `ReactFlow` instance as a second argument.  You can also listen for
 | `edge_deleted`       | An edge is removed. | `edge_id` |
 | `edge_data_changed`  | Edge data is patched (via API, editor patch, or parameter-driven sync). | `edge_id`, `patch` |
 | `selection_changed`  | The active selection changes. | `nodes`, `edges` |
+| `nodes_grouped`      | `group_nodes()` puts nodes into a new group. See [Group Nodes](group-nodes.md#events). | `group_id`, `node_ids` |
+| `nodes_ungrouped`    | `ungroup()` dissolves a group, or a group is deleted with `group_delete="ungroup"`. | `group_id`, `node_ids` |
+| `group_toggled`      | A group is collapsed or expanded. | `node_id`, `collapsed` |
 | `sync`               | A batch sync from the frontend. | *(varies)* |
 | `drop`               | Data of one of the `drop_types` is dropped onto the canvas. See [Handle drops](#handle-drops-onto-the-canvas). | `drop_type`, `data`, `position`, `target` |
 | `client_error`       | The graph view hit a rendering error in the browser. See [Recover from Rendering Errors](recover-from-errors.md). | `source`, `message`, `stack`, `component_stack`, `attempt`, `mode` |
